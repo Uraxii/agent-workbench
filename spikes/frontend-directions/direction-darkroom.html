@@ -1,0 +1,599 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Darkroom Print Review</title>
+  <style>
+    :root {
+      --black: #120d0a;
+      --walnut: #21150f;
+      --bench: #3a271b;
+      --tape: #5b3a27;
+      --stain: #8c6a4f;
+      --paper: #d8c8ad;
+      --print: #f0e3c2;
+      --ink: #f6efe0;
+      --safelight: #c43a2f;
+      --font-chrome: "Arial Narrow", "Roboto Condensed", "Liberation Sans Narrow", Arial, sans-serif;
+      --font-copy: Georgia, "Times New Roman", serif;
+      --font-label: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+    * { box-sizing: border-box; }
+    html { background: var(--black); }
+    body {
+      margin: 0;
+      min-width: 1180px;
+      color: var(--ink);
+      font-family: var(--font-chrome);
+      background:
+        radial-gradient(circle at 18% 12%, var(--walnut) 0 18%, transparent 19%),
+        repeating-linear-gradient(90deg, transparent 0 13px, var(--walnut) 14px 15px),
+        linear-gradient(135deg, var(--black), var(--walnut));
+      letter-spacing: .02em;
+    }
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      opacity: .18;
+      background:
+        repeating-radial-gradient(circle at 22% 24%, var(--paper) 0 1px, transparent 1px 7px),
+        repeating-linear-gradient(3deg, transparent 0 5px, var(--bench) 6px 7px);
+      mix-blend-mode: screen;
+    }
+    button, textarea { font: inherit; }
+    .app {
+      width: 1440px;
+      min-height: 100vh;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: 116px 1fr;
+      grid-template-rows: auto 1fr auto;
+      gap: 0;
+      position: relative;
+    }
+    .contact-strip {
+      grid-row: 1 / 4;
+      padding: 18px 12px;
+      border-right: 1px solid var(--tape);
+      background:
+        linear-gradient(var(--walnut), var(--black)),
+        repeating-linear-gradient(0deg, transparent 0 28px, var(--tape) 29px 30px);
+    }
+    .strip-label {
+      color: var(--paper);
+      font-family: var(--font-label);
+      font-size: 10px;
+      line-height: 1.4;
+      text-transform: uppercase;
+      letter-spacing: .14em;
+      writing-mode: vertical-rl;
+      transform: rotate(180deg);
+      margin: 0 auto 18px;
+    }
+    .frame {
+      position: relative;
+      display: block;
+      width: 84px;
+      height: 126px;
+      margin: 0 0 14px;
+      padding: 12px 9px 18px;
+      color: var(--paper);
+      border: 1px solid var(--tape);
+      background: var(--black);
+      text-decoration: none;
+    }
+    .frame::before,
+    .frame::after {
+      content: "";
+      position: absolute;
+      left: 7px;
+      right: 7px;
+      height: 4px;
+      background: repeating-linear-gradient(90deg, var(--paper) 0 4px, transparent 4px 9px);
+      opacity: .78;
+    }
+    .frame::before { top: 4px; }
+    .frame::after { bottom: 5px; }
+    .frame img {
+      width: 100%;
+      height: 78px;
+      object-fit: cover;
+      filter: sepia(.22) contrast(1.06) brightness(.82);
+      border: 1px solid var(--bench);
+      display: block;
+    }
+    .frame strong,
+    .frame span {
+      display: block;
+      font-family: var(--font-label);
+      line-height: 1;
+    }
+    .frame strong {
+      margin-top: 8px;
+      font-size: 14px;
+      color: var(--ink);
+    }
+    .frame span {
+      margin-top: 3px;
+      font-size: 9px;
+      color: var(--paper);
+      text-transform: uppercase;
+      letter-spacing: .08em;
+    }
+    .frame.current {
+      border-color: var(--safelight);
+      outline: 2px solid var(--safelight);
+      outline-offset: 2px;
+    }
+    .chrome {
+      grid-column: 2;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 28px;
+      align-items: start;
+      padding: 18px 28px 8px;
+    }
+    .job-mark {
+      color: var(--paper);
+      font-family: var(--font-label);
+      font-size: 11px;
+      line-height: 1.6;
+      text-transform: uppercase;
+      letter-spacing: .12em;
+    }
+    .job-mark b {
+      color: var(--ink);
+      font-weight: 700;
+    }
+    .tools {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .tool {
+      min-width: 76px;
+      padding: 7px 10px 6px;
+      color: var(--ink);
+      background: var(--walnut);
+      border: 1px solid var(--stain);
+      border-radius: 2px;
+      text-transform: uppercase;
+      letter-spacing: .1em;
+      cursor: default;
+    }
+    .tool.primary {
+      color: var(--ink);
+      border-color: var(--safelight);
+      background: var(--bench);
+    }
+    .tool:focus,
+    .tool.is-focused {
+      outline: 3px double var(--safelight);
+      outline-offset: 3px;
+    }
+    .stage {
+      grid-column: 2;
+      position: relative;
+      min-height: 860px;
+      padding: 6px 28px 26px;
+    }
+    .leaders {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 3;
+    }
+    .leaders path {
+      fill: none;
+      stroke: var(--safelight);
+      stroke-width: 1.4;
+      stroke-dasharray: 6 6;
+    }
+    .leaders .settled-line {
+      stroke: var(--stain);
+      stroke-dasharray: 2 5;
+    }
+    .print-field {
+      position: absolute;
+      left: 292px;
+      top: 18px;
+      width: 560px;
+      min-height: 800px;
+    }
+    .mount {
+      position: relative;
+      width: 560px;
+      height: 790px;
+      padding: 54px 62px 70px;
+      background:
+        linear-gradient(90deg, transparent 0 30px, var(--paper) 31px 32px, transparent 33px),
+        linear-gradient(var(--print), var(--paper));
+      border: 1px solid var(--stain);
+      color: var(--black);
+    }
+    .mount::before,
+    .mount::after {
+      content: "";
+      position: absolute;
+      width: 42px;
+      height: 42px;
+      border-color: var(--black);
+      opacity: .72;
+    }
+    .mount::before {
+      left: 18px;
+      top: 18px;
+      border-left: 1px solid;
+      border-top: 1px solid;
+    }
+    .mount::after {
+      right: 18px;
+      bottom: 18px;
+      border-right: 1px solid;
+      border-bottom: 1px solid;
+    }
+    .notch {
+      position: absolute;
+      left: 50%;
+      bottom: 22px;
+      width: 60px;
+      height: 9px;
+      transform: translateX(-50%);
+      border: 1px solid var(--stain);
+      border-top: 0;
+    }
+    .print-window {
+      position: relative;
+      height: 644px;
+      background: var(--black);
+      border: 2px solid var(--black);
+      overflow: hidden;
+    }
+    .print-window img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      object-position: center top;
+      display: block;
+      filter: contrast(1.03) saturate(.94);
+    }
+    .print-window::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      opacity: .14;
+      background:
+        repeating-linear-gradient(0deg, transparent 0 3px, var(--ink) 4px 5px),
+        repeating-linear-gradient(90deg, transparent 0 5px, var(--black) 6px 7px);
+      mix-blend-mode: multiply;
+    }
+    .rebate {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 12px;
+      color: var(--black);
+      font-family: var(--font-label);
+      font-size: 12px;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+    .pin {
+      position: absolute;
+      z-index: 4;
+      width: 29px;
+      height: 29px;
+      display: grid;
+      place-items: center;
+      color: var(--ink);
+      border: 2px solid var(--safelight);
+      background: var(--black);
+      font-family: var(--font-label);
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1;
+    }
+    .pin.selected {
+      left: 332px;
+      top: 214px;
+      border-radius: 50%;
+      outline: 2px solid var(--safelight);
+      outline-offset: 4px;
+    }
+    .pin.open {
+      left: 228px;
+      top: 430px;
+      border-radius: 2px;
+    }
+    .pin.settled {
+      left: 395px;
+      top: 562px;
+      color: var(--black);
+      background: var(--paper);
+      border-color: var(--stain);
+      clip-path: polygon(50% 0, 100% 100%, 0 100%);
+      padding-top: 10px;
+    }
+    .note {
+      position: absolute;
+      z-index: 2;
+      width: 258px;
+      color: var(--black);
+      background: var(--print);
+      border: 1px solid var(--stain);
+      border-radius: 3px;
+      padding: 14px 15px 16px;
+      font-family: var(--font-copy);
+      line-height: 1.45;
+    }
+    .note::before {
+      content: "";
+      position: absolute;
+      inset: 7px;
+      border: 1px solid var(--paper);
+      pointer-events: none;
+    }
+    .note.left-a { left: 22px; top: 128px; }
+    .note.left-b { left: 48px; top: 508px; }
+    .note.right-a { right: 44px; top: 320px; }
+    .note h2 {
+      margin: 0 0 8px;
+      color: var(--black);
+      font-family: var(--font-label);
+      font-size: 13px;
+      line-height: 1.2;
+      text-transform: uppercase;
+      letter-spacing: .1em;
+    }
+    .note p { margin: 0 0 10px; }
+    .status {
+      display: inline-flex;
+      gap: 6px;
+      align-items: center;
+      margin-bottom: 8px;
+      color: var(--black);
+      font-family: var(--font-label);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+    }
+    .status .shape {
+      width: 12px;
+      height: 12px;
+      border: 2px solid var(--safelight);
+      background: var(--black);
+    }
+    .status.active .shape { border-radius: 50%; }
+    .status.open .shape { border-radius: 2px; }
+    .status.settled .shape {
+      border-color: var(--stain);
+      background: var(--paper);
+      clip-path: polygon(50% 0, 100% 100%, 0 100%);
+    }
+    .reply {
+      margin-top: 10px;
+      padding: 9px 0 0 12px;
+      border-left: 2px solid var(--stain);
+      color: var(--bench);
+    }
+    .composer {
+      margin-top: 12px;
+      padding-top: 11px;
+      border-top: 1px solid var(--stain);
+    }
+    .composer label {
+      display: block;
+      margin-bottom: 6px;
+      font-family: var(--font-label);
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: .12em;
+    }
+    .composer textarea {
+      width: 100%;
+      min-height: 76px;
+      resize: none;
+      padding: 9px;
+      color: var(--black);
+      background: var(--ink);
+      border: 1px solid var(--stain);
+      border-radius: 2px;
+      font-family: var(--font-copy);
+    }
+    .composer .tool {
+      margin-top: 8px;
+      color: var(--ink);
+      font-size: 11px;
+    }
+    .bench-label {
+      position: absolute;
+      right: 54px;
+      bottom: 40px;
+      color: var(--paper);
+      font-family: var(--font-label);
+      font-size: 11px;
+      line-height: 1.7;
+      text-transform: uppercase;
+      letter-spacing: .14em;
+    }
+    .legend {
+      grid-column: 2;
+      display: grid;
+      grid-template-columns: 1.35fr .75fr .75fr;
+      gap: 20px;
+      padding: 18px 28px 22px;
+      border-top: 1px solid var(--tape);
+      color: var(--paper);
+      background: var(--walnut);
+      font-family: var(--font-label);
+      font-size: 11px;
+      line-height: 1.45;
+    }
+    .legend h2 {
+      margin: 0 0 10px;
+      color: var(--ink);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: .12em;
+    }
+    .swatches {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px 12px;
+    }
+    .swatch {
+      display: grid;
+      grid-template-columns: 24px 1fr;
+      gap: 8px;
+      align-items: start;
+    }
+    .chip {
+      width: 24px;
+      height: 24px;
+      border: 1px solid var(--stain);
+      background: var(--c);
+    }
+    .swatch b {
+      display: block;
+      color: var(--ink);
+      font-size: 10px;
+    }
+    .scale {
+      margin: 0;
+      padding-left: 16px;
+    }
+    .scale li { margin-bottom: 6px; }
+  </style>
+</head>
+<body>
+  <main class="app" aria-label="Darkroom print review mockup">
+    <nav class="contact-strip" aria-label="Artifact contact sheet">
+      <p class="strip-label">Contact sheet roll CR-07</p>
+      <a class="frame" href="#" aria-label="Previous artifact frame 18">
+        <img src="assets/sample-artifact.png" alt="Small contact print for frame 18">
+        <strong>18</strong><span>held</span>
+      </a>
+      <a class="frame current" href="#" aria-current="page" aria-label="Current artifact frame 19">
+        <img src="assets/sample-artifact.png" alt="Small contact print for frame 19">
+        <strong>19</strong><span>open 3</span>
+      </a>
+      <a class="frame" href="#" aria-label="Next artifact frame 20">
+        <img src="assets/sample-artifact.png" alt="Small contact print for frame 20">
+        <strong>20</strong><span>clean</span>
+      </a>
+      <a class="frame" href="#" aria-label="Artifact frame 21">
+        <img src="assets/sample-artifact.png" alt="Small contact print for frame 21">
+        <strong>21</strong><span>queued</span>
+      </a>
+    </nav>
+    <header class="chrome" aria-label="Job controls">
+      <div class="job-mark">
+        <b>Private tailnet proof bench</b><br>
+        Character render review, job DRK-2419, frame 19 of 32<br>
+        Grease pencil notes are tied to print coordinates
+      </div>
+      <div class="tools" aria-label="Core actions">
+        <button class="tool" type="button">Previous</button>
+        <button class="tool primary" type="button">Comment</button>
+        <button class="tool" type="button">Resolve</button>
+        <button class="tool is-focused" type="button" autofocus>Fit</button>
+        <button class="tool" type="button">Next</button>
+      </div>
+    </header>
+    <section class="stage" aria-label="Mounted print with margin notes">
+      <svg class="leaders" viewBox="0 0 1296 860" aria-hidden="true">
+        <path d="M 280 214 C 350 212, 485 218, 622 232"></path>
+        <path d="M 300 586 C 420 590, 520 540, 558 448"></path>
+        <path class="settled-line" d="M 984 424 C 908 488, 816 568, 790 580"></path>
+      </svg>
+      <article class="note left-a" aria-labelledby="note-a-title">
+        <span class="status active"><span class="shape"></span>Active open note A1</span>
+        <h2 id="note-a-title">Edge of hair, frame 19</h2>
+        <p>The flyaway strands cut too cleanly against the back light. Please break the silhouette with a few softer wisps, especially above the left temple.</p>
+        <div class="reply">
+          <p>Reply from render pass: I can add strand breakup without changing the haircut volume.</p>
+        </div>
+        <form class="composer">
+          <label for="draft-note">Draft reply</label>
+          <textarea id="draft-note">Try a lighter hand than frame 17. Keep the shape sharp, just loosen the edge where the rim light catches it.</textarea>
+          <button class="tool primary" type="button">Place note</button>
+        </form>
+      </article>
+      <article class="note left-b" aria-labelledby="note-b-title">
+        <span class="status open"><span class="shape"></span>Open square note B4</span>
+        <h2 id="note-b-title">Hand value check</h2>
+        <p>The hand falls into the coat shadow. Lift it half a stop or add a small reflected edge so the pose reads before zooming in.</p>
+      </article>
+      <article class="note right-a" aria-labelledby="note-c-title">
+        <span class="status settled"><span class="shape"></span>Settled triangle note C2</span>
+        <h2 id="note-c-title">Boot crop cleared</h2>
+        <p>Settled after pass 18. The boot no longer kisses the lower crop mark, and the stance has enough air under the heel.</p>
+      </article>
+      <div class="print-field">
+        <figure class="mount" aria-label="Mounted artifact print">
+          <div class="print-window">
+            <img src="assets/sample-artifact.png" alt="Portrait character render being reviewed on a mounted proof print">
+          </div>
+          <figcaption class="rebate">
+            <span>DRK-2419</span>
+            <span>Frame 19</span>
+            <span>Exposure +0.3</span>
+          </figcaption>
+          <span class="notch" aria-hidden="true"></span>
+          <span class="pin selected" aria-label="Selected open annotation pin A1">A1</span>
+          <span class="pin open" aria-label="Open annotation pin B4">B4</span>
+          <span class="pin settled" aria-label="Resolved annotation pin C2">C2</span>
+        </figure>
+      </div>
+      <aside class="bench-label" aria-label="Darkroom equipment labels">
+        Safelight on<br>
+        Fibre proof paper<br>
+        Leader lines locked<br>
+        Margin notes visible
+      </aside>
+    </section>
+    <footer class="legend" aria-label="Design legend">
+      <section>
+        <h2>Palette legend</h2>
+        <div class="swatches">
+          <div class="swatch"><span class="chip" style="--c:#120d0a"></span><span><b>#120d0a</b>Deep warm black for the unlit room.</span></div>
+          <div class="swatch"><span class="chip" style="--c:#21150f"></span><span><b>#21150f</b>Walnut black for the stained bench surface.</span></div>
+          <div class="swatch"><span class="chip" style="--c:#3a271b"></span><span><b>#3a271b</b>Dark brown for tool housings and quiet controls.</span></div>
+          <div class="swatch"><span class="chip" style="--c:#5b3a27"></span><span><b>#5b3a27</b>Tape brown for borders, rails, and film dividers.</span></div>
+          <div class="swatch"><span class="chip" style="--c:#8c6a4f"></span><span><b>#8c6a4f</b>Washed stain for settled marks and ageing paper edges.</span></div>
+          <div class="swatch"><span class="chip" style="--c:#d8c8ad"></span><span><b>#d8c8ad</b>Fibre paper for passive text and contact sheet holes.</span></div>
+          <div class="swatch"><span class="chip" style="--c:#f0e3c2"></span><span><b>#f0e3c2</b>Warm print base for notes and the mounted board.</span></div>
+          <div class="swatch"><span class="chip" style="--c:#f6efe0"></span><span><b>#f6efe0</b>Fresh ink white for primary readable text.</span></div>
+          <div class="swatch"><span class="chip" style="--c:#c43a2f"></span><span><b>#c43a2f</b>Safelight red is the single live accent for active pins, focus, and action.</span></div>
+        </div>
+      </section>
+      <section>
+        <h2>Type scale</h2>
+        <ol class="scale">
+          <li>Chrome: 11 to 13px condensed uppercase.</li>
+          <li>Frame numbers: 14px monospace with film spacing.</li>
+          <li>Notes: 16px serif for proofroom handwriting pace.</li>
+          <li>Legend: 11px monospace for equipment labels.</li>
+        </ol>
+      </section>
+      <section>
+        <h2>Spacing scale</h2>
+        <ol class="scale">
+          <li>4px hairline offsets.</li>
+          <li>8px control gaps.</li>
+          <li>12px film rebate rhythm.</li>
+          <li>20px note and legend gutters.</li>
+          <li>32px bench working space.</li>
+          <li>48px print mounting margin.</li>
+        </ol>
+      </section>
+    </footer>
+  </main>
+</body>
+</html>

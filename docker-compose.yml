@@ -1,0 +1,258 @@
+# Portable, docker/podman-compose deploy artifact for the agent-workbench
+# stack (kb-serve, review-serve, n8n).
+#
+# This COEXISTS with the live rootless-podman + systemd quadlet deploy
+# (scripts/kb-container/kb-serve.container,
+# .claude/skills/artifact-serve/container/review-serve.container,
+# scripts/n8n-container/n8n.container), driven by `agent-workbench deploy
+# up/down`. It does NOT replace that mechanism, and running this file does
+# NOT cut over the live stack. Quadlets remain the production path on this
+# host; this file exists for hosts without systemd-quadlet (plain Docker,
+# a cloud VM, etc).
+#
+# See the architecture decision for full rationale:
+# ~/.knowledgebase/agent-workbench/decisions/deploy-compose__2026-07-23.md
+
+services:
+  kb-serve:
+    build:
+      context: ./scripts
+      dockerfile: kb-container/Containerfile
+    image: localhost/kb-serve:latest
+    # ponytail: "${UID:-1000}:${GID:-1000}" approximates the quadlet's
+    # `User=%U Group=%U UserNS=keep-id` (bind-mounted files come out owned
+    # by the real host user). Plain compose has no true user-namespace
+    # remap, so this is a best-effort stand-in, not equivalent. Drop it if
+    # `podman-compose config`/`convert` shows it doesn't translate cleanly.
+    user: "${UID:-1000}:${GID:-1000}"
+    environment:
+      KB_SERVE_HOST: "0.0.0.0"
+      KB_SERVE_PORT: "9100"
+      HOME: "${HOME}"
+      KB_HOME: "${HOME}/.knowledgebase"
+    # Real, gitignored env file (not the tracked kb.env.example) -- may not
+    # exist yet on a fresh host; create it from kb.env.example before
+    # first `up`. Carries KB_ENRICH, KB_LLM_BASE_URL, KB_LLM_MODEL, and
+    # optionally KB_LLM_API_KEY or KB_LLM_API_KEY_CMD.
+    #
+    # Nuance vs. the quadlet: the quadlet resolves KB_LLM_API_KEY_CMD
+    # host-side via ExecStartPre before the container ever starts, so the
+    # container itself never needs the vault CLI. Compose has no
+    # pre-start hook, so here kb-serve.py's own resolve_api_key() runs the
+    # _CMD in-process INSIDE the container instead. If the vault CLI
+    # isn't available in-container, it just logs a warning and returns no
+    # key -- a safe no-op, since KB_ENRICH defaults to 0 anyway.
+    env_file:
+      - "${HOME}/.knowledgebase/kb.env"
+    ports:
+      - "127.0.0.1:9100:9100"
+    volumes:
+      - "${HOME}/.knowledgebase:${HOME}/.knowledgebase:rw"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - "no-new-privileges:true"
+    tmpfs:
+      - /tmp
+    restart: unless-stopped
+    healthcheck:
+      # Mirrors the Containerfile's baked HEALTHCHECK.
+      test:
+        - CMD
+        - python3
+        - -c
+        - "import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('KB_SERVE_PORT','9100')+'/health', timeout=3)"
+      interval: 30s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
+
+  review-serve:
+    build:
+      context: ./.claude/skills/artifact-serve
+      dockerfile: container/Containerfile
+    image: localhost/review-serve:latest
+    # ponytail: see kb-serve's user: comment -- same best-effort
+    # approximation of the quadlet's User/Group/UserNS=keep-id.
+    user: "${UID:-1000}:${GID:-1000}"
+    environment:
+      REVIEW_SERVE_HOST: "0.0.0.0"
+      REVIEW_SERVE_PORT: "9099"
+      HOME: "${HOME}"
+    ports:
+      - "127.0.0.1:9099:9099"
+    volumes:
+      - /tmp/claude-artifacts:/tmp/claude-artifacts:rw
+      - "${HOME}/.local/share/claude-artifacts:${HOME}/.local/share/claude-artifacts:rw"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - "no-new-privileges:true"
+    tmpfs:
+      - /tmp
+    restart: unless-stopped
+    healthcheck:
+      # Mirrors the Containerfile's baked HEALTHCHECK (hits / not /health).
+      test:
+        - CMD
+        - python3
+        - -c
+        - "import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('REVIEW_SERVE_PORT','9099')+'/', timeout=3)"
+      interval: 30s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
+
+  bdui:
+    build:
+      context: ./scripts/bdui-container
+      dockerfile: Containerfile
+    image: localhost/bdui:latest
+    # No `user:` override here, unlike kb-serve/review-serve -- PROVEN
+    # broken for this service, not just a cosmetic approximation gap (their
+    # own `user:` comment already says "drop it if it doesn't translate
+    # cleanly"). Verified two-part failure and two-part fix:
+    #   1) SELinux (enforcing on this host): a bind mount gets a private
+    #      MCS category unless labeling is disabled, so even root-in-
+    #      container got EACCES on the mount -- fixed by
+    #      `security_opt: label:disable` below (compose equivalent of the
+    #      quadlets' `SecurityLabelDisable=true`).
+    #   2) DAC: bd's board dirs are 0700/0600, owned (as seen from inside
+    #      the container) by uid 0. Plain compose has no real
+    #      UserNS=keep-id, so `user: "1000:1000"` maps to an unrelated host
+    #      subuid that owns nothing on the mount. Omitting `user:` runs
+    #      root-in-container, which under rootless podman's default subuid
+    #      mapping IS the invoking host user for file-ownership purposes.
+    # Reproduced with `stat .beads/metadata.json` and `bd list` (both
+    # "Permission denied" / "no beads database found" until both fixes
+    # applied together); cap_drop ALL + no-new-privileges + read_only
+    # rootfs still apply, so this isn't a meaningfully weaker container
+    # despite the nominal "root" label.
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "3000"
+      # Container-internal HOME, NOT the ${HOME} used below for the volume
+      # path -- those two are different things and must stay different
+      # (see the comment on `working_dir` and `volumes`). registry-watcher.js
+      # writes $HOME/.beads/registry.json, a disposable discovery cache;
+      # pointing it at /tmp (backed by the tmpfs below) means read_only
+      # rootfs never blocks that write, mirroring n8n's own
+      # /home/node/.cache tmpfs fix for the same class of gotcha.
+      HOME: "/tmp"
+      # beads-ui's own `bd` subprocess calls (server/bd.js) read BEADS_DIR
+      # from their inherited env -- set explicitly rather than relying on
+      # the cwd-walk alone, matching this project's convention everywhere
+      # else BEADS_DIR is used.
+      BEADS_DIR: "${HOME}/.beads-hub/hub/.beads"
+    # `${HOME}` here is the COMPOSE variable substitution for the HOST's
+    # home dir (used only for the volume path and working_dir below) --
+    # unrelated to the container's own HOME=/tmp above. Do not collapse
+    # these into one; they serve different purposes.
+    working_dir: "${HOME}/.beads-hub/hub"
+    # bdui is a core piece of the workbench (board front end), not opt-in
+    # like n8n -- no profiles: gate, comes up by default.
+    #
+    # Host port 3100, not bdui's native 3000: the bare-host
+    # `agent-workbench board up` tool (cli/board.py) free-port-scans
+    # starting at 3000 on this same host, so publishing this container at
+    # 3000 too would risk a same-host bind collision between the two
+    # mechanisms. Internal container port stays bdui's native 3000.
+    ports:
+      - "127.0.0.1:3100:3000"
+    volumes:
+      # Whole hub tree, not just hub/: registered per-project board paths
+      # inside the aggregator's own config are absolute host paths (e.g.
+      # ~/.beads-hub/<name>/.beads), so cross-repo write-routing needs the
+      # same absolute path to resolve inside the container too.
+      - "${HOME}/.beads-hub:${HOME}/.beads-hub:rw"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - "no-new-privileges:true"
+      # See the SELinux note above -- without this, root-in-container still
+      # gets EACCES on the bind-mounted board (MCS category mismatch).
+      - "label:disable"
+    tmpfs:
+      - /tmp
+    restart: unless-stopped
+    healthcheck:
+      # Mirrors the Containerfile's baked HEALTHCHECK (node has no
+      # curl/wget guarantee in the slim image).
+      test:
+        - CMD
+        - node
+        - -e
+        - "require('http').get({host:'127.0.0.1',port:process.env.PORT||3000,path:'/'},res=>process.exit(res.statusCode<400?0:1)).on('error',()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
+
+  n8n:
+    # Official image, no build block. Pinned by digest -- do not change
+    # without deliberately re-pinning (see the quadlet's own comment on
+    # how to re-pin on upgrade).
+    image: "docker.io/n8nio/n8n@sha256:cda6bafc7bb4873533e7affb82d1bd47282a7614bdf83242c2293f8ff281261a"
+    # n8n is opt-in: `docker-compose up` / `podman-compose up` with no
+    # profile brings up only kb-serve + review-serve. n8n is intentionally
+    # down right now by user choice; run with `--profile n8n` to include it.
+    profiles:
+      - n8n
+    # ponytail: see kb-serve's user: comment -- same best-effort
+    # approximation of the quadlet's User/Group/UserNS=keep-id.
+    user: "${UID:-1000}:${GID:-1000}"
+    environment:
+      N8N_PORT: "5678"
+      N8N_LISTEN_ADDRESS: "0.0.0.0"
+      N8N_PUBLIC_API_DISABLED: "false"
+    # Real, gitignored env file. N8N_ENCRYPTION_KEY is REQUIRED and n8n has
+    # no _CMD vault-resolution fallback of its own (that convention is only
+    # implemented by the quadlet's separate host-side n8n-secret.py
+    # script). For this compose path, set the literal
+    # N8N_ENCRYPTION_KEY=<value> (Mode 1, static) directly in the real
+    # n8n.env below -- the Mode-2 vault _CMD variant only works via the
+    # quadlet deploy path.
+    env_file:
+      - "${HOME}/.local/share/n8n/n8n.env"
+    ports:
+      - "127.0.0.1:5678:5678"
+    volumes:
+      - "${HOME}/.local/share/n8n:/home/node/.n8n:rw"
+    # ponytail: best-effort/untested equivalent of the quadlet's
+    # `Network=pasta:--map-host-loopback,169.254.1.2` fix (which lets n8n
+    # workflows reach host-loopback services like ComfyUI/review-serve via
+    # host.containers.internal). Plain compose has no pasta-specific
+    # option; this may behave differently. n8n is profiled off by default,
+    # so this isn't being relied on to be live by this change.
+    extra_hosts:
+      - "host.containers.internal:host-gateway"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - "no-new-privileges:true"
+    tmpfs:
+      # Both tmpfs mounts are required -- the quadlet's own comment
+      # documents that n8n ENOENT-crash-loops on /home/node/.cache
+      # without the second one.
+      - /tmp
+      - /home/node/.cache
+    restart: unless-stopped
+    healthcheck:
+      # Mirrors the quadlet's HealthCmd. busybox wget is present in this
+      # image, curl is not.
+      test:
+        - CMD
+        - wget
+        - -q
+        - -O
+        - /dev/null
+        - http://127.0.0.1:5678/healthz
+      interval: 30s
+      timeout: 5s
+      # First boot runs DB migrations; give it headroom before failures count.
+      start_period: 30s
+      retries: 3

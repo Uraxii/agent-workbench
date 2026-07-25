@@ -1,0 +1,47 @@
+# Digest-pinned per project convention (see kb-container/Containerfile,
+# n8n.container). beads-ui requires node >=22 (package.json "engines"),
+# so node:22-slim (Debian bookworm) is the smallest official image that
+# satisfies it. Re-pin deliberately on upgrade:
+#   podman pull node:22-slim
+#   podman images --digests node:22-slim
+FROM node@sha256:6c74791e557ce11fc957704f6d4fe134a7bc8d6f5ca4403205b2966bd488f6b3
+
+# Install the bd (beads) CLI, pinned to the exact release already in use
+# elsewhere on this host (v1.1.0), verified against the release's own
+# checksums.txt rather than trusting the download unchecked. curl is not
+# in node:22-slim by default.
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+ARG BD_VERSION=1.1.0
+ARG BD_ARCHIVE=beads_${BD_VERSION}_linux_amd64.tar.gz
+ARG BD_BASE_URL=https://github.com/gastownhall/beads/releases/download/v${BD_VERSION}
+RUN curl -fsSL -o /tmp/${BD_ARCHIVE} ${BD_BASE_URL}/${BD_ARCHIVE} \
+    && curl -fsSL -o /tmp/checksums.txt ${BD_BASE_URL}/checksums.txt \
+    && cd /tmp && grep " ${BD_ARCHIVE}\$" checksums.txt | sha256sum -c - \
+    && tar -xzf ${BD_ARCHIVE} -C /usr/local/bin bd \
+    && chmod +x /usr/local/bin/bd \
+    && rm -f /tmp/${BD_ARCHIVE} /tmp/checksums.txt
+
+WORKDIR /app
+# package-lock.json exists -- npm ci for a reproducible, lockfile-exact
+# install (matches kb-serve's pip install pattern of trusting pinned deps).
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
+
+# Foreground entrypoint. `bdui start` (the CLI) always daemonizes (forks +
+# returns immediately), which is wrong for a container's PID 1. The
+# package's own `npm start` script runs the server module directly and
+# never forks; HOST/PORT/BEADS_DIR/HOME/WORKDIR are supplied by the
+# compose service (see docker-compose.yml's bdui block for why).
+EXPOSE 3000
+
+# No curl/wget guaranteed in node:22-slim; a plain node http GET mirrors
+# kb-serve/review-serve's python3-urllib healthcheck pattern.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+  CMD ["node", "-e", "require('http').get({host:'127.0.0.1',port:process.env.PORT||3000,path:'/'},res=>process.exit(res.statusCode<400?0:1)).on('error',()=>process.exit(1))"]
+
+# Absolute path: the compose service sets the container's own WORKDIR to
+# the bd hub aggregator dir (so beads-ui's cwd-walk finds the board), which
+# is NOT /app -- a relative path here would resolve against that instead.
+ENTRYPOINT ["node", "/app/node_modules/beads-ui/server/index.js"]

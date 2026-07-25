@@ -1,0 +1,84 @@
+[Unit]
+Description=bdui web front end for the bd (beads) issue tracker board hub
+After=network-online.target
+
+[Container]
+Image=localhost/bdui:latest
+ContainerName=bdui
+
+# Run as the invoking user (rootless keep-id), not container root, so the
+# bd board files bdui reads/writes under the bind-mounted hub tree below
+# come out owned by the real host user. Unlike the compose service (which
+# has no real user-namespace remap and must run as root-in-container
+# instead -- see docker-compose.yml's bdui block for the full writeup),
+# real UserNS=keep-id here means uid 1000 in the container really is uid
+# 1000 on the host, so bd's 0700/0600 board files are readable/writable
+# without any uid tricks.
+User=%U
+Group=%U
+UserNS=keep-id
+
+# bdui's own default host is 127.0.0.1 -- fine bare-host, but inside a
+# container that only reaches the container's own loopback. Bind broadly
+# inside the container and let PublishPort= below narrow the host side to
+# 127.0.0.1, same model as kb-serve/review-serve/n8n.
+Environment=HOST=0.0.0.0
+Environment=PORT=3000
+
+# Container-internal HOME, NOT %h below (the host's real home, used only
+# for the volume path and WorkingDirectory). registry-watcher.js writes
+# $HOME/.beads/registry.json, a disposable discovery cache; pointing it at
+# /tmp (backed by the Tmpfs= below) means ReadOnly=true never blocks that
+# write -- same class of fix as n8n's /home/node/.cache Tmpfs=.
+Environment=HOME=/tmp
+
+# beads-ui's own `bd` subprocess calls (server/bd.js) read BEADS_DIR from
+# their inherited env -- set explicitly rather than relying on the
+# cwd-walk alone, matching this project's convention everywhere else
+# BEADS_DIR is used.
+Environment=BEADS_DIR=%h/.beads-hub/hub/.beads
+
+# Sets the container's cwd to the aggregator board's parent dir, so
+# beads-ui's own cwd-walk (server/db.js, the live-reload watcher) also
+# finds .beads there -- belt-and-suspenders with the explicit BEADS_DIR
+# above for the `bd` CLI calls.
+# ponytail: Quadlet's [Container] key is WorkingDir=, not
+# WorkingDirectory= (that name is a [Service]/.build-file key) -- the
+# mechanical translation from the compose service used the wrong key,
+# which quadlet-generator rejected outright (unit never generated).
+WorkingDir=%h/.beads-hub/hub
+
+# Whole hub tree, not just hub/: registered per-project board paths inside
+# the aggregator's own config are absolute host paths (e.g.
+# ~/.beads-hub/<name>/.beads), so cross-repo write-routing needs the same
+# absolute path to resolve inside the container too.
+Volume=%h/.beads-hub:%h/.beads-hub:rw
+
+# Host port 3100, not bdui's native 3000: the bare-host
+# `agent-workbench board up` tool (cli/board.py) free-port-scans starting
+# at 3000 on this same host, so publishing this container at 3000 too
+# would risk a same-host bind collision between the two mechanisms.
+PublishPort=127.0.0.1:3100:3000
+
+# Hardening. SELinux (enforcing on this host) would otherwise deny the hub
+# bind mount; same call as kb-serve's own SecurityLabelDisable=true.
+ReadOnly=true
+Tmpfs=/tmp
+NoNewPrivileges=true
+DropCapability=ALL
+SecurityLabelDisable=true
+
+# Quadlet-level health check (mirrors the Containerfile's baked
+# HEALTHCHECK; node has no curl/wget guarantee in the slim image).
+HealthCmd=node -e "require('http').get({host:'127.0.0.1',port:process.env.PORT||3000,path:'/'},res=>process.exit(res.statusCode<400?0:1)).on('error',()=>process.exit(1))"
+HealthInterval=30s
+HealthTimeout=5s
+HealthStartPeriod=5s
+HealthRetries=3
+
+[Service]
+Restart=on-failure
+TimeoutStartSec=30
+
+[Install]
+WantedBy=default.target

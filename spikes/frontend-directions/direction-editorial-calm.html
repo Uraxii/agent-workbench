@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Editorial Calm Artifact Review Direction</title>
+<style>
+:root{
+  --canvas:#05070A;
+  --app:#0B0F14;
+  --surface:#111827;
+  --elevated:#1E293B;
+  --border:#243244;
+  --border-strong:#334155;
+  --text:#F8FAFC;
+  --text-2:#CBD5E1;
+  --muted:#94A3B8;
+  --accent:#60A5FA;
+  --accent-fill:rgb(96 165 250 / .14);
+  --success:#10B981;
+  --warning:#FBBF24;
+  --danger:#FB7185;
+  --focus:#93C5FD;
+  color-scheme:dark;
+  font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--app);color:var(--text);font-size:14px;line-height:1.45}
+button,input,textarea{font:inherit;color:inherit}
+button,.card,.thumb{border:1px solid var(--border)}
+button{min-height:36px;border-radius:10px;background:var(--surface);padding:0 12px;cursor:default}
+button.primary{background:var(--accent);border-color:var(--accent);color:#06111F;font-weight:750}
+button.ghost{background:transparent}
+button:focus-visible,input:focus-visible,textarea:focus-visible,.thumb:focus-visible,.pin:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.app{height:100vh;display:grid;grid-template-rows:56px 1fr 116px;overflow:hidden}
+.topbar{display:grid;grid-template-columns:minmax(320px,1fr) auto minmax(320px,1fr);align-items:center;gap:16px;padding:0 18px;border-bottom:1px solid var(--border);background:rgb(11 15 20 / .96)}
+.title{display:flex;align-items:center;gap:10px;min-width:0}
+h1{margin:0;font-size:18px;line-height:24px;font-weight:720;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.badge,.pill,.chip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border);border-radius:999px;padding:3px 8px;color:var(--text-2);background:rgb(17 24 39 / .72);font-size:12px;font-weight:650;white-space:nowrap}
+.dot{width:7px;height:7px;border-radius:999px;background:var(--muted)}
+.dot.accent{background:var(--accent)}.dot.warn{background:var(--warning)}.dot.good{background:var(--success)}.dot.bad{background:var(--danger)}
+.center-status{display:flex;align-items:center;gap:8px;color:var(--text-2)}
+.actions{display:flex;justify-content:flex-end;align-items:center;gap:8px}
+.shell{min-height:0;display:grid;grid-template-columns:56px minmax(0,1fr) 380px;background:var(--app)}
+.rail{padding:10px 8px;border-right:1px solid var(--border);display:flex;flex-direction:column;align-items:center;gap:8px;background:#0E141B}
+.tool{width:38px;height:38px;padding:0;display:grid;place-items:center;color:var(--text-2)}
+.tool.active{border-color:var(--accent);background:var(--accent-fill);color:var(--text)}
+.viewer{position:relative;min-width:0;background:var(--canvas);padding:24px;display:grid;place-items:center;overflow:hidden}
+.artifact{position:relative;width:min(92%,960px);height:min(74vh,620px);border:1px solid #172033;border-radius:18px;background:radial-gradient(circle at 26% 22%,#374151 0 7%,transparent 8%),radial-gradient(circle at 72% 28%,#1D4ED8 0 5%,transparent 6%),linear-gradient(135deg,#0F172A 0%,#111827 42%,#020617 100%);box-shadow:0 30px 80px rgb(0 0 0 / .38);overflow:hidden}
+.artifact svg{width:100%;height:100%;display:block}
+.canvas-chip{position:absolute;left:40px;top:36px;display:flex;gap:8px;align-items:center}
+.viewer-toolbar{position:absolute;left:74px;top:86px;display:flex;flex-direction:column;gap:8px;background:rgb(5 7 10 / .72);border:1px solid var(--border);border-radius:14px;padding:8px;backdrop-filter:blur(12px)}
+.pin{position:absolute;width:34px;height:34px;border:2px solid var(--border-strong);border-radius:999px;background:#0B0F14;color:var(--text);display:grid;place-items:center;font-weight:800;box-shadow:0 8px 22px rgb(0 0 0 / .42)}
+.pin.selected{border-color:var(--accent);background:#0B223D}
+.pin.pending{border-style:dashed;border-color:var(--warning)}
+.pin.resolved{opacity:.62;border-color:var(--success)}
+.pin.one{left:29%;top:34%}.pin.two{left:58%;top:46%}.pin.three{left:72%;top:64%}
+.region{position:absolute;left:49%;top:39%;width:18%;height:15%;border:2px solid var(--accent);background:var(--accent-fill);border-radius:8px}
+.toast{position:absolute;right:24px;bottom:22px;background:var(--elevated);border:1px solid var(--border-strong);border-radius:14px;padding:12px 14px;color:var(--text-2);box-shadow:0 16px 40px rgb(0 0 0 / .35)}
+.comments{min-height:0;border-left:1px solid var(--border);background:var(--surface);display:grid;grid-template-rows:auto auto 1fr auto}
+.panel-head{padding:14px 16px;border-bottom:1px solid var(--border)}
+.panel-title{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:10px}.panel-title h2{font-size:16px;margin:0}.filters{display:flex;gap:8px;flex-wrap:wrap}.chip.active{border-color:var(--accent);background:var(--accent-fill);color:var(--text)}
+.search{padding:12px 16px;border-bottom:1px solid var(--border)}
+.search input{width:100%;height:36px;border-radius:10px;border:1px solid var(--border);background:var(--app);padding:0 12px;color:var(--text)}
+.thread-list{min-height:0;overflow:auto;padding:14px 16px;display:flex;flex-direction:column;gap:12px}
+.card{border-radius:14px;background:rgb(11 15 20 / .62);padding:13px}.card.selected{border-color:var(--accent);background:linear-gradient(180deg,var(--accent-fill),rgb(11 15 20 / .72))}.card.failed{border-color:var(--danger)}.card.resolved{opacity:.72}.card.pending{border-style:dashed;border-color:var(--warning)}
+.card-head{display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:8px}.thread-meta{display:flex;gap:6px;align-items:center;flex-wrap:wrap}.author{color:var(--text);font-weight:700}.time{color:var(--muted);font-size:12px}.body{color:var(--text-2);margin:8px 0 10px}.reply{border-top:1px solid var(--border);padding-top:9px;color:var(--text-2);font-size:13px}.card-actions{display:flex;gap:8px;margin-top:10px}.state-line{font-size:12px;color:var(--muted)}.error{color:var(--danger)}.saved{color:var(--success)}.warn{color:var(--warning)}
+.composer{border-top:1px solid var(--border);padding:14px 16px;background:#0E141B}.composer label{display:block;font-weight:700;margin-bottom:7px}.composer textarea{width:100%;min-height:88px;max-height:144px;resize:none;border-radius:12px;border:1px solid var(--border-strong);background:var(--app);padding:10px 12px;color:var(--text)}.composer-foot{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:8px}.helper{font-size:12px;color:var(--muted)}
+.gallery{display:grid;grid-template-columns:210px 1fr;gap:12px;align-items:center;padding:12px 16px;border-top:1px solid var(--border);background:#0E141B}.gallery-head{display:flex;flex-direction:column;gap:4px}.strip{display:flex;gap:10px;overflow:hidden}.thumb{width:148px;min-width:148px;height:84px;border-radius:12px;background:linear-gradient(135deg,#111827,#1E293B);padding:8px;display:flex;flex-direction:column;justify-content:space-between}.thumb.active{border-color:var(--accent)}.thumb-title{font-weight:700;font-size:12px}.thumb-meta{display:flex;justify-content:space-between;color:var(--muted);font-size:11px}
+.legend{display:flex;align-items:center;gap:10px;justify-content:flex-end}.token{display:flex;align-items:center;gap:5px;color:var(--muted);font-size:12px}.swatch{width:12px;height:12px;border-radius:4px;border:1px solid rgb(255 255 255 / .2)}
+@media (max-width:1100px){.shell{grid-template-columns:52px 1fr 340px}.topbar{grid-template-columns:1fr auto}.center-status{display:none}.gallery{grid-template-columns:1fr}.legend{justify-content:flex-start}.artifact{width:96%}}
+@media (prefers-reduced-motion:no-preference){button,.card,.pin{transition:border-color .12s ease,background .12s ease,opacity .12s ease}.pin:hover{transform:scale(1.05)}}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="topbar" aria-label="Artifact review top bar">
+    <div class="title">
+      <h1>campaign-cover-v17.png</h1>
+      <span class="badge">Image</span>
+      <span class="pill"><span class="dot warn"></span>Needs review</span>
+    </div>
+    <div class="center-status" aria-live="polite">
+      <span class="chip"><span class="dot accent"></span>3 open</span>
+      <span class="chip"><span class="dot good"></span>5 resolved</span>
+      <span class="chip"><span class="dot warn"></span>Draft saved locally</span>
+    </div>
+    <div class="actions">
+      <button class="ghost">Return to gallery</button>
+      <button>Copy feedback JSON</button>
+      <button class="primary">Mark artifact done</button>
+    </div>
+  </header>
+  <div class="shell">
+    <nav class="rail" aria-label="Viewer tools">
+      <button class="tool active" aria-label="Pan tool">Pan</button>
+      <button class="tool" aria-label="Add point comment">Pt</button>
+      <button class="tool" aria-label="Add region comment">Rg</button>
+      <button class="tool" aria-label="Zoom in">+</button>
+      <button class="tool" aria-label="Zoom out">-</button>
+      <button class="tool" aria-label="Reset zoom">0</button>
+      <button class="tool" aria-label="Show shortcuts">?</button>
+    </nav>
+    <main class="viewer" aria-label="Image canvas with annotation layer">
+      <div class="canvas-chip">
+        <span class="chip"><span class="dot accent"></span>Fit 82 percent</span>
+        <span class="chip"><span class="dot warn"></span>Some tiles loading</span>
+      </div>
+      <div class="viewer-toolbar" aria-label="Floating canvas controls">
+        <button class="tool active">Select</button>
+        <button class="tool">Comment</button>
+        <button class="tool">Fit</button>
+      </div>
+      <section class="artifact" aria-label="Static placeholder for reviewed image">
+        <svg viewBox="0 0 960 620" role="img" aria-label="Abstract editorial cover artifact placeholder">
+          <defs>
+            <linearGradient id="panel" x1="0" x2="1"><stop stop-color="#334155"/><stop offset="1" stop-color="#0F172A"/></linearGradient>
+          </defs>
+          <rect width="960" height="620" fill="#020617"/>
+          <rect x="84" y="68" width="792" height="484" rx="28" fill="url(#panel)" stroke="#475569"/>
+          <rect x="132" y="116" width="320" height="32" rx="8" fill="#CBD5E1" opacity=".88"/>
+          <rect x="132" y="166" width="462" height="18" rx="6" fill="#94A3B8" opacity=".7"/>
+          <rect x="132" y="196" width="384" height="18" rx="6" fill="#94A3B8" opacity=".52"/>
+          <circle cx="668" cy="252" r="112" fill="#60A5FA" opacity=".23"/>
+          <path d="M132 480 C260 370 338 428 444 338 C548 250 650 358 828 208 L828 510 L132 510 Z" fill="#10B981" opacity=".18"/>
+          <rect x="626" y="390" width="166" height="52" rx="14" fill="#F8FAFC" opacity=".82"/>
+          <rect x="650" y="410" width="118" height="12" rx="6" fill="#0B0F14" opacity=".7"/>
+        </svg>
+        <div class="region" aria-hidden="true"></div>
+        <button class="pin one selected" aria-label="Thread 1, unresolved region comment">1</button>
+        <button class="pin two pending" aria-label="Thread 2, pending save point comment">2</button>
+        <button class="pin three resolved" aria-label="Thread 7, resolved point comment">7</button>
+      </section>
+      <div class="toast" role="status">Thread resolved. <strong>Undo</strong></div>
+    </main>
+    <aside class="comments" aria-label="Comment rail">
+      <section class="panel-head">
+        <div class="panel-title"><h2>Comments</h2><span class="state-line">5 shown, 2 hidden</span></div>
+        <div class="filters" role="group" aria-label="Thread filters">
+          <span class="chip active"><span class="dot accent"></span>Open</span>
+          <span class="chip"><span class="dot good"></span>Resolved</span>
+          <span class="chip">All</span>
+          <span class="chip">Region</span>
+        </div>
+      </section>
+      <div class="search"><input aria-label="Search comments" value="edge, title, export" readonly></div>
+      <section class="thread-list" aria-label="Thread list">
+        <article class="card selected">
+          <div class="card-head"><div class="thread-meta"><strong>#1</strong><span class="pill"><span class="dot accent"></span>Open</span><span class="chip">Region</span></div><span class="time">Today 14:32</span></div>
+          <div><span class="author">You</span> <span class="time">edited</span></div>
+          <p class="body">The title block feels steady, but the lower curve pulls attention away from the face area. Try holding the curve under the product edge.</p>
+          <p class="state-line">Region at x 49 percent, y 39 percent, width 18 percent, height 15 percent.</p>
+          <div class="card-actions"><button>Reply</button><button>Resolve thread</button><button class="ghost">Copy link</button></div>
+        </article>
+        <article class="card pending">
+          <div class="card-head"><div class="thread-meta"><strong>#2</strong><span class="pill"><span class="dot warn"></span>Saving</span><span class="chip">Point</span></div><span class="time">Now</span></div>
+          <div><span class="author">You</span></div>
+          <p class="body">Make the button label less generic. `Start review` reads clearer than `Open` here.</p>
+          <p class="state-line warn">Annotation not saved yet. Text preserved locally.</p>
+        </article>
+        <article class="card failed">
+          <div class="card-head"><div class="thread-meta"><strong>#4</strong><span class="pill"><span class="dot bad"></span>Failed save</span><span class="chip">General</span></div><span class="time">5 min ago</span></div>
+          <div><span class="author">Agent: render-critic</span> <span class="chip">Agent</span></div>
+          <p class="body">The shadow around the card is heavier than the rest of the direction. Consider matching the panel border rhythm.</p>
+          <p class="state-line error">Save failed. Retry or copy text.</p>
+          <div class="card-actions"><button>Retry</button><button>Copy text</button></div>
+        </article>
+        <article class="card resolved">
+          <div class="card-head"><div class="thread-meta"><strong>#7</strong><span class="pill"><span class="dot good"></span>Resolved</span><span class="chip">Point</span></div><span class="time">Jul 24, 2026, 13:18</span></div>
+          <div><span class="author">You</span></div>
+          <p class="body">Resolved after reducing the logo contrast and moving it clear of the annotation pin.</p>
+          <div class="reply">System: Feedback JSON export saved at 14:10.</div>
+          <div class="card-actions"><button>Reopen</button><button class="ghost">Copy link</button></div>
+        </article>
+        <article class="card">
+          <div class="card-head"><div class="thread-meta"><strong>Empty state</strong><span class="pill">No comments yet</span></div></div>
+          <p class="body">Click the image or press C to add one. This row shows the compact empty copy used when filters hide all matching comments.</p>
+          <button>Show all threads</button>
+        </article>
+      </section>
+      <form class="composer" aria-label="Comment composer">
+        <label for="feedback">Thread 1 reply</label>
+        <textarea id="feedback">Keep the calm direction, but align the label to the cover grid before final export.</textarea>
+        <div class="composer-foot"><span class="helper">Cmd+Enter to submit, Enter for newline. Draft saved locally.</span><button class="primary" type="button">Submit</button></div>
+      </form>
+    </aside>
+  </div>
+  <footer class="gallery" aria-label="Gallery strip and token legend">
+    <div class="gallery-head"><strong>Gallery strip</strong><span class="state-line">Needs review first. 24 artifacts total.</span></div>
+    <div class="strip">
+      <div class="thumb active" tabindex="0"><span class="thumb-title">campaign-cover-v17.png</span><span class="thumb-meta"><span>3 open</span><span>Needs review</span></span></div>
+      <div class="thumb" tabindex="0"><span class="thumb-title">cover-v16.png</span><span class="thumb-meta"><span>0 open</span><span>Done</span></span></div>
+      <div class="thumb" tabindex="0"><span class="thumb-title">social-cut-a.png</span><span class="thumb-meta"><span>1 open</span><span>Open comments</span></span></div>
+      <div class="thumb" tabindex="0"><span class="thumb-title">detail-crop.png</span><span class="thumb-meta"><span>Partial</span><span>Retry tile</span></span></div>
+      <div class="legend" aria-label="Token legend">
+        <span class="token"><span class="swatch" style="background:#05070A"></span>Canvas</span>
+        <span class="token"><span class="swatch" style="background:#111827"></span>Surface</span>
+        <span class="token"><span class="swatch" style="background:#60A5FA"></span>Accent</span>
+        <span class="token"><span class="swatch" style="background:#FBBF24"></span>Pending</span>
+        <span class="token"><span class="swatch" style="background:#10B981"></span>Resolved</span>
+        <span class="token"><span class="swatch" style="background:#FB7185"></span>Failed</span>
+      </div>
+    </div>
+  </footer>
+</div>
+</body>
+</html>

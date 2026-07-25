@@ -1,0 +1,20 @@
+FROM python@sha256:6771159cd4fa5d9bba1258caf0b82e6b73458c694d178ad97c5e925c2d0e1a91
+
+# kb-serve.py is stdlib-only; its /clip endpoint reuses kb-clip.py, which
+# depends on lxml + readability-lxml (pre-existing project deps). Only pip
+# installs here.
+RUN pip install --no-cache-dir lxml readability-lxml
+
+WORKDIR /app
+COPY kb-serve.py kb-atomize.py kb-index.py kb-clip.py ./
+
+EXPOSE 9100
+
+# H2 fix: do NOT bake --port. kb-serve.py's `run` --port default already
+# reads KB_SERVE_PORT (env, else 9100), so the quadlet's KB_SERVE_PORT now
+# actually flows through instead of being overridden by a hardcoded flag.
+# --host default reads KB_SERVE_HOST (quadlet sets 0.0.0.0).
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+  CMD ["python3", "-c", "import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('KB_SERVE_PORT','9100')+'/health', timeout=3)"]
+
+ENTRYPOINT ["python3", "/app/kb-serve.py", "run"]

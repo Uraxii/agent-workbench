@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Artifact Review, Command Console Direction</title>
+  <style>
+    :root{--bg-canvas:#05070A;--bg-app:#0B0F14;--bg-surface:#111827;--bg-elevated:#1E293B;--border-subtle:#243244;--border-strong:#334155;--text-primary:#F8FAFC;--text-secondary:#CBD5E1;--text-muted:#94A3B8;--accent:#60A5FA;--accent-strong:#2563EB;--success:#10B981;--warning:#FBBF24;--danger:#FB7185;--focus:#93C5FD;--space-1:4px;--space-2:8px;--space-3:12px;--space-4:16px;--space-5:20px;--space-6:24px;--space-8:32px;--radius-1:6px;--radius-2:8px;--radius-3:12px;--radius-pill:999px;--shadow-popover:0 18px 48px rgb(0 0 0 / 0.42);color-scheme:dark}*{box-sizing:border-box}body{margin:0;min-height:100vh;background:var(--bg-app);color:var(--text-secondary);font:14px/20px ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}button,textarea,input{font:inherit}.screen{width:min(100vw,1440px);min-height:100vh;margin:0 auto;background:var(--bg-app);border-inline:1px solid #0F172A}.top-bar{height:48px;display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:var(--space-3);padding:0 var(--space-4);border-bottom:1px solid var(--border-subtle);background:rgb(11 15 20 / 0.96)}.title-block{min-width:0}.artifact-title{margin:0;color:var(--text-primary);font-size:18px;line-height:24px;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.meta-row,.rail-meta,.hint,.timestamp{color:var(--text-muted);font-size:12px;line-height:16px}.command-entry{justify-self:center;display:flex;align-items:center;gap:var(--space-2);width:360px;height:32px;padding:0 var(--space-3);border:1px solid var(--border-strong);border-radius:var(--radius-pill);background:var(--bg-surface);color:var(--text-secondary)}.top-actions{justify-self:end;display:flex;align-items:center;gap:var(--space-2)}.status-pill,.thread-status,.chip{display:inline-flex;align-items:center;gap:var(--space-2);min-height:24px;padding:2px 9px;border:1px solid var(--border-subtle);border-radius:var(--radius-pill);background:rgb(17 24 39 / 0.78);color:var(--text-secondary);font-size:12px;line-height:16px;font-weight:600;white-space:nowrap}.dot{width:7px;height:7px;border-radius:50%;background:currentColor;box-shadow:0 0 0 2px rgb(255 255 255 / 0.08)}.state-open{color:var(--warning)}.state-selected{color:var(--accent)}.state-resolved{color:var(--success)}.state-saving{color:var(--warning)}.button{min-height:32px;border:1px solid var(--border-subtle);border-radius:var(--radius-2);background:var(--bg-surface);color:var(--text-secondary);padding:5px 10px;display:inline-flex;align-items:center;gap:var(--space-2);cursor:default}.button.primary{background:var(--accent-strong);border-color:#3B82F6;color:#FFFFFF;font-weight:650}.button.ghost{background:transparent}.button.focus-demo{outline:2px solid var(--focus);outline-offset:2px;border-color:var(--focus)}kbd{min-width:20px;padding:1px 6px;border:1px solid var(--border-strong);border-bottom-color:#475569;border-radius:5px;background:#0F172A;color:var(--text-primary);font:11px/16px "SFMono-Regular",Consolas,monospace;text-align:center}.review-layout{height:calc(100vh - 48px);display:grid;grid-template-columns:48px minmax(0,1fr) 344px 44px;grid-template-rows:minmax(0,1fr) 92px auto;grid-template-areas:"tools canvas rail strip" "tools gallery rail strip" "legend legend legend legend"}.tool-rail{grid-area:tools;display:flex;flex-direction:column;align-items:center;gap:var(--space-2);padding:var(--space-3) var(--space-2);border-right:1px solid var(--border-subtle);background:#080C11}.tool-button{width:34px;min-height:34px;border:1px solid var(--border-subtle);border-radius:var(--radius-2);background:var(--bg-surface);color:var(--text-secondary);display:grid;place-items:center;position:relative}.tool-button.active{border-color:var(--accent);color:var(--text-primary);background:rgb(96 165 250 / 0.14)}.tool-button span{position:absolute;right:-4px;bottom:-5px;font:10px/12px "SFMono-Regular",Consolas,monospace;color:var(--text-muted);background:#0F172A;border:1px solid var(--border-subtle);border-radius:4px;padding:0 3px}.canvas-area{grid-area:canvas;position:relative;overflow:hidden;background:var(--bg-canvas);padding:var(--space-6)}.viewer{position:relative;height:100%;border:1px solid var(--border-subtle);border-radius:var(--radius-3);overflow:hidden;background:radial-gradient(circle at 24% 28%,rgb(96 165 250 / 0.32),transparent 15%),radial-gradient(circle at 71% 64%,rgb(16 185 129 / 0.25),transparent 16%),linear-gradient(145deg,#111827 0%,#05070A 48%,#0F172A 100%)}.art-board{position:absolute;inset:8% 10%;border-radius:28px;background:linear-gradient(135deg,rgb(248 250 252 / 0.12),transparent 42%),conic-gradient(from 210deg at 58% 48%,#1E293B,#60A5FA,#0F172A,#10B981,#1E293B);clip-path:polygon(9% 15%,82% 5%,94% 45%,72% 92%,18% 82%,4% 40%);box-shadow:inset 0 0 0 1px rgb(248 250 252 / 0.16),0 24px 80px rgb(0 0 0 / 0.45)}.art-board::before,.art-board::after{content:"";position:absolute;border:1px solid rgb(248 250 252 / 0.16);border-radius:999px}.art-board::before{inset:16% 20% 26% 12%;transform:rotate(-12deg)}.art-board::after{inset:38% 10% 14% 42%;transform:rotate(18deg)}.region{position:absolute;left:38%;top:32%;width:22%;height:18%;border:2px solid var(--accent);border-radius:var(--radius-2);background:rgb(29 78 216 / 0.18);box-shadow:0 0 0 1px rgb(5 7 10 / 0.8)}.pin{position:absolute;width:30px;height:30px;border-radius:50% 50% 50% 8px;transform:rotate(-45deg);display:grid;place-items:center;border:2px solid var(--bg-canvas);background:var(--bg-elevated);color:var(--text-primary);box-shadow:0 8px 20px rgb(0 0 0 / 0.45)}.pin b{transform:rotate(45deg);font-size:12px}.pin.selected{background:var(--accent-strong);outline:2px solid var(--focus);outline-offset:2px}.pin.open{background:#92400E}.pin.resolved{background:#065F46;opacity:0.72}.pin.one{left:45%;top:36%}.pin.two{left:68%;top:58%}.pin.three{left:24%;top:64%}.viewer-corner{position:absolute;right:var(--space-4);bottom:var(--space-4);display:flex;gap:var(--space-2);align-items:center;padding:var(--space-2) var(--space-3);border:1px solid var(--border-subtle);border-radius:var(--radius-pill);background:rgb(11 15 20 / 0.76);backdrop-filter:blur(12px)}.palette{position:absolute;left:50%;top:58px;transform:translateX(-50%);width:min(620px,calc(100% - 80px));border:1px solid var(--border-strong);border-radius:18px;background:rgb(17 24 39 / 0.94);box-shadow:var(--shadow-popover);overflow:hidden}.palette-header{display:flex;align-items:center;gap:var(--space-3);padding:var(--space-4);border-bottom:1px solid var(--border-subtle)}.palette-header input{width:100%;border:0;outline:0;background:transparent;color:var(--text-primary);font-size:16px;line-height:24px}.command-list{padding:var(--space-2)}.command-row{display:grid;grid-template-columns:28px 1fr auto;align-items:center;gap:var(--space-3);padding:var(--space-3);border-radius:var(--radius-2);color:var(--text-secondary)}.command-row.active{background:rgb(96 165 250 / 0.14);outline:1px solid rgb(96 165 250 / 0.4)}.command-icon{width:28px;height:28px;border:1px solid var(--border-subtle);border-radius:var(--radius-2);display:grid;place-items:center;color:var(--accent);background:#0F172A;font-weight:700}.command-title{color:var(--text-primary);font-weight:650}.gallery-strip{grid-area:gallery;display:grid;grid-template-columns:repeat(5,minmax(150px,1fr));gap:var(--space-3);padding:var(--space-3) var(--space-4);border-top:1px solid var(--border-subtle);background:#080C11}.gallery-card{display:grid;grid-template-columns:56px 1fr;gap:var(--space-2);align-items:center;min-width:0;padding:var(--space-2);border:1px solid var(--border-subtle);border-radius:var(--radius-2);background:var(--bg-surface)}.gallery-card.selected{border-color:var(--accent);background:rgb(96 165 250 / 0.10)}.thumb{height:44px;border-radius:var(--radius-1);background:linear-gradient(135deg,#1E293B,#60A5FA 55%,#05070A)}.gallery-title{color:var(--text-primary);font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.comment-rail{grid-area:rail;min-width:0;display:flex;flex-direction:column;border-left:1px solid var(--border-subtle);background:var(--bg-surface)}.rail-header,.rail-footer{padding:var(--space-4);border-bottom:1px solid var(--border-subtle)}.rail-footer{border-top:1px solid var(--border-subtle);border-bottom:0}.rail-title-row{display:flex;justify-content:space-between;gap:var(--space-3);align-items:center;margin-bottom:var(--space-3)}.rail-title{margin:0;color:var(--text-primary);font-size:18px;line-height:28px}.filters{display:flex;gap:var(--space-2);flex-wrap:wrap}.thread-list{overflow:auto;padding:var(--space-3);display:flex;flex-direction:column;gap:var(--space-3)}.thread-card{border:1px solid var(--border-subtle);border-radius:var(--radius-3);background:#0B1220;padding:var(--space-3)}.thread-card.selected{border-color:var(--accent);background:rgb(96 165 250 / 0.10)}.thread-card.resolved{opacity:0.76}.thread-head{display:flex;align-items:center;justify-content:space-between;gap:var(--space-2);margin-bottom:var(--space-2)}.thread-id{color:var(--text-primary);font-weight:750}.thread-body{margin:var(--space-2) 0;color:var(--text-secondary)}.reply{margin-top:var(--space-3);padding-top:var(--space-3);border-top:1px solid var(--border-subtle);color:var(--text-secondary)}.thread-actions{display:flex;gap:var(--space-2);margin-top:var(--space-3)}.composer-label{display:flex;justify-content:space-between;color:var(--text-primary);font-weight:650;margin-bottom:var(--space-2)}textarea{width:100%;min-height:104px;resize:none;border:1px solid var(--border-strong);border-radius:var(--radius-2);padding:var(--space-3);background:var(--bg-app);color:var(--text-primary)}.composer-actions{display:flex;align-items:center;justify-content:space-between;margin-top:var(--space-2)}.status-strip{grid-area:strip;display:flex;flex-direction:column;align-items:center;gap:var(--space-3);padding:var(--space-3) var(--space-1);border-left:1px solid var(--border-subtle);background:#080C11;color:var(--text-muted);writing-mode:vertical-rl;text-orientation:mixed;font-size:12px;line-height:16px}.strip-count{writing-mode:horizontal-tb;width:28px;height:28px;border-radius:50%;display:grid;place-items:center;border:1px solid #92400E;color:var(--warning);font-weight:800}.token-legend{grid-area:legend;display:grid;grid-template-columns:1.2fr 0.9fr 0.9fr;gap:var(--space-4);padding:var(--space-3) var(--space-4);border-top:1px solid var(--border-subtle);background:#080C11;color:var(--text-muted);font-size:12px;line-height:16px}.legend-title{color:var(--text-secondary);font-weight:700;margin-bottom:var(--space-2)}.swatches{display:flex;flex-wrap:wrap;gap:var(--space-2)}.swatch{display:inline-flex;align-items:center;gap:var(--space-1);padding:2px 6px;border:1px solid var(--border-subtle);border-radius:var(--radius-pill)}.swatch i{width:12px;height:12px;border-radius:3px;border:1px solid rgb(248 250 252 / 0.2)}.scale-row{display:flex;flex-wrap:wrap;gap:var(--space-2)}@media (max-width:1100px){.review-layout{grid-template-columns:44px minmax(0,1fr) 300px 36px}.command-entry{width:260px}.gallery-strip{grid-template-columns:repeat(3,1fr)}}
+  </style>
+</head>
+<body>
+  <div class="screen">
+    <header class="top-bar" aria-label="Artifact review header">
+      <div class="title-block">
+        <h1 class="artifact-title">city-market-hero-v18.png</h1>
+        <div class="meta-row">Image artifact, 7680 x 4320, generated today at 14:32, 7 of 24</div>
+      </div>
+      <div class="command-entry" aria-label="Open command palette">
+        <span>Command console</span><kbd>Cmd K</kbd>
+      </div>
+      <div class="top-actions">
+        <span class="status-pill state-open"><span class="dot"></span>Needs review, 2 open</span>
+        <button class="button ghost">Previous <kbd>[</kbd></button>
+        <button class="button primary focus-demo">Next <kbd>]</kbd></button>
+      </div>
+    </header>
+    <div class="review-layout">
+      <nav class="tool-rail" aria-label="Viewer tools">
+        <button class="tool-button active" aria-label="Select and pan">P<span>V</span></button>
+        <button class="tool-button" aria-label="Add comment">C<span>C</span></button>
+        <button class="tool-button" aria-label="Resolve selected thread">R<span>R</span></button>
+        <button class="tool-button" aria-label="Fit artifact">F<span>F</span></button>
+        <button class="tool-button" aria-label="Zoom in">+<span>+</span></button>
+        <button class="tool-button" aria-label="Zoom out">-<span>-</span></button>
+        <button class="tool-button" aria-label="Reset zoom">0<span>0</span></button>
+      </nav>
+      <main class="canvas-area" aria-label="Deep zoom image canvas">
+        <section class="viewer" aria-label="Selected artifact with annotation overlay">
+          <div class="art-board" aria-hidden="true"></div>
+          <div class="region" aria-hidden="true"></div>
+          <button class="pin selected one" aria-label="Thread 4, selected unresolved region comment"><b>4</b></button>
+          <button class="pin open two" aria-label="Thread 5, unresolved point comment"><b>5</b></button>
+          <button class="pin resolved three" aria-label="Thread 2, resolved point comment"><b>2</b></button>
+          <div class="viewer-corner">
+            <span class="chip state-selected"><span class="dot"></span>Thread 4 selected</span>
+            <span class="hint">Fit 92%, tiles loaded</span>
+          </div>
+        </section>
+        <section class="palette" aria-label="Command palette shown open">
+          <div class="palette-header">
+            <div class="command-icon">K</div>
+            <input value="resolve" aria-label="Command search" readonly>
+            <kbd>Esc</kbd>
+          </div>
+          <div class="command-list">
+            <div class="command-row active">
+              <div class="command-icon">R</div>
+              <div><div class="command-title">Resolve selected thread</div><div class="hint">Marks thread 4 resolved and keeps undo available.</div></div>
+              <kbd>R</kbd>
+            </div>
+            <div class="command-row">
+              <div class="command-icon">C</div>
+              <div><div class="command-title">Add region comment</div><div class="hint">Creates a new annotation and focuses the composer.</div></div>
+              <kbd>C</kbd>
+            </div>
+            <div class="command-row">
+              <div class="command-icon">F</div>
+              <div><div class="command-title">Fit artifact to screen</div><div class="hint">Returns the whole render to view with a 5 percent margin.</div></div>
+              <kbd>F</kbd>
+            </div>
+            <div class="command-row">
+              <div class="command-icon">N</div>
+              <div><div class="command-title">Open next unresolved artifact</div><div class="hint">Skips artifacts with no open comments.</div></div>
+              <kbd>]</kbd>
+            </div>
+            <div class="command-row">
+              <div class="command-icon">?</div>
+              <div><div class="command-title">Show keyboard shortcuts</div><div class="hint">Lists review keys without taking focus from the draft.</div></div>
+              <kbd>?</kbd>
+            </div>
+          </div>
+        </section>
+      </main>
+      <nav class="gallery-strip" aria-label="Artifact gallery strip">
+        <article class="gallery-card"><div class="thumb"></div><div><div class="gallery-title">fog-alley-v16</div><div class="hint">Done, 0 open</div></div></article>
+        <article class="gallery-card selected"><div class="thumb"></div><div><div class="gallery-title">city-market-hero-v18</div><div class="hint">Needs review, 2 open</div></div></article>
+        <article class="gallery-card"><div class="thumb"></div><div><div class="gallery-title">stall-closeup-v09</div><div class="hint">Open comments, 1 draft</div></div></article>
+        <article class="gallery-card"><div class="thumb"></div><div><div class="gallery-title">rain-signage-v11</div><div class="hint">Resolved, 4 closed</div></div></article>
+        <article class="gallery-card"><div class="thumb"></div><div><div class="gallery-title">night-wide-v03</div><div class="hint">Needs review</div></div></article>
+      </nav>
+      <aside class="comment-rail" aria-label="Threaded comments">
+        <div class="rail-header">
+          <div class="rail-title-row">
+            <div>
+              <h2 class="rail-title">Threads</h2>
+              <div class="rail-meta">Open first, selected pinned, autosaved draft active.</div>
+            </div>
+            <button class="button">Collapse <kbd>\</kbd></button>
+          </div>
+          <div class="filters" aria-label="Thread filters">
+            <span class="chip state-open"><span class="dot"></span>Open 2</span>
+            <span class="chip state-resolved"><span class="dot"></span>Resolved 3</span>
+            <span class="chip">All 5</span>
+          </div>
+        </div>
+        <div class="thread-list">
+          <article class="thread-card selected" aria-label="Thread 4 selected unresolved">
+            <div class="thread-head">
+              <span class="thread-id">Thread 4</span>
+              <span class="thread-status state-selected"><span class="dot"></span>Selected open</span>
+            </div>
+            <div class="hint">Region, x 38%, y 32%, w 22%, h 18%</div>
+            <p class="thread-body">The awning edge is clean, but the sign reflection feels sharper than the wet pavement. Please soften that reflection so it matches the rainy plate.</p>
+            <div class="reply"><strong>You</strong> <span class="timestamp">2 minutes ago</span><br>Agree. The reflection should blur toward the curb, not stay crisp all the way across.</div>
+            <div class="thread-actions">
+              <button class="button">Resolve thread <kbd>R</kbd></button>
+              <button class="button ghost">Reply</button>
+            </div>
+          </article>
+          <article class="thread-card" aria-label="Thread 5 unresolved">
+            <div class="thread-head">
+              <span class="thread-id">Thread 5</span>
+              <span class="thread-status state-open"><span class="dot"></span>Open</span>
+            </div>
+            <div class="hint">Point, x 68%, y 58%</div>
+            <p class="thread-body">The foreground hand has a convincing pose, but the sleeve seam disappears into the basket handle. Add a small value break there.</p>
+            <div class="thread-actions">
+              <button class="button">Resolve thread <kbd>R</kbd></button>
+              <button class="button ghost">Copy link</button>
+            </div>
+          </article>
+          <article class="thread-card resolved" aria-label="Thread 2 resolved collapsed">
+            <div class="thread-head">
+              <span class="thread-id">Thread 2</span>
+              <span class="thread-status state-resolved"><span class="dot"></span>Resolved, collapsed</span>
+            </div>
+            <p class="thread-body">Face lighting mismatch fixed in v18.</p>
+            <div class="thread-actions">
+              <button class="button">Reopen <kbd>Shift R</kbd></button>
+            </div>
+          </article>
+        </div>
+        <div class="rail-footer" aria-label="Open composer with draft">
+          <label class="composer-label" for="draft">New reply to thread 4 <span class="state-saving">Draft saved locally</span></label>
+          <textarea id="draft" readonly>The wet street pass is close. I would keep the blue rim light, but reduce the reflection contrast under the yellow awning by about 20 percent.</textarea>
+          <div class="composer-actions">
+            <span class="hint">Cmd+Enter to submit, Enter for newline</span>
+            <button class="button primary">Submit <kbd>Cmd Enter</kbd></button>
+          </div>
+        </div>
+      </aside>
+      <aside class="status-strip" aria-label="Collapsed rail status preview">
+        <div class="strip-count">2</div>
+        <span>Open threads</span>
+        <span>Rail can collapse for full canvas review</span>
+      </aside>
+      <footer class="token-legend" aria-label="Design token legend">
+        <div>
+          <div class="legend-title">Core palette</div>
+          <div class="swatches">
+            <span class="swatch"><i style="background:#05070A"></i>#05070A canvas</span>
+            <span class="swatch"><i style="background:#0B0F14"></i>#0B0F14 app</span>
+            <span class="swatch"><i style="background:#111827"></i>#111827 surface</span>
+            <span class="swatch"><i style="background:#1E293B"></i>#1E293B elevated</span>
+            <span class="swatch"><i style="background:#60A5FA"></i>#60A5FA accent</span>
+            <span class="swatch"><i style="background:#10B981"></i>#10B981 resolved</span>
+            <span class="swatch"><i style="background:#FBBF24"></i>#FBBF24 open</span>
+            <span class="swatch"><i style="background:#FB7185"></i>#FB7185 danger</span>
+          </div>
+        </div>
+        <div>
+          <div class="legend-title">Type scale</div>
+          <div class="scale-row"><span>12/16 labels</span><span>14/20 body</span><span>16/24 composer</span><span>18/28 panel</span><span>20/28 title</span></div>
+        </div>
+        <div>
+          <div class="legend-title">Spacing scale</div>
+          <div class="scale-row"><span>4</span><span>8</span><span>12</span><span>16</span><span>20</span><span>24</span><span>32</span><span>48</span></div>
+        </div>
+      </footer>
+    </div>
+  </div>
+</body>
+</html>

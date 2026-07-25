@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+/scripts/bdui-container/node_modules/
+.claudex-worktrees/

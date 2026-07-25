@@ -1,0 +1,181 @@
+/* review-serve shared theme: color tokens, reset, typography, buttons,
+ * inputs, thread/comment cards, tile cards, page shell/header.
+ *
+ * Linked by every page-owning template via render_page() as
+ * <link rel="stylesheet" href="/_/assets/css/theme.css">. Byte-identical
+ * values to the pre-extraction inline _THEME_ROOT_CSS (color hexes are
+ * WCAG-checked; do not change them here without re-checking contrast).
+ *
+ * NOT used by the page-comment widget injected into arbitrary third-party
+ * pushed HTML (PAGE_COMMENT_WIDGET in review-serve.py) -- that widget can't
+ * assume this stylesheet is present on a page it doesn't own, so it embeds
+ * its own scoped copy of the token block under #review-serve-widget. Any
+ * palette change here must also be mirrored there (_COLOR_TOKENS_DARK /
+ * _COLOR_TOKENS_LIGHT in review-serve.py), same as before this refactor.
+ */
+
+:root {
+  --bg-base: #0d0e10;
+  --bg-elevated: #18191a;
+  --bg-overlay: #232428;
+  --text-primary: #f2f3f3;
+  --text-secondary: #d0d6e0;
+  --text-muted: #8a8f98;
+  --border: #23252a;
+  --border-strong: #34343a;
+  --accent: #5e6ad2;
+  --accent-hover: #828fff;
+  --status-resolved: #27a644;
+  --status-unresolved: #d29922;
+  --status-danger: #f85149;
+
+  --font-ui: -apple-system, "Segoe UI", Roboto, system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "Consolas", monospace;
+  --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
+  --space-5: 24px; --space-6: 32px; --space-7: 48px;
+  --radius-sm: 4px; --radius-md: 8px; --radius-lg: 12px; --radius-pill: 9999px;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg-base: #ffffff;
+    --bg-elevated: #f7f8fa;
+    --bg-overlay: #eceef2;
+    --text-primary: #1a1a1f;
+    --text-secondary: #4a4f5a;
+    --text-muted: #666c7a;
+    --border: #e4e5e9;
+    --border-strong: #84899a;
+    --accent: #5c68d2;
+    --accent-hover: #4550b8;
+    --status-resolved: #1f8336;
+    --status-unresolved: #946b18;
+    --status-danger: #e31309;
+  }
+}
+html[data-theme="dark"] {
+  --bg-base: #0d0e10;
+  --bg-elevated: #18191a;
+  --bg-overlay: #232428;
+  --text-primary: #f2f3f3;
+  --text-secondary: #d0d6e0;
+  --text-muted: #8a8f98;
+  --border: #23252a;
+  --border-strong: #34343a;
+  --accent: #5e6ad2;
+  --accent-hover: #828fff;
+  --status-resolved: #27a644;
+  --status-unresolved: #d29922;
+  --status-danger: #f85149;
+}
+html[data-theme="light"] {
+  --bg-base: #ffffff;
+  --bg-elevated: #f7f8fa;
+  --bg-overlay: #eceef2;
+  --text-primary: #1a1a1f;
+  --text-secondary: #4a4f5a;
+  --text-muted: #666c7a;
+  --border: #e4e5e9;
+  --border-strong: #84899a;
+  --accent: #5c68d2;
+  --accent-hover: #4550b8;
+  --status-resolved: #1f8336;
+  --status-unresolved: #946b18;
+  --status-danger: #e31309;
+}
+
+/* Theme toggle button -- fixed top-right on every page. */
+.theme-toggle {
+  position: fixed; top: var(--space-3); right: var(--space-3); z-index: 1000;
+  background: var(--bg-elevated); color: var(--text-secondary);
+  border: 1px solid var(--border); border-radius: var(--radius-pill);
+  padding: 4px 12px; font-size: 12px; font-family: var(--font-ui);
+  cursor: pointer; line-height: 1.5;
+}
+.theme-toggle:hover { border-color: var(--border-strong); color: var(--text-primary); }
+
+/* Reset + base typography. */
+* { box-sizing: border-box; }
+body {
+  background: var(--bg-base); color: var(--text-primary);
+  font-family: var(--font-ui); margin: 0; line-height: 1.50; font-size: 16px;
+}
+h1 { font-size: 28px; font-weight: 600; line-height: 1.20; margin: 0 0 var(--space-4); }
+h2 { font-size: 22px; font-weight: 500; line-height: 1.25; margin: 0 0 var(--space-3); }
+a { color: var(--accent); }
+a:hover { color: var(--accent-hover); }
+.mono { font-family: var(--font-mono); font-size: 13px; }
+code {
+  background: var(--bg-overlay); padding: 1px 4px; border-radius: 2px;
+  font-family: var(--font-mono);
+}
+
+/* Page shell: header block shared by index/gallery/code pages. Built by
+ * render_page_header() in review-serve.py. The viewer page has no header
+ * by design (full-bleed OSD canvas). */
+header.page-header { padding: var(--space-6) var(--space-6) 0; }
+
+/* Comment thread card, shared by the viewer sidebar, the code-line panel,
+ * and (in its own scoped copy) the page-comment widget. */
+.thread-card {
+  background: var(--bg-elevated); border: 1px solid var(--border);
+  border-radius: var(--radius-md); padding: var(--space-4);
+  margin-bottom: var(--space-3); border-left: 3px solid var(--status-unresolved);
+}
+.thread-card.resolved { border-left-color: var(--status-resolved); opacity: 0.70; }
+.thread-card.danger { border-left-color: var(--status-danger); }
+.thread-badge {
+  display: inline-block; font-size: 12px; padding: 2px 8px;
+  border-radius: var(--radius-pill); font-weight: 500;
+}
+/* ponytail: tint backgrounds stay hardcoded dark-mode hex, not var(--status-*)
+ * -- see review-serve.py _THEME_ROOT_CSS comment history for why. */
+.thread-badge.unresolved { color: var(--status-unresolved); background: #d2992222; }
+.thread-badge.resolved { color: var(--status-resolved); background: #27a64422; }
+.thread-body { color: var(--text-primary); white-space: pre-wrap; word-break: break-word; }
+.thread-meta { color: var(--text-muted); font-size: 14px; margin-bottom: var(--space-2); }
+.empty { color: var(--text-muted); font-style: italic; }
+
+/* Buttons + inputs. */
+button, .btn {
+  background: var(--accent); color: #ffffff; border: none;
+  border-radius: var(--radius-sm); padding: var(--space-2) var(--space-4);
+  font-family: var(--font-ui); font-size: 14px; cursor: pointer;
+}
+button:hover, .btn:hover { background: var(--accent-hover); }
+textarea, input[type=text] {
+  background: var(--bg-overlay); color: var(--text-primary);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: var(--space-2); font-family: inherit; font-size: 14px; width: 100%;
+  box-sizing: border-box;
+}
+textarea:focus, input:focus { border-color: var(--border-strong); outline: none; }
+
+/* Card primitive: base look for any clickable tile (background, border,
+ * radius, hover). Compose via a second class for the specific tile kind,
+ * e.g. class="card tile" (project index) or class="card gallery-tile"
+ * (image gallery) -- no build step, just multiple classes on one element. */
+.card {
+  display: block;
+  background: var(--bg-elevated); border: 1px solid var(--border);
+  border-radius: var(--radius-md); text-decoration: none; color: inherit;
+  transition: border-color .12s;
+}
+.card:hover { border-color: var(--border-strong); }
+
+/* Project-index tile (regenerate_index()). */
+.tile { padding: var(--space-4); }
+.tile h3 { margin: 0 0 4px; font-size: 16px; color: var(--text-primary); }
+.tile .sub { font-size: 13px; color: var(--text-muted); word-break: break-all; }
+.tile .stats { font-size: 12px; color: var(--text-muted); margin-top: 8px; }
+.tile .gallery-link { display: inline-block; margin-top: 8px; font-size: 13px; }
+
+/* Image-gallery tile (render_gallery_page() / render_directory_gallery()). */
+.gallery-tile { overflow: hidden; }
+.gallery-tile img {
+  width: 100%; height: 160px; object-fit: cover; display: block;
+  background: var(--bg-overlay);
+}
+.gallery-caption {
+  padding: var(--space-2) var(--space-3); font-size: 14px;
+  color: var(--text-secondary); word-break: break-all;
+}

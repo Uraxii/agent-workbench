@@ -1,0 +1,90 @@
+[Unit]
+Description=kb-serve knowledgebase HTTP facade
+After=network-online.target
+
+[Container]
+Image=localhost/kb-serve:latest
+ContainerName=kb-serve
+
+# Run as the invoking user (rootless keep-id), not container root, so
+# notes/index files kb-serve writes into the bind-mounted vault below come
+# out owned by the real host user.
+User=%U
+Group=%U
+UserNS=keep-id
+
+# kb-serve.py (via kb-index.py/kb-clip.py) resolves KB_HOME from the
+# KB_HOME env var, else ~/.knowledgebase. Setting both HOME and KB_HOME
+# explicitly to the real host path keeps that identical inside and
+# outside the container, so the volume mount below lands at the same
+# absolute path in both places.
+Environment=HOME=%h
+Environment=KB_HOME=%h/.knowledgebase
+
+# kb-serve.py's own --host default is 127.0.0.1 (see its module
+# docstring) -- correct for a bare host run, but inside a container that
+# binds only the container's OWN loopback, which Podman's normal
+# port-publish path (pasta/slirp4netns NAT) cannot reach: the exact
+# failure mode documented in artifact-serve/container/README.md. The fix
+# used there was Network=host; here we instead bind 0.0.0.0 inside the
+# container and let PublishPort= below do the actual host-side
+# restriction to 127.0.0.1 -- this is Podman's normal, intended model
+# (container binds broadly, host-side publish narrows), and it means this
+# container keeps its own network namespace instead of sharing the host's.
+Environment=KB_SERVE_HOST=0.0.0.0
+
+# Only the vault itself is mounted -- no broad $HOME bind like
+# artifact-serve needs (see its README's security note): kb-serve never
+# symlinks or reads arbitrary host paths outside KB_HOME.
+Volume=%h/.knowledgebase:%h/.knowledgebase:rw
+
+# Host-side restricted to loopback only; see the KB_SERVE_HOST comment
+# above for why the container itself still binds 0.0.0.0.
+# H2: make the port genuinely env-driven now that the ENTRYPOINT no longer
+# bakes it. Change this + PublishPort together to move the port.
+Environment=KB_SERVE_PORT=9100
+PublishPort=127.0.0.1:9100:9100
+
+# Hardening.
+ReadOnly=true
+Tmpfs=/tmp
+NoNewPrivileges=true
+DropCapability=ALL
+
+# Non-secret config (KB_ENRICH, KB_LLM_BASE_URL, KB_LLM_MODEL) and the
+# resolved LLM API key both land in one tmpfs env file, written by
+# ExecStartPre below before the container starts. They can't be split
+# across two EnvironmentFile= lines: Podman Quadlet 5.8.2 does not strip
+# a leading `-`, so `EnvironmentFile=-%h/.knowledgebase/kb.env` resolved
+# RELATIVE to the unit dir instead of being treated as optional, and
+# podman's --env-file hard-requires the target to exist -- which
+# kb.env, gitignored and absent on first run, by design does not. Folding
+# the optional read of kb.env into the shell ExecStartPre (which already
+# tolerates a missing/empty output) sidesteps both problems: %t is the
+# user's XDG runtime dir (tmpfs), regenerated on every start, gone at
+# logout/reboot, and the raw key is never written to persistent disk,
+# never baked into the image, never logged.
+EnvironmentFile=%t/kb-serve.env
+
+# SELinux (enforcing on this host) would otherwise deny the vault bind
+# mount, or force a recursive relabel of it; disabling the label check
+# for this one container is simpler for a mount this narrow (unlike
+# artifact-serve's much broader $HOME mount, this one is low blast-radius
+# either way).
+SecurityLabelDisable=true
+
+[Service]
+# Build the tmpfs env file on the HOST, before the container starts.
+# First (if kb.env exists) copy over its non-secret passthrough keys,
+# then resolve the LLM API key and append it -- kb-serve.py's own
+# resolve-secret prints exactly one `KB_LLM_API_KEY=<value>` line, never
+# logs it. `umask 077` plus the redirect keeps the file at mode 0600.
+# Missing kb.env is a clean no-op: the `-f` test just skips the grep.
+# resolve-secret itself already handles the no-key case gracefully
+# (exits 0, no output).
+ExecStartPre=/bin/sh -c 'umask 077 && { [ -f %h/.knowledgebase/kb.env ] && grep -E "^(KB_ENRICH|KB_LLM_BASE_URL|KB_LLM_MODEL)=" %h/.knowledgebase/kb.env; %h/Projects/agent-workbench/scripts/kb-serve.py resolve-secret --kb-home %h/.knowledgebase; } > %t/kb-serve.env'
+Restart=on-failure
+TimeoutStartSec=30
+
+[Install]
+WantedBy=default.target
