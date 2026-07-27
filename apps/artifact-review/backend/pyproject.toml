@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "artifact-review-backend"
+version = "0.1.0"
+description = "Django backend skeleton for artifact review serving."
+requires-python = ">=3.14"
+dependencies = [
+    "Django==6.0",
+    "gunicorn>=23,<24",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8,<9",
+    "pytest-django>=4.11,<5",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["artifact_review", "artifact_review.*", "artifact_review_site", "artifact_review_site.*"]
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "artifact_review_site.settings"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
