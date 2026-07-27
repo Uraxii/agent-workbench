@@ -11,6 +11,11 @@ Covers the skeptic-gate fold-in fixes:
 * Bug 2 -- audit() orders a topic's chain by walking the `supersedes`
   links, not by sorting on `decision_date` (same-day record+supersede
   is normal and ties under a date-only sort).
+* Bug 2 re-review -- the chain walk matches `supersedes` by resolved
+  path, not raw string equality, so an aliased/symlinked path or a
+  relative `--supersedes` flag still walks correctly, and any fallback
+  that still can't fully walk the chain warns on stderr instead of
+  silently reverting to the known-wrong date sort.
 * render_decision/load_decision's LOCKED byte shape.
 * The supersede flip on `record()`.
 * build_note_path's same-day collision suffix.
@@ -23,6 +28,8 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+
+import pytest
 
 _AGENT_WORKBENCH_DIR = Path(__file__).resolve().parent.parent / ".claude" / "skills" / "agent-workbench"
 if str(_AGENT_WORKBENCH_DIR) not in sys.path:
@@ -250,3 +257,114 @@ def test_audit_falls_back_to_date_sort_when_no_unreferenced_root(
     chain = kb_decision.audit([decision_dir], "corrupt-topic")
 
     assert [n.title for n in chain] == ["A", "B"]  # ascending decision_date fallback
+
+
+# ── audit(): chain-walk resolved-path match (skeptic-gate re-review) ────
+
+
+def test_audit_chain_walk_matches_supersedes_through_an_aliased_path(
+    tmp_path: Path,
+) -> None:
+    """Reproduces the re-review repro without needing this machine's own
+    /home -> /var/home symlink: a tmp_path directory standing in for the
+    real vault, plus a second symlinked directory standing in for the
+    alias, so `supersedes` and `path` name the same file through two
+    genuinely different raw strings. Also stands in for the relative
+    `--supersedes` flag case, since a relative path has exactly the same
+    "differs as a string, same file once resolved" shape.
+
+    Before the fix this raw-string mismatch made the chain walk think
+    note_b's link dangled, silently falling back to the date sort --
+    right by luck here (dates already ascend) but wrong in general, and
+    indistinguishable from a correct result either way.
+    """
+    real_dir = tmp_path / "vault" / "decisions"
+    real_dir.mkdir(parents=True)
+    alias_root = tmp_path / "vault-alias"
+    alias_root.symlink_to(tmp_path / "vault")
+
+    note_a = kb_decision.Decision(
+        path=real_dir / "a.md", title="A", topic="alias-topic",
+        decision_date="2026-07-01", status=kb_decision.SUPERSEDED,
+        supersedes="", tags=[], body="a",
+    )
+    aliased_supersedes = str(alias_root / "decisions" / "a.md")
+    note_b = kb_decision.Decision(
+        path=real_dir / "b.md", title="B", topic="alias-topic",
+        decision_date="2026-07-02", status=kb_decision.ACTIVE,
+        supersedes=aliased_supersedes, tags=[], body="b",
+    )
+    note_a.path.write_text(kb_decision.render_decision(note_a), encoding="utf-8")
+    note_b.path.write_text(kb_decision.render_decision(note_b), encoding="utf-8")
+
+    assert aliased_supersedes != str(note_a.path)  # raw strings genuinely differ
+
+    chain = kb_decision.audit([real_dir], "alias-topic")
+
+    assert [n.title for n in chain] == ["A", "B"]
+
+
+def test_audit_falls_back_and_warns_on_dangling_supersedes_link(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A `supersedes` string that resolves to no real note (corrupt data,
+    or a note copied in from elsewhere without its target) must still
+    degrade to the date-sort fallback rather than raise -- and, unlike
+    the pre-fix behaviour, must say so on stderr instead of silently
+    handing back an order that might be wrong."""
+    decision_dir = tmp_path / "decisions"
+    decision_dir.mkdir()
+    note_a = kb_decision.Decision(
+        path=decision_dir / "a.md", title="A", topic="dangling-topic",
+        decision_date="2026-07-01", status=kb_decision.SUPERSEDED,
+        supersedes="", tags=[], body="a",
+    )
+    note_b = kb_decision.Decision(
+        path=decision_dir / "b.md", title="B", topic="dangling-topic",
+        decision_date="2026-07-02", status=kb_decision.ACTIVE,
+        supersedes=str(decision_dir / "does-not-exist.md"), tags=[], body="b",
+    )
+    note_a.path.write_text(kb_decision.render_decision(note_a), encoding="utf-8")
+    note_b.path.write_text(kb_decision.render_decision(note_b), encoding="utf-8")
+
+    chain = kb_decision.audit([decision_dir], "dangling-topic")
+
+    assert [n.title for n in chain] == ["A", "B"]  # degrades, doesn't raise
+    warning = capsys.readouterr().err
+    assert "dangling-topic" in warning
+    assert "not chain-verified" in warning.lower()
+
+
+def test_audit_fallback_orders_same_day_notes_by_recording_suffix(
+    tmp_path: Path,
+) -> None:
+    """Regression guard on the fallback's own suffix parser: a note's
+    `decision_date` itself ends in two digits (`...-22.md`), so a
+    date-blind `-\\d+\\.md` pattern misreads the UN-suffixed note's date
+    tail as a fake large suffix and sorts it last instead of first. Two
+    real `build_note_path`-named same-day notes, with a dangling
+    supersedes link forcing the fallback, must still land in recording
+    order: the plain `__DATE.md` note before its `__DATE-2.md` sibling.
+    """
+    decision_dir = tmp_path / "decisions"
+    decision_dir.mkdir()
+    today = "2026-07-22"
+    note_a = kb_decision.Decision(
+        path=kb_decision.build_note_path(decision_dir, "topic-x", today),
+        title="A", topic="topic-x", decision_date=today,
+        status=kb_decision.SUPERSEDED, supersedes="", tags=[], body="a",
+    )
+    note_a.path.write_text(kb_decision.render_decision(note_a), encoding="utf-8")
+    note_b = kb_decision.Decision(
+        path=kb_decision.build_note_path(decision_dir, "topic-x", today),
+        title="B", topic="topic-x", decision_date=today,
+        status=kb_decision.ACTIVE,
+        supersedes=str(tmp_path / "nowhere.md"), tags=[], body="b",
+    )
+    note_b.path.write_text(kb_decision.render_decision(note_b), encoding="utf-8")
+    assert note_a.path.name == "topic-x__2026-07-22.md"
+    assert note_b.path.name == "topic-x__2026-07-22-2.md"
+
+    chain = kb_decision.audit([decision_dir], "topic-x")
+
+    assert [n.title for n in chain] == ["A", "B"]

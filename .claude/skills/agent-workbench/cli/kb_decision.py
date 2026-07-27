@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
@@ -321,8 +322,9 @@ def find_notes_for_topic(
         topic: exact frontmatter ``topic`` match, no slugging.
 
     Returns:
-        Unsorted matches. Callers that display a chain sort by
-        ``decision_date``.
+        Unsorted matches. ``audit()`` orders them by walking the
+        ``supersedes`` chain, never by sorting on this field (see
+        ``audit`` for why a plain ``decision_date`` sort is wrong).
     """
     notes: list[Decision] = []
     for decision_dir in decision_dirs:
@@ -358,9 +360,18 @@ def resolve_supersedes_path(
     Note that ``decision_dirs`` here is the RECORDING project's dir only,
     never every project's: a cross-project topic-name collision must not
     silently flip another project's note to superseded.
+
+    An explicit path is resolved before it's returned, so a relative
+    ``--supersedes`` flag or a path reached through a symlinked/aliased
+    directory (e.g. a `/home` vs `/var/home` bind mount) still lands in
+    the new note's ``supersedes`` field as the same canonical path
+    ``audit()``'s chain walk will later compare against. This only
+    protects notes recorded from now on; old notes written by the
+    retired standalone skill keep whatever literal string they already
+    have on disk.
     """
     if supersedes_arg:
-        return Path(supersedes_arg)
+        return Path(supersedes_arg).resolve()
     active = find_active_note(decision_dirs, topic)
     return active.path if active else None
 
@@ -426,6 +437,67 @@ def record(kb_home: Path, args: argparse.Namespace) -> dict[str, str]:
     return {"path": str(note_path), "supersedes": new_note.supersedes}
 
 
+def _supersedes_targets(supersedes: str, path: Path) -> bool:
+    """True when a note's raw ``supersedes`` string names ``path``.
+
+    Compares resolved paths, not the raw strings, so the chain walk
+    survives path aliasing: a symlinked/bind-mounted directory (e.g. a
+    `/home` vs `/var/home` alias) or a relative ``--supersedes`` flag
+    still names the same file even though the two strings differ. An
+    empty ``supersedes`` (a topic's root note) never matches anything --
+    ``Path("").resolve()`` is the cwd, which must not accidentally match.
+    """
+    if not supersedes:
+        return False
+    return Path(supersedes).resolve() == path.resolve()
+
+
+def _same_day_suffix(note: Decision) -> int:
+    """The collision counter ``build_note_path`` gave this note's name.
+
+    ``<topic>__<date>.md`` (the first note that day) is ``1``;
+    ``...-2.md``, ``...-3.md``, ... parse to ``2``, ``3``, .... Lets the
+    audit fallback sort same-day notes in recording order instead of
+    ASCII filename order, where ``"...-2.md"`` sorts before the
+    un-suffixed ``"....md"`` -- backwards.
+
+    The regex is anchored on the note's OWN ``decision_date`` rather than
+    a bare trailing ``-\\d+.md``: the date itself ends in two digits
+    (``...-22.md``), so a date-blind pattern misreads an un-suffixed
+    note's date tail as a fake suffix and sorts it last instead of first.
+    """
+    pattern = re.compile(
+        rf"__{re.escape(note.decision_date)}(?:-(\d+))?\.md$"
+    )
+    match = pattern.search(note.path.name)
+    if match and match.group(1):
+        return int(match.group(1))
+    return 1
+
+
+def _fallback_chain_order(
+    notes: list[Decision], topic: str, reason: str
+) -> list[Decision]:
+    """Degrade to a best-effort order and say so, loudly, on stderr.
+
+    Used when the ``supersedes`` chain walk in ``audit()`` can't account
+    for every note (no single root, or a broken/dangling link) -- the
+    exact condition the chain walk exists to avoid, so a caller trusting
+    this order silently would be back to the original ordering bug. The
+    sort key is ``(decision_date, same-day suffix)`` rather than plain
+    ``decision_date``, so at least today's notes -- which do carry a real
+    recording order via ``build_note_path``'s suffix -- come out right;
+    only genuinely cross-day-ambiguous or corrupt data can still surprise.
+    """
+    print(
+        f"kb decision audit: topic {topic!r}: {reason}; chain walk "
+        "could not be completed, falling back to a date+suffix sort "
+        "(order is NOT chain-verified)",
+        file=sys.stderr,
+    )
+    return sorted(notes, key=lambda n: (n.decision_date, _same_day_suffix(n)))
+
+
 def audit(decision_dirs: Sequence[Path], topic: str) -> list[Decision]:
     """The topic's full supersession chain, oldest decision first.
 
@@ -438,10 +510,13 @@ def audit(decision_dirs: Sequence[Path], topic: str) -> list[Decision]:
 
     The walk starts at the one note with an empty ``supersedes`` (the
     topic's original -- nothing preceded it), then repeatedly follows
-    whichever note points its ``supersedes`` at the current one. Falls
-    back to a stable ``decision_date`` sort when that walk can't fully
+    whichever note points its ``supersedes`` at the current one, matched
+    by resolved path (see ``_supersedes_targets``) so an aliased or
+    relative link still resolves. Falls back to a best-effort sort, with
+    a stderr warning naming the topic, when that walk can't fully
     account for every note found -- no single root, or a broken/dangling
-    link -- which should not happen but must degrade instead of raising.
+    link -- which should not happen but must degrade instead of raising,
+    and must never do so silently.
 
     Postcondition: an unknown topic gives ``[]``.
     """
@@ -450,20 +525,30 @@ def audit(decision_dirs: Sequence[Path], topic: str) -> list[Decision]:
         return []
     roots = [note for note in notes if not note.supersedes]
     if len(roots) != 1:
-        return sorted(notes, key=lambda n: n.decision_date)
+        reason = (
+            "no note has an empty supersedes (no root to start from)"
+            if not roots
+            else f"{len(roots)} notes have an empty supersedes (ambiguous root)"
+        )
+        return _fallback_chain_order(notes, topic, reason)
 
     chain = [roots[0]]
     seen = {str(roots[0].path)}
     while (
         next_note := next(
-            (n for n in notes if n.supersedes == str(chain[-1].path)), None
+            (n for n in notes if _supersedes_targets(n.supersedes, chain[-1].path)),
+            None,
         )
     ) is not None and str(next_note.path) not in seen:
         chain.append(next_note)
         seen.add(str(next_note.path))
 
     if len(chain) != len(notes):
-        return sorted(notes, key=lambda n: n.decision_date)
+        reason = (
+            f"chain walk only reached {len(chain)} of {len(notes)} notes "
+            "(a broken or dangling supersedes link)"
+        )
+        return _fallback_chain_order(notes, topic, reason)
     return chain
 
 
