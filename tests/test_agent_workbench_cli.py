@@ -520,13 +520,13 @@ def test_cmd_down_leaves_hand_installed_n8n_quadlet_untouched(
 # ═══════════════════════════════════════════════════════════════════════
 
 
-def test_build_parser_registers_all_six_subcommands() -> None:
+def test_build_parser_registers_every_subcommand() -> None:
     parser = cli_main.build_parser()
     [command_action] = [
         action for action in parser._subparsers._group_actions if action.dest == "command"
     ]
     assert set(command_action.choices) == {
-        "kb", "bd", "artifact", "deploy", "install", "init-workspace",
+        "kb", "bd", "artifact", "deploy", "install", "init-workspace", "doctor",
     }
 
 
