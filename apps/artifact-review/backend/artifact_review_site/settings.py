@@ -3,26 +3,32 @@
 from __future__ import annotations
 
 import os
+import secrets
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "artifact-review-development-secret")
-DEBUG = os.environ.get("DJANGO_DEBUG", "1") == "1"
+SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY") or secrets.token_urlsafe(50)
+# This service has no sessions, auth, or signed cookies, so an ephemeral key is acceptable.
+DEBUG = os.environ.get("DJANGO_DEBUG", "0") == "1"
 
-REVIEW_SERVE_HOST = os.environ.get("REVIEW_SERVE_HOST", "127.0.0.1")
-REVIEW_SERVE_PORT = int(os.environ.get("REVIEW_SERVE_PORT", "9099"))
-REVIEW_SERVE_STAGE_ROOT = Path(os.environ.get("REVIEW_SERVE_STAGE_ROOT", "/tmp/claude-artifacts")).expanduser()
-REVIEW_SERVE_FEEDBACK_ROOT = Path(
-    os.environ.get("REVIEW_SERVE_FEEDBACK_ROOT", "~/.local/share/claude-artifacts")
+ARTIFACT_SERVE_HOST = os.environ.get("ARTIFACT_SERVE_HOST", "127.0.0.1")
+ARTIFACT_SERVE_PORT = int(os.environ.get("ARTIFACT_SERVE_PORT", "9099"))
+ARTIFACT_SERVE_STAGE_ROOT = Path(os.environ.get("ARTIFACT_SERVE_STAGE_ROOT", "/tmp/artifacts")).expanduser()
+ARTIFACT_SERVE_FEEDBACK_ROOT = Path(
+    os.environ.get("ARTIFACT_SERVE_FEEDBACK_ROOT", "~/.local/share/artifacts")
 ).expanduser()
-REVIEW_SERVE_SPA_ROOT = Path(os.environ.get("REVIEW_SERVE_SPA_ROOT", str(BASE_DIR / "spa"))).expanduser()
-REVIEW_SERVE_ASSETS_ROOT = Path(
-    os.environ.get("REVIEW_SERVE_ASSETS_ROOT", str(BASE_DIR / "artifact_review" / "assets"))
+ARTIFACT_SERVE_SPA_ROOT = Path(os.environ.get("ARTIFACT_SERVE_SPA_ROOT", str(BASE_DIR / "spa"))).expanduser()
+ARTIFACT_SERVE_ASSETS_ROOT = Path(
+    os.environ.get("ARTIFACT_SERVE_ASSETS_ROOT", str(BASE_DIR / "artifact_review" / "assets"))
 ).expanduser()
-REVIEW_SERVE_PUBLISH_ENABLED = os.environ.get("REVIEW_SERVE_PUBLISH_ENABLED", "0")
+ARTIFACT_SERVE_PUBLISH_ENABLED = os.environ.get("ARTIFACT_SERVE_PUBLISH_ENABLED", "1")
 
-ALLOWED_HOSTS = [REVIEW_SERVE_HOST, "127.0.0.1", "localhost", "testserver"]
+ALLOWED_HOSTS = [
+    host.strip()
+    for host in os.environ.get("ARTIFACT_SERVE_ALLOWED_HOSTS", "127.0.0.1,localhost,testserver").split(",")
+    if host.strip()
+]
 ROOT_URLCONF = "artifact_review_site.urls"
 WSGI_APPLICATION = "artifact_review_site.wsgi.application"
 ASGI_APPLICATION = "artifact_review_site.asgi.application"
@@ -39,7 +45,7 @@ MIDDLEWARE = [
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
-        "NAME": str(REVIEW_SERVE_FEEDBACK_ROOT / "feedback.db"),
+        "NAME": str(ARTIFACT_SERVE_FEEDBACK_ROOT / "feedback.db"),
         "OPTIONS": {"timeout": 10},
     }
 }
@@ -48,9 +54,19 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 USE_TZ = True
 TIME_ZONE = "UTC"
 STATIC_URL = "static/"
+SECURE_CONTENT_TYPE_NOSNIFF = True
+SECURE_REFERRER_POLICY = "no-referrer"
+X_FRAME_OPTIONS = "SAMEORIGIN"
 
 __all__ = [
     "ALLOWED_HOSTS",
+    "ARTIFACT_SERVE_ASSETS_ROOT",
+    "ARTIFACT_SERVE_FEEDBACK_ROOT",
+    "ARTIFACT_SERVE_HOST",
+    "ARTIFACT_SERVE_PORT",
+    "ARTIFACT_SERVE_PUBLISH_ENABLED",
+    "ARTIFACT_SERVE_SPA_ROOT",
+    "ARTIFACT_SERVE_STAGE_ROOT",
     "ASGI_APPLICATION",
     "BASE_DIR",
     "DATABASES",
@@ -58,17 +74,13 @@ __all__ = [
     "DEFAULT_AUTO_FIELD",
     "INSTALLED_APPS",
     "MIDDLEWARE",
-    "REVIEW_SERVE_ASSETS_ROOT",
-    "REVIEW_SERVE_FEEDBACK_ROOT",
-    "REVIEW_SERVE_HOST",
-    "REVIEW_SERVE_PORT",
-    "REVIEW_SERVE_PUBLISH_ENABLED",
-    "REVIEW_SERVE_SPA_ROOT",
-    "REVIEW_SERVE_STAGE_ROOT",
     "ROOT_URLCONF",
+    "SECURE_CONTENT_TYPE_NOSNIFF",
+    "SECURE_REFERRER_POLICY",
     "SECRET_KEY",
     "STATIC_URL",
     "TIME_ZONE",
     "USE_TZ",
     "WSGI_APPLICATION",
+    "X_FRAME_OPTIONS",
 ]

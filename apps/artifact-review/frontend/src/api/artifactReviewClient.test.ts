@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { getThreadsByArtifact } from './artifactReviewClient';
+import { getArtifacts, getThreadsByArtifact } from './artifactReviewClient';
 
 const threadPayload = {
   id: 123,
@@ -32,6 +32,31 @@ const jsonResponse = (payload: unknown, status = 200): Response =>
 describe('artifactReviewClient', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it('returns ready artifacts for the index endpoint', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse({
+        artifacts: [
+          {
+            project: 'demo',
+            subdir: 'image-set',
+            artifact_id: 'demo/image-set',
+            last_pushed: '2026-07-27T12:00:00Z',
+            entries: [],
+          },
+        ],
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await getArtifacts();
+
+    expect(fetchMock).toHaveBeenCalledWith('/_/api/artifacts');
+    expect(result.status).toBe('ready');
+    if (result.status === 'ready') {
+      expect(result.data.artifacts[0]?.artifact_id).toBe('demo/image-set');
+    }
   });
 
   it('returns ready threads for an artifact query', async () => {

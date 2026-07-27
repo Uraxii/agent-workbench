@@ -1,14 +1,12 @@
 import type { ZodType } from 'zod';
 import {
-  CommentListResponseSchema,
-  CreateCommentResponseSchema,
+  ArtifactListResponseSchema,
   CreateReplyResponseSchema,
   CreateThreadResponseSchema,
   ResolveThreadResponseSchema,
   SettingsSchema,
   ThreadListResponseSchema,
-  type CommentListResponse,
-  type CreateCommentResponse,
+  type ArtifactListResponse,
   type CreateReplyResponse,
   type CreateThreadResponse,
   type ResolveThreadResponse,
@@ -16,10 +14,8 @@ import {
 } from './artifactReviewSchemas';
 import type { ReviewRequestState, Settings } from './artifactReviewTypes';
 import {
-  createCommentFormData,
   createReplyFormData,
   createThreadFormData,
-  type CreateCommentFormInput,
   type CreateReplyFormInput,
   type CreateThreadFormInput,
 } from './formData';
@@ -28,8 +24,6 @@ type ArtifactThreadQuery = {
   readonly artifact: string;
   readonly subPath?: string;
 };
-
-type CommentQuery = ArtifactThreadQuery | { readonly url: string };
 
 type JsonResult<T> = {
   readonly data: T;
@@ -102,24 +96,15 @@ const appendArtifactQuery = (searchParams: URLSearchParams, input: ArtifactThrea
   }
 };
 
-const threadsUrl = (input: ArtifactThreadQuery | { readonly url: string }): string => {
-  const searchParams = new URLSearchParams();
-  if ('url' in input) {
-    searchParams.set('url', input.url);
-  } else {
-    appendArtifactQuery(searchParams, input);
-  }
-  return `/_/api/threads?${searchParams.toString()}`;
-};
+const artifactListResult = (data: ArtifactListResponse): JsonResult<ArtifactListResponse> => ({
+  data,
+  empty: data.artifacts.length === 0,
+});
 
-const commentsUrl = (input: CommentQuery): string => {
+const threadsUrl = (input: ArtifactThreadQuery): string => {
   const searchParams = new URLSearchParams();
-  if ('url' in input) {
-    searchParams.set('url', input.url);
-  } else {
-    appendArtifactQuery(searchParams, input);
-  }
-  return `/_/api/comments?${searchParams.toString()}`;
+  appendArtifactQuery(searchParams, input);
+  return `/_/api/threads?${searchParams.toString()}`;
 };
 
 const threadListResult = (data: ThreadListResponse): JsonResult<ThreadListResponse> => ({
@@ -127,22 +112,17 @@ const threadListResult = (data: ThreadListResponse): JsonResult<ThreadListRespon
   empty: data.threads.length === 0,
 });
 
-const commentListResult = (data: CommentListResponse): JsonResult<CommentListResponse> => ({
-  data,
-  empty: data.comments.length === 0,
-});
-
 export const getSettings = (): Promise<ReviewRequestState<Settings>> =>
   requestJson(fetch('/_/api/settings'), SettingsSchema);
+
+export const getArtifacts = (): Promise<ReviewRequestState<ArtifactListResponse>> =>
+  requestJson(fetch('/_/api/artifacts'), ArtifactListResponseSchema, artifactListResult);
 
 export const getUpload = (id: number): Promise<ReviewRequestState<Response>> =>
   requestResponse(fetch(`/_/api/uploads/${encodeURIComponent(String(id))}`));
 
 export const getThreadsByArtifact = (input: ArtifactThreadQuery): Promise<ReviewRequestState<ThreadListResponse>> =>
   requestJson(fetch(threadsUrl(input)), ThreadListResponseSchema, threadListResult);
-
-export const getThreadsByUrl = (url: string): Promise<ReviewRequestState<ThreadListResponse>> =>
-  requestJson(fetch(threadsUrl({ url })), ThreadListResponseSchema, threadListResult);
 
 export const createThread = (input: CreateThreadFormInput): Promise<ReviewRequestState<CreateThreadResponse>> =>
   requestJson(
@@ -184,18 +164,6 @@ export const toggleThreadResolved = (id: number): Promise<ReviewRequestState<Res
       method: 'POST',
     }),
     ResolveThreadResponseSchema,
-  );
-
-export const getComments = (input: CommentQuery): Promise<ReviewRequestState<CommentListResponse>> =>
-  requestJson(fetch(commentsUrl(input)), CommentListResponseSchema, commentListResult);
-
-export const createComment = (input: CreateCommentFormInput): Promise<ReviewRequestState<CreateCommentResponse>> =>
-  requestJson(
-    fetch('/_/api/comments', {
-      method: 'POST',
-      body: createCommentFormData(input),
-    }),
-    CreateCommentResponseSchema,
   );
 
 export const getArtifactBytes = (url: string): Promise<ReviewRequestState<Response>> => requestResponse(fetch(url));

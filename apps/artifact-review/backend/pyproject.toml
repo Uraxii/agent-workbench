@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "artifact-review-backend"
 version = "0.1.0"
 description = "Django backend skeleton for artifact review serving."
-requires-python = ">=3.14"
+requires-python = ">=3.13"
 dependencies = [
     "Django==6.0",
     "gunicorn>=23,<24",

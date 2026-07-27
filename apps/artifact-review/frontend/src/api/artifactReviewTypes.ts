@@ -2,6 +2,14 @@ export type ArtifactId = string;
 
 export type AnchorKind = 'page' | 'image_region' | 'code_line';
 
+export type ArtifactSummary = {
+  readonly project: string;
+  readonly subdir: string;
+  readonly artifact_id: ArtifactId;
+  readonly last_pushed: string;
+  readonly entries: readonly unknown[];
+};
+
 export type ImageRegionAnchor = {
   readonly selector: {
     readonly type: 'FragmentSelector';
@@ -47,18 +55,6 @@ export type Thread = {
   readonly created_at_iso: string;
   readonly bd_ticket: string | null;
   readonly replies: readonly Reply[];
-};
-
-export type LegacyComment = {
-  readonly id: number;
-  readonly thread_id: number;
-  readonly sub_path: string;
-  readonly body: string;
-  readonly author: string | null;
-  readonly created_at: number;
-  readonly created_at_iso: string;
-  readonly resolved: boolean;
-  readonly uploads: readonly Upload[];
 };
 
 export type Settings = Record<string, string> & {

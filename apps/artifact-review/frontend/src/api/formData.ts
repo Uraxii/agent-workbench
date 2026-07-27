@@ -1,8 +1,7 @@
 import type { AnchorKind, CodeLineAnchor, ImageRegionAnchor } from './artifactReviewTypes';
 
 type ReviewTarget =
-  | { readonly artifact: string; readonly url?: never; readonly sub_path?: string }
-  | { readonly url: string; readonly artifact?: never; readonly sub_path?: string };
+  { readonly artifact: string; readonly sub_path?: string };
 
 export type CreateThreadFormInput = ReviewTarget & {
   readonly body: string;
@@ -13,12 +12,6 @@ export type CreateThreadFormInput = ReviewTarget & {
 };
 
 export type CreateReplyFormInput = {
-  readonly body: string;
-  readonly author?: string;
-  readonly files?: readonly File[];
-};
-
-export type CreateCommentFormInput = ReviewTarget & {
   readonly body: string;
   readonly author?: string;
   readonly files?: readonly File[];
@@ -38,7 +31,6 @@ const appendFiles = (formData: FormData, files: readonly File[] | undefined): vo
 
 const appendTarget = (formData: FormData, input: ReviewTarget): void => {
   appendText(formData, 'artifact', input.artifact);
-  appendText(formData, 'url', input.url);
   appendText(formData, 'sub_path', input.sub_path);
 };
 
@@ -57,15 +49,6 @@ export const createThreadFormData = (input: CreateThreadFormInput): FormData => 
 
 export const createReplyFormData = (input: CreateReplyFormInput): FormData => {
   const formData = new FormData();
-  formData.append('body', input.body);
-  appendText(formData, 'author', input.author);
-  appendFiles(formData, input.files);
-  return formData;
-};
-
-export const createCommentFormData = (input: CreateCommentFormInput): FormData => {
-  const formData = new FormData();
-  appendTarget(formData, input);
   formData.append('body', input.body);
   appendText(formData, 'author', input.author);
   appendFiles(formData, input.files);

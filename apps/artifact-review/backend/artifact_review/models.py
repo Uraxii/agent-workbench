@@ -21,22 +21,6 @@ class ArtifactIndex(models.Model):
         indexes = [models.Index(fields=["artifact_id"], name="idx_index_artifact")]
 
 
-class LegacyComment(models.Model):
-    """Legacy flat page comment row kept for compatibility."""
-
-    id = models.AutoField(primary_key=True)
-    artifact_id = models.TextField()
-    sub_path = models.TextField(default="")
-    body = models.TextField()
-    author = models.TextField(null=True, blank=True)
-    created_at = models.IntegerField()
-
-    class Meta:
-        managed = False
-        db_table = "comment"
-        indexes = [models.Index(fields=["artifact_id", "sub_path"], name="idx_comment_artifact_path")]
-
-
 class Setting(models.Model):
     """Feedback database key-value setting."""
 
@@ -90,11 +74,10 @@ class Reply(models.Model):
 
 
 class Upload(models.Model):
-    """Uploaded file attached to a reply or legacy comment."""
+    """Uploaded file attached to a reply."""
 
     id = models.AutoField(primary_key=True)
     reply = models.ForeignKey(Reply, on_delete=models.CASCADE, null=True, blank=True, related_name="uploads")
-    comment_id = models.IntegerField(null=True, blank=True)
     filename = models.TextField()
     stored_path = models.TextField()
     mime = models.TextField(null=True, blank=True)
@@ -104,15 +87,11 @@ class Upload(models.Model):
     class Meta:
         managed = False
         db_table = "upload"
-        indexes = [
-            models.Index(fields=["reply"], name="idx_upload_reply"),
-            models.Index(fields=["comment_id"], name="idx_upload_comment"),
-        ]
+        indexes = [models.Index(fields=["reply"], name="idx_upload_reply")]
 
 
 __all__ = [
     "ArtifactIndex",
-    "LegacyComment",
     "Reply",
     "Setting",
     "Thread",

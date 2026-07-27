@@ -3,8 +3,12 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
 export default defineConfig({
-  base: '/_/app/',
+  base: '/spa/',
   plugins: [react()],
+  build: {
+    outDir: '../backend/spa',
+    emptyOutDir: true,
+  },
   test: {
     environment: 'jsdom',
     globals: true,
@@ -15,11 +19,11 @@ export default defineConfig({
         target: 'http://127.0.0.1:9099',
         changeOrigin: true,
       },
-      '/_/assets': {
+      '/_/health': {
         target: 'http://127.0.0.1:9099',
         changeOrigin: true,
       },
-      '/_/review': {
+      '^/(?!_|spa/|src/|@|node_modules/|fonts/|favicon\\.ico$).+/.+': {
         target: 'http://127.0.0.1:9099',
         changeOrigin: true,
       },

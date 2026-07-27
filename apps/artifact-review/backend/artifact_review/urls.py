@@ -7,7 +7,7 @@ from collections.abc import Callable, Mapping
 from django.http import HttpRequest, HttpResponse, HttpResponseNotAllowed
 from django.urls import path
 
-from artifact_review import views_api, views_review, views_static
+from artifact_review import views_api, views_static
 
 View = Callable[[HttpRequest], HttpResponse]
 
@@ -27,6 +27,7 @@ def route_by_method(method_views: Mapping[str, View]) -> View:
 
 urlpatterns = [
     path("_/api/settings", views_api.api_settings, name="api_settings"),
+    path("_/api/artifacts", views_api.api_artifacts, name="api_artifacts"),
     path("_/api/uploads/<int:id>", views_api.api_upload, name="api_upload"),
     path(
         "_/api/threads",
@@ -35,15 +36,8 @@ urlpatterns = [
     ),
     path("_/api/threads/<int:id>/replies", views_api.api_create_reply, name="api_create_reply"),
     path("_/api/threads/<int:id>/resolve", views_api.api_resolve_thread, name="api_resolve_thread"),
-    path(
-        "_/api/comments",
-        route_by_method({"GET": views_api.api_comments, "POST": views_api.api_create_comment}),
-        name="api_comments",
-    ),
     path("_/api/publish", views_api.api_publish, name="api_publish"),
-    path("_/assets/<path:rel>", views_static.vendored_asset, name="vendored_asset"),
-    path("_/review", views_review.review_page, name="review_page"),
-    path("_/tiles/<str:artifact>/<path:tile_path>", views_review.deep_zoom_tile, name="deep_zoom_tile"),
+    path("_/health", views_static.health, name="health"),
     path("", views_static.root_index, name="root_index"),
     path("spa/<path:rel>", views_static.spa_asset, name="spa_asset"),
     path("<str:project>/<str:subdir>/", views_static.static_artifact, name="static_artifact_directory"),

@@ -1,8 +1,8 @@
 import { z } from 'zod';
 import type {
+  ArtifactSummary,
   CodeLineAnchor,
   ImageRegionAnchor,
-  LegacyComment,
   Reply,
   Settings,
   Thread,
@@ -34,6 +34,18 @@ export const CodeLineAnchorSchema: z.ZodType<CodeLineAnchor> = z
   });
 
 const ThreadAnchorSchema = z.union([ImageRegionAnchorSchema, CodeLineAnchorSchema, z.null()]);
+
+export const ArtifactSummarySchema: z.ZodType<ArtifactSummary> = z.object({
+  project: z.string(),
+  subdir: z.string(),
+  artifact_id: z.string(),
+  last_pushed: z.string(),
+  entries: z.array(z.unknown()),
+});
+
+export const ArtifactListResponseSchema = z.object({
+  artifacts: z.array(ArtifactSummarySchema),
+});
 
 export const UploadSchema: z.ZodType<Upload> = z.object({
   id: z.number().int(),
@@ -79,18 +91,6 @@ export const ThreadSchema: z.ZodType<Thread> = z
     }
   });
 
-export const LegacyCommentSchema: z.ZodType<LegacyComment> = z.object({
-  id: z.number().int(),
-  thread_id: z.number().int(),
-  sub_path: z.string(),
-  body: z.string(),
-  author: z.string().nullable(),
-  created_at: z.number(),
-  created_at_iso: z.string(),
-  resolved: z.boolean(),
-  uploads: z.array(UploadSchema),
-});
-
 export const SettingsSchema: z.ZodType<Settings> = z.record(z.string(), z.string());
 
 export const ThreadListResponseSchema = z.object({
@@ -119,22 +119,8 @@ export const ResolveThreadResponseSchema = z.object({
   resolved: z.boolean(),
 });
 
-export const CommentListResponseSchema = z.object({
-  artifact_id: z.string(),
-  sub_path: z.string(),
-  comments: z.array(LegacyCommentSchema),
-});
-
-export const CreateCommentResponseSchema = z.object({
-  id: z.number().int(),
-  thread_id: z.number().int(),
-  artifact_id: z.string(),
-  sub_path: z.string(),
-});
-
+export type ArtifactListResponse = z.infer<typeof ArtifactListResponseSchema>;
 export type ThreadListResponse = z.infer<typeof ThreadListResponseSchema>;
 export type CreateThreadResponse = z.infer<typeof CreateThreadResponseSchema>;
 export type CreateReplyResponse = z.infer<typeof CreateReplyResponseSchema>;
 export type ResolveThreadResponse = z.infer<typeof ResolveThreadResponseSchema>;
-export type CommentListResponse = z.infer<typeof CommentListResponseSchema>;
-export type CreateCommentResponse = z.infer<typeof CreateCommentResponseSchema>;
