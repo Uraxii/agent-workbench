@@ -79,21 +79,48 @@ def check_container_runtime() -> Check:
     )
 
 
+# Each entry is (label, binary to look for on PATH, command proving it runs).
+# Every candidate has to actually run: `docker compose` is a plugin that may
+# be absent from a docker CLI, and podman-compose is a Python entry point that
+# can sit on PATH while its package is broken. Presence is not workingness --
+# trusting PATH alone is what made the retired rootless check report a
+# working host as broken.
+COMPOSE_CANDIDATES = (
+    ("docker compose", "docker", ["docker", "compose", "version"]),
+    ("podman-compose", "podman-compose", ["podman-compose", "version"]),
+    ("docker-compose", "docker-compose", ["docker-compose", "version"]),
+)
+
+
 def check_compose() -> Check:
-    """Required: `docker compose`, `podman-compose`, or `docker-compose`."""
-    found: list[str] = []
-    if shutil.which("docker"):
-        result = subprocess.run(
-            ["docker", "compose", "version"], capture_output=True, check=False,
+    """Required: a compose implementation that actually runs.
+
+    Reports a binary that is on PATH but fails to run separately from one
+    that is simply absent, because the two need different fixes.
+    """
+    working: list[str] = []
+    broken: list[str] = []
+    for label, binary, version_cmd in COMPOSE_CANDIDATES:
+        if not shutil.which(binary):
+            continue
+        result = subprocess.run(version_cmd, capture_output=True, check=False)
+        (working if result.returncode == 0 else broken).append(label)
+
+    if working:
+        detail = f"found: {', '.join(working)}"
+        if broken:
+            detail += f" (on PATH but not runnable: {', '.join(broken)})"
+        return Check("compose", True, True, detail, "")
+
+    if broken:
+        return Check(
+            "compose", True, False,
+            f"on PATH but not runnable: {', '.join(broken)}",
+            "the compose binary is installed but fails to start -- run it by "
+            "hand to see why (a broken podman-compose usually means a partial "
+            "pip install; reinstall it), or install another implementation",
         )
-        if result.returncode == 0:
-            found.append("docker compose")
-    if shutil.which("podman-compose"):
-        found.append("podman-compose")
-    if shutil.which("docker-compose"):
-        found.append("docker-compose")
-    if found:
-        return Check("compose", True, True, f"found: {', '.join(found)}", "")
+
     return Check(
         "compose", True, False, "no compose implementation found",
         "install podman-compose (`sudo dnf install podman-compose` or "

@@ -283,15 +283,21 @@ def extract_body_markdown(html: str) -> str:
     """Extract main content: readability-lxml first, a densest-block
     fallback second (kept for a machine without the lib installed)."""
     import lxml.html
-    from readability import Document
 
     try:
+        # Imported here, inside the guarded block, so the fallback this
+        # docstring promises actually fires on a machine without readability.
+        # At module scope a missing readability killed the import instead,
+        # which made the fallback unreachable dead code.
+        from readability import Document
+
         markdown = html_to_markdown(Document(html).summary())
         if markdown.strip():
             return markdown
     except Exception as exc:  # noqa: BLE001 readability raises many
-        # parser-specific exception types across malformed real-world
-        # pages; any of them means "fall back", not "crash the clip".
+        # parser-specific exception types across malformed real-world pages,
+        # and ImportError joins them when the library is absent; any of them
+        # means "fall back", not "crash the clip".
         print(f"kb-clip: readability extraction failed ({exc}), using fallback", file=sys.stderr)
 
     # ponytail: densest <article>/<main>/<p> block, nav/script/style

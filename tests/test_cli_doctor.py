@@ -189,6 +189,47 @@ def test_compose_check_ok_when_docker_compose_version_succeeds(
     assert "docker compose" in result.detail
 
 
+def test_compose_check_fails_when_binary_is_on_path_but_will_not_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A compose binary on PATH that exits non-zero is not a working compose.
+
+    Presence is not workingness: a partially installed podman-compose sits on
+    PATH and fails on every invocation.
+    """
+    monkeypatch.setattr(doctor.shutil, "which", _which_only("podman-compose"))
+    monkeypatch.setattr(doctor.subprocess, "run", _fake_run_fail)
+
+    result = doctor.check_compose()
+
+    assert result.ok is False
+    assert result.required is True
+    assert "not runnable" in result.detail
+    assert "podman-compose" in result.detail
+    assert result.fix_hint != ""
+
+
+def test_compose_check_passes_but_names_the_broken_sibling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One working impl is enough, but a broken one still gets named."""
+    def fake_run(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        # `docker compose` fails (plugin absent), podman-compose works.
+        code = 1 if cmd[0] == "docker" else 0
+        return subprocess.CompletedProcess(cmd, code, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr(
+        doctor.shutil, "which", _which_only("docker", "podman-compose"),
+    )
+    monkeypatch.setattr(doctor.subprocess, "run", fake_run)
+
+    result = doctor.check_compose()
+
+    assert result.ok is True
+    assert "found: podman-compose" in result.detail
+    assert "not runnable: docker compose" in result.detail
+
+
 def test_container_runtime_reports_both_when_both_present(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
