@@ -6,8 +6,11 @@ Scaffold the standard per-project agent workspace into a target repo:
                         centrally under the hub root, never in the repo)
   * docs/kb/            distilled markdown KB entries (tracked)
   * workstreams/        per-workstream status.md + artifacts
-  * kb.db               FTS5 index over docs/kb/ (build-kb-index.py)
-  * post-commit hook    reindexes docs/kb/ when a commit touches it
+
+No per-repo search index is scaffolded. The searchable knowledgebase is the
+central vault under KB_HOME, and ``scripts/kb-index.py`` is the one indexer
+over it, reached through ``kb query``. A second, repo-local index over
+docs/kb/ would be a second lineage of the same thing, free to drift.
 
 Idempotent: safe to re-run; each component reports "already initialized"
 rather than clobbering. Usage:
@@ -21,22 +24,11 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from cli import hub, paths, siblings
+from cli import hub
 
-__all__ = ["register", "scaffold_dirs", "install_post_commit_hook"]
+__all__ = ["register", "scaffold_dirs"]
 
 WORKSPACE_DIRS = ("docs/kb", "workstreams")
-
-POST_COMMIT_HOOK = """#!/usr/bin/env bash
-# Post-commit KB reindex hook (untracked, installed by
-# agent-workbench init-workspace). Reindexes docs/kb/ into kb.db only when
-# this commit touched docs/kb/; no-op otherwise.
-set -euo pipefail
-repo_root="$(git rev-parse --show-toplevel)"
-if git diff-tree --no-commit-id --name-only -r --root HEAD | grep -q '^docs/kb/'; then
-  "{indexer}" --root "$repo_root"
-fi
-"""
 
 
 def register(subparsers: argparse._SubParsersAction) -> None:
@@ -66,47 +58,11 @@ def scaffold_dirs(target_dir: Path) -> list[str]:
     return created
 
 
-def build_index(target_dir: Path) -> None:
-    """Rebuild ``target_dir``'s docs/kb FTS5 index via build-kb-index.py.
-
-    Loaded in-process through cli.siblings, not shelled out.
-    """
-    build_kb_index = siblings.load_script("build-kb-index")
-    build_kb_index.main(["--root", str(target_dir)])
-
-
-def install_post_commit_hook(target_dir: Path) -> bool:
-    """Install the docs/kb reindex post-commit hook.
-
-    Never overwrites an existing hook: returns False and leaves a manual
-    instruction to stdout if ``.git/hooks/post-commit`` already exists;
-    returns True when it writes (mode 0o755) the hook.
-
-    Precondition: ``target_dir`` is a git working tree.
-    """
-    hook_path = target_dir / ".git" / "hooks" / "post-commit"
-    indexer = paths.SCRIPTS_DIR / "build-kb-index.py"
-    if hook_path.is_file():
-        print(f"init-agent-workspace: WARNING {hook_path} already exists, not overwriting.")
-        print("  Add this line to it manually to keep the KB index current:")
-        print(
-            "  git diff-tree --no-commit-id --name-only -r --root HEAD | "
-            f"grep -q '^docs/kb/' && \"{indexer}\" --root \"$(git rev-parse --show-toplevel)\""
-        )
-        return False
-
-    hook_path.write_text(POST_COMMIT_HOOK.format(indexer=indexer), encoding="utf-8")
-    hook_path.chmod(0o755)
-    print("init-agent-workspace: installed post-commit KB reindex hook")
-    return True
-
-
 def cmd_init_workspace(args: argparse.Namespace) -> int:
     """Run the full scaffold against TARGET_DIR (default cwd).
 
     Order: register the bd board via the `hub` module (fatal on failure --
-    it is the project's only board), scaffold dirs, build the index,
-    install the hook.
+    it is the project's only board), then scaffold the dirs.
     """
     raw_target = Path(args.target_dir)
     if not raw_target.is_dir():
@@ -118,8 +74,6 @@ def cmd_init_workspace(args: argparse.Namespace) -> int:
     print(f"init-agent-workspace: bd board ready via hub (prefix: {prefix})")
 
     scaffold_dirs(target_dir)
-    build_index(target_dir)
-    install_post_commit_hook(target_dir)
 
     print(f"init-agent-workspace: done ({target_dir})")
     return 0

@@ -352,10 +352,10 @@ def test_cmd_init_workspace_scaffolds_a_tmp_git_repo(
     assert result == 0
     assert (tmp_path / "docs" / "kb").is_dir()
     assert (tmp_path / "workstreams").is_dir()
-    assert (tmp_path / "kb.db").is_file()  # build-kb-index ran for real (pure sqlite, no network)
-    hook = tmp_path / ".git" / "hooks" / "post-commit"
-    assert hook.is_file()
-    assert hook.stat().st_mode & 0o111  # installed executable
+    # No repo-local index and no reindex hook: the vault under KB_HOME is the
+    # searchable knowledgebase, and scripts/kb-index.py is its only indexer.
+    assert not (tmp_path / "kb.db").exists()
+    assert not (tmp_path / ".git" / "hooks" / "post-commit").exists()
 
 
 def test_cmd_init_workspace_missing_target_dir_raises(tmp_path: Path) -> None:
@@ -363,16 +363,6 @@ def test_cmd_init_workspace_missing_target_dir_raises(tmp_path: Path) -> None:
         init_workspace.cmd_init_workspace(
             argparse.Namespace(target_dir=str(tmp_path / "nope"), prefix=None),
         )
-
-
-def test_install_post_commit_hook_never_overwrites_an_existing_hook(tmp_path: Path) -> None:
-    hooks_dir = tmp_path / ".git" / "hooks"
-    hooks_dir.mkdir(parents=True)
-    existing = hooks_dir / "post-commit"
-    existing.write_text("#!/usr/bin/env bash\necho custom-hook\n", encoding="utf-8")
-
-    assert init_workspace.install_post_commit_hook(tmp_path) is False
-    assert existing.read_text(encoding="utf-8") == "#!/usr/bin/env bash\necho custom-hook\n"
 
 
 # ═══════════════════════════════════════════════════════════════════════

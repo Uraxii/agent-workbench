@@ -56,10 +56,9 @@ def load_script(name: str) -> types.ModuleType:
 
     Preconditions: ``<repo>/scripts/<name>.py`` exists.
     """
-    # A handful of siblings (e.g. build-kb-index.py -> kb_embeddings)
-    # import a same-dir module by its plain underscored name, which only
-    # resolves if SCRIPTS_DIR is on sys.path. Adding it once here keeps
-    # that working without every sibling needing its own path shim.
+    # Siblings import each other by plain underscored module name, which
+    # only resolves if SCRIPTS_DIR is on sys.path. Adding it once here
+    # keeps that working without every sibling needing its own path shim.
     scripts_dir = str(SCRIPTS_DIR)
     if scripts_dir not in sys.path:
         sys.path.insert(0, scripts_dir)

@@ -241,8 +241,8 @@ deploy/agent-workbench/README.md                     # content folded into SKILL
 ```
 
 (If `deploy/agent-workbench/` is then empty, remove the dir. Do NOT delete
-`scripts/kb-serve.py`, `kb-index.py`, `kb-clip.py`, `kb-atomize.py`,
-`build-kb-index.py` -- the CLI delegates to them.)
+`scripts/kb-serve.py`, `kb-index.py`, `kb-clip.py`, `kb-atomize.py` -- the
+CLI delegates to them.)
 
 ## Reference-update list (repoint old-script mentions at the new CLI)
 
