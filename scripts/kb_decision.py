@@ -179,12 +179,19 @@ def find_decision_dirs(kb_home: Path, project: str | None) -> list[Path]:
     """
     if project is not None:
         one_dir = decisions_dir(kb_home, validate_project(project))
+        assert_inside_vault(kb_home, one_dir)
         return [one_dir] if one_dir.exists() else []
     if not kb_home.exists():
         return []
+    root = kb_home.resolve()
     dirs = []
     for entry in sorted(kb_home.iterdir()):
         if not entry.is_dir() or entry.name in VAULT_OWN_DIRS:
+            continue
+        # entry.is_dir() follows symlinks, so a symlinked project would
+        # otherwise let an audit read decision notes outside the vault.
+        if not entry.resolve().is_relative_to(root):
+            log.warning("skipping %s, it resolves outside %s", entry, root)
             continue
         project_decisions_dir = entry / DECISIONS_DIR_NAME
         if project_decisions_dir.exists():
@@ -217,12 +224,21 @@ def find_notes_for_topic(
 
     Returns unsorted matches. ``audit()`` orders them by walking the
     ``supersedes`` chain, never by sorting on ``decision_date``.
+
+    A note is only read when it resolves inside the decisions dir it was
+    found in: a symlinked *file* would otherwise let an audit read
+    markdown from anywhere on the host.
     """
     notes: list[Decision] = []
     for decision_dir in decision_dirs:
         if not decision_dir.exists():
             continue
-        notes.extend(load_decision(p) for p in decision_dir.glob("*.md"))
+        root = decision_dir.resolve()
+        for path in decision_dir.glob("*.md"):
+            if not path.resolve().is_relative_to(root):
+                log.warning("skipping %s, it resolves outside %s", path, root)
+                continue
+            notes.append(load_decision(path))
     return [note for note in notes if note.topic == topic]
 
 

@@ -369,3 +369,34 @@ def test_audit_fallback_orders_same_day_notes_by_recording_suffix(
     chain = kb_decision.audit([decision_dir], "topic-x")
 
     assert [n.title for n in chain] == ["A", "B"]
+
+
+# ── audit(): the scan stays inside the vault ──────────────────────────
+
+
+def test_find_decision_dirs_skips_a_symlinked_project(tmp_path: Path) -> None:
+    """`entry.is_dir()` follows symlinks, so an audit would otherwise read
+    decision notes from outside the vault."""
+    vault = tmp_path / "vault"
+    (vault / "proj" / "decisions").mkdir(parents=True)
+    outside = tmp_path / "outside"
+    (outside / "decisions").mkdir(parents=True)
+    (vault / "escaped").symlink_to(outside)
+
+    dirs = kb_decision.find_decision_dirs(vault, None)
+
+    assert dirs == [vault / "proj" / "decisions"]
+
+
+def test_find_notes_for_topic_skips_a_symlinked_note(tmp_path: Path) -> None:
+    decision_dir = tmp_path / "vault" / "proj" / "decisions"
+    decision_dir.mkdir(parents=True)
+    outside = tmp_path / "outside.md"
+    outside.write_text(
+        "---\ntitle: Secret\ntopic: leak-topic\ndate: 2026-07-01\n"
+        "status: active\nsupersedes: \ntags: []\n---\n\nsecret body\n",
+        encoding="utf-8",
+    )
+    (decision_dir / "link.md").symlink_to(outside)
+
+    assert kb_decision.find_notes_for_topic([decision_dir], "leak-topic") == []
