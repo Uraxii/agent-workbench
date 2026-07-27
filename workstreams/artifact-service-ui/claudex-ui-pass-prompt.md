@@ -7,7 +7,7 @@ Target files:
 
 Read these first:
 - /var/home/nicole/Projects/lodestar/workstreams/artifact-service-ui-brief.md
-- /var/home/nicole/dotfiles/docs/design/avoiding-ai-generated-ui-tells.md
+- /var/home/nicole/Projects/agent-workbench/docs/design/avoiding-ai-generated-ui-tells.md
 - /var/home/nicole/Projects/agent-workbench/spikes/frontend-directions/briefs/v5b-dual-theme-SHARED.md
 - /var/home/nicole/Projects/agent-workbench/spikes/frontend-directions/direction-unified-app.html
 - /var/home/nicole/Projects/agent-workbench/.claude/skills/artifact-serve/scripts/review-serve.py
