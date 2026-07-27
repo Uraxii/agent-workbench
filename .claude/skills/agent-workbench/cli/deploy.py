@@ -7,7 +7,8 @@ units.
 Subcommands:
     up      build images, install quadlets (symlink), start + health-check
     down    stop + disable + remove ONLY the quadlets this bundle installed
-    status  systemctl status + HTTP health for both, plus bd hub presence
+    status  is-active + HTTP health for each unit, plus bd hub presence
+            (--json for a machine-readable form)
 
 Ownership rule (PRESERVED): `up` never restarts an already-active
 artifact-serve; `down` only touches a unit whose installed quadlet is this
@@ -26,12 +27,14 @@ lands (see the hardening plan's delete list).
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import NamedTuple
 
 from cli import hub, paths
 
@@ -74,7 +77,10 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     down_cmd = sub.add_parser("down", help="stop + disable + remove bundle-owned quadlets")
     down_cmd.set_defaults(func=cmd_down)
 
-    status_cmd = sub.add_parser("status", help="systemctl status + HTTP health for both units")
+    status_cmd = sub.add_parser("status", help="unit state + HTTP health for each service")
+    status_cmd.add_argument(
+        "--json", action="store_true", help="emit JSON instead of the table",
+    )
     status_cmd.set_defaults(func=cmd_status)
 
 
@@ -161,12 +167,63 @@ def wait_for_http(url: str, tries: int = HEALTH_WAIT_TRIES) -> bool:
     return False
 
 
-def _health_line(url: str) -> str:
-    """"health: 200" on success, else "health: unreachable (got <code>)"."""
-    status = _http_status(url)
-    if status == 200:
-        return f"health: {status}"
-    return f"health: unreachable (got {status if status is not None else '000'})"
+class _Service(NamedTuple):
+    """One quadlet-managed service: its systemctl unit name and health URL."""
+    label: str
+    unit: str
+    url: str
+
+
+# Reuses the same *_HEALTH_URL constants cmd_up polls; the status table is
+# just a read-only view over the same four services.
+_SERVICES: tuple[_Service, ...] = (
+    _Service("kb-serve", "kb-serve", KB_HEALTH_URL),
+    _Service("artifact-serve", "artifact-serve", ARTIFACT_HEALTH_URL),
+    _Service("bdui", "bdui", BDUI_HEALTH_URL),
+    _Service("n8n", "n8n", N8N_HEALTH_URL),
+)
+
+
+def _unit_state(unit: str) -> str:
+    """``systemctl --user is-active <unit>``, trimmed: active/inactive/failed/..."""
+    result = subprocess.run(
+        ["systemctl", "--user", "is-active", unit],
+        check=False, capture_output=True, text=True,
+    )
+    return result.stdout.strip()
+
+
+def _service_row(service: _Service) -> dict[str, str]:
+    """One status row: unit state + HTTP health, no journald log spam."""
+    status = _http_status(service.url)
+    health = "200" if status == 200 else "unreachable"
+    return {
+        "service": service.label,
+        "unit": _unit_state(service.unit),
+        "health": health,
+        "url": service.url,
+    }
+
+
+def _hub_row() -> dict[str, str]:
+    """The bd hub isn't a systemd unit; its "health" is just present/absent."""
+    hub_dir = hub.hub_root()
+    presence = "present" if hub_dir.is_dir() else "absent"
+    return {"service": "bd hub", "unit": "-", "health": presence, "url": str(hub_dir)}
+
+
+def _print_status_table(rows: list[dict[str, str]]) -> None:
+    """One aligned row per service; columns sized to the widest cell."""
+    columns = ("service", "unit", "health", "url")
+    headers = ("SERVICE", "UNIT", "HEALTH", "URL")
+    widths = [
+        max(len(header), *(len(row[column]) for row in rows))
+        for header, column in zip(headers, columns)
+    ]
+    print("  ".join(h.ljust(w) for h, w in zip(headers, widths)).rstrip())
+    for row in rows:
+        cells = [row[c].ljust(w) for c, w in zip(columns, widths)]
+        print("  ".join(cells).rstrip())
 
 
 def _ensure_data_dirs() -> None:
@@ -296,25 +353,17 @@ def cmd_down(args: argparse.Namespace) -> int:
 
 
 def cmd_status(args: argparse.Namespace) -> int:
-    """Print systemctl status + HTTP health for both units and hub presence."""
-    print("--- kb-serve ---")
-    subprocess.run(["systemctl", "--user", "status", "kb-serve", "--no-pager"], check=False)
-    print(_health_line(KB_HEALTH_URL))
-    print()
-    print("--- artifact-serve ---")
-    subprocess.run(["systemctl", "--user", "status", "artifact-serve", "--no-pager"], check=False)
-    print(_health_line(ARTIFACT_HEALTH_URL))
-    print()
-    print("--- bdui ---")
-    subprocess.run(["systemctl", "--user", "status", "bdui", "--no-pager"], check=False)
-    print(_health_line(BDUI_HEALTH_URL))
-    print()
-    print("--- n8n ---")
-    subprocess.run(["systemctl", "--user", "status", "n8n", "--no-pager"], check=False)
-    print(_health_line(N8N_HEALTH_URL))
-    print()
-    print("--- bd hub (not a service) ---")
-    beads_hub_dir = hub.hub_root()
-    presence = "present" if beads_hub_dir.is_dir() else "absent"
-    print(f"data: {beads_hub_dir} ({presence})")
+    """Print unit state + HTTP health for each service, plus bd hub presence.
+
+    Uses `systemctl --user is-active` rather than `status`, so this never
+    drags in a unit's journald log tail. `--json` emits the same rows as a
+    JSON object for agent consumption instead of the human table.
+    """
+    rows = [_service_row(service) for service in _SERVICES]
+    rows.append(_hub_row())
+
+    if args.json:
+        print(json.dumps({"services": rows}, indent=2))
+    else:
+        _print_status_table(rows)
     return 0
