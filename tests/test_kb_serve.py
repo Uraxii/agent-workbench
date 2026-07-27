@@ -29,6 +29,14 @@ import pytest
 
 _SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "kb-serve.py"
 
+# The clip and atomize-from-url paths are the only ones that parse HTML, so
+# they are the only ones needing lxml. It ships in the kb-serve image, not on
+# the host, so a fresh clone skips these four rather than failing them.
+needs_lxml = pytest.mark.skipif(
+    importlib.util.find_spec("lxml") is None,
+    reason="lxml ships in the kb-serve image, not on the host",
+)
+
 
 def _load_kb_serve():
     spec = importlib.util.spec_from_file_location("kb_serve_under_test", _SCRIPT_PATH)
@@ -355,6 +363,7 @@ def _fake_opener(*, html: bytes = b"", exc: Exception | None = None) -> MagicMoc
     return opener
 
 
+@needs_lxml
 def test_clip_happy_path_writes_source_note_with_extracted_content(
     live_server: tuple[str, KbServeConfig],
 ) -> None:
@@ -382,6 +391,7 @@ def test_clip_happy_path_writes_source_note_with_extracted_content(
     assert set(body.keys()) == {"path", "children"}  # no unexpected/leaked fields in the response
 
 
+@needs_lxml
 def test_clip_fetch_failure_returns_clean_error_and_writes_no_note(tmp_path: Path) -> None:
     """A URLError from the outbound fetch must come back as a clean 502,
     never a 500 stack leak, and must leave the vault untouched. The
@@ -596,6 +606,7 @@ def test_atomize_content_happy_path_returns_llm_children_with_parent_ref(tmp_pat
         assert f'parent: "{parent_path}"' in text
 
 
+@needs_lxml
 def test_atomize_url_happy_path_returns_llm_children(tmp_path: Path) -> None:
     config = _config(tmp_path, enrich_enabled=True, llm_api_key="fake-key")
     llm_items = [{"title": "Child A", "body": "Body A content."}]
@@ -692,6 +703,7 @@ def test_atomize_missing_url_and_content_returns_400(live_server: tuple[str, KbS
     assert "url" in str(body["error"]) or "content" in str(body["error"])
 
 
+@needs_lxml
 def test_atomize_both_url_and_content_given_prefers_url(tmp_path: Path) -> None:
     """Pins the real dispatch order (`if url: ... elif content:`) rather
     than inventing a stricter contract: url wins when both are given."""
