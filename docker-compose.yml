@@ -68,6 +68,48 @@ services:
       start_period: 5s
       retries: 3
 
+  bd-serve:
+    build:
+      context: ./scripts
+      dockerfile: bd-container/Containerfile
+    image: localhost/bd-serve:latest
+    # Mirrors bdui's proven bind-mount security stance: no `user:`
+    # override, and SELinux labeling disabled because bd board dirs are
+    # 0700/0600 on this enforcing host.
+    environment:
+      BD_SERVE_HOST: "0.0.0.0"
+      BD_SERVE_PORT: "9101"
+      # Container-internal HOME, NOT the host's -- same gotcha bdui hit:
+      # `bd` wants a writable home for its own config/cache, and the
+      # read_only rootfs would reject it. /tmp is the tmpfs below. The
+      # `${HOME}` in BEADS_HUB_DIR/volumes is a compose substitution for
+      # the HOST home dir and is unrelated to this; keep them different.
+      HOME: "/tmp"
+      BEADS_HUB_DIR: "${HOME}/.beads-hub"
+    ports:
+      - "127.0.0.1:9101:9101"
+    volumes:
+      - "${HOME}/.beads-hub:${HOME}/.beads-hub:rw"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - "no-new-privileges:true"
+      - "label:disable"
+    tmpfs:
+      - /tmp
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - "import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('BD_SERVE_PORT','9101')+'/health', timeout=3)"
+      interval: 30s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
+
   artifact-serve:
     build:
       context: ./.claude/skills/artifact-serve
