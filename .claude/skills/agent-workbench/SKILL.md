@@ -1,6 +1,6 @@
 ---
 name: agent-workbench
-description: Locally deployable agent workbench (knowledgebase vault + bd board hub + bdui web front end + hardened kb-serve/artifact-serve containers) driven by ONE pure-Python CLI. Use to run knowledgebase clip/put/query, manage bd boards under the central hub, launch the board web UI, scaffold a repo's agent workspace, or build and deploy the artifact and knowledgebase containers locally. Replaces the old scripts/*.sh shell tools and the bash deploy driver.
+description: Locally deployable agent workbench (knowledgebase vault + bd board hub + bdui web front end + hardened kb-serve/artifact-serve containers) driven by ONE pure-Python CLI. Use to run knowledgebase clip/put/query, manage bd boards under the central hub, launch the board web UI, scaffold a repo's agent workspace, build and deploy the artifact and knowledgebase containers locally, or record/audit an architectural or scope decision the moment it's settled ("record decision", "we decided", "log this decision").
 ---
 
 # agent-workbench
