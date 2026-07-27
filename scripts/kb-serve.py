@@ -34,6 +34,10 @@ Endpoints (all JSON):
 
 CLI:
     kb-serve.py run [--host H] [--port P] [--kb-home DIR]
+    kb-serve.py resolve-secret [--kb-home DIR]
+        prints "KB_LLM_API_KEY=<value>" for an EnvironmentFile to consume;
+        never logs the value. Exists only for the kb-serve quadlet's
+        ExecStartPre and retires with it.
 
 Config (env, optionally from the gitignored ``<kb_home>/kb.env``) is
 documented in kb_config.py. Everything model-backed is off by default and
@@ -85,6 +89,7 @@ __all__ = [
     "apply_enrichment",
     "build_config",
     "build_parser",
+    "cmd_resolve_secret",
     "count_indexed_notes",
     "find_unenriched_notes",
     "kb_atomize_via_llm",
@@ -530,10 +535,34 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_resolve_secret(args: argparse.Namespace) -> int:
+    """Print ``KB_LLM_API_KEY=<value>`` for an EnvironmentFile to consume.
+
+    The only line ever written to stdout; the resolved value is never
+    logged. Prints the key with an empty value when nothing resolves, and
+    callers treat that the same as "no key configured".
+
+    Kept for ``scripts/kb-container/kb-serve.container``'s ExecStartPre,
+    which resolves the key host-side so the container never needs the
+    vault CLI. That quadlet is slated for deletion in favour of
+    docker-compose (decision topic agent-workbench-container-runtime);
+    this subcommand goes with it.
+    """
+    kb_home = resolve_kb_home(args.kb_home)
+    merged = {**load_kb_env(kb_home), **os.environ}
+    print(f"KB_LLM_API_KEY={resolve_api_key(merged) or ''}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
-    """Construct the ``run`` CLI."""
+    """Construct the CLI."""
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
+    secret_cmd = sub.add_parser(
+        "resolve-secret",
+        help="print the resolved LLM API key for a systemd EnvironmentFile",
+    )
+    secret_cmd.add_argument("--kb-home", default=None)
     run_cmd = sub.add_parser("run", help="serve the knowledgebase service")
     run_cmd.add_argument(
         "--host", default=os.environ.get("KB_SERVE_HOST", "127.0.0.1"),
@@ -553,7 +582,8 @@ def main(argv: list[str]) -> int:
         level=logging.INFO, format="%(asctime)s %(name)s %(message)s",
     )
     args = build_parser().parse_args(argv)
-    return cmd_run(args)
+    dispatch = {"run": cmd_run, "resolve-secret": cmd_resolve_secret}
+    return dispatch[args.command](args)
 
 
 if __name__ == "__main__":
