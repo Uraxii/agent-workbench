@@ -7,6 +7,7 @@ Personal machine-local knowledgebase vault ops. Subcommands:
     index                      rebuild the global FTS5 index
     clip URL [--project P]     deterministic web-source capture
     put PROJECT TITLE [...]    write a note (body on stdin)
+    decision record|audit      dated decision notes    [cli/kb_decision.py]
     query Q [--project P ...]  FTS5 search
     atomize FILE               deterministic split into atomic notes
     status                     JSON: kb_home, initialized?, projects
@@ -37,9 +38,10 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from cli import siblings
+from cli import kb_decision, siblings
+from cli.paths import resolve_kb_home
 
-__all__ = ["register", "service_base_url", "service_up"]
+__all__ = ["register", "resolve_kb_home", "service_base_url", "service_up"]
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 9100
@@ -83,6 +85,8 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     put_cmd.add_argument("--source", default="")
     put_cmd.add_argument("--kb-home", default=None)
     put_cmd.set_defaults(func=cmd_put)
+
+    kb_decision.register(sub)
 
     query_cmd = sub.add_parser("query", help="FTS5 search")
     query_cmd.add_argument("q")
@@ -174,14 +178,6 @@ def _post_json(endpoint: str, payload: dict[str, object]) -> dict[str, object]:
 
 
 # ── command handlers ──────────────────────────────────────────────────
-
-
-def resolve_kb_home(explicit: str | None) -> Path:
-    """Resolve KB_HOME: explicit arg, else $KB_HOME, else ~/.knowledgebase."""
-    if explicit:
-        return Path(explicit)
-    env = os.environ.get("KB_HOME")
-    return Path(env) if env else Path.home() / ".knowledgebase"
 
 
 def cmd_init(args: argparse.Namespace) -> int:

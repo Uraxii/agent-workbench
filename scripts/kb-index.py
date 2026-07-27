@@ -74,6 +74,15 @@ def unquote(value: str) -> str:
     return value
 
 
+def parse_tag_list(value: str) -> list[str]:
+    """Parse a bracketed tag list, quoted (kb-clip notes) or bare
+    (decision notes, see kb_decision.render_decision)."""
+    quoted = TAG_LIST_RE.findall(value)
+    if quoted:
+        return quoted
+    return [tag.strip() for tag in value.strip("[]").split(",") if tag.strip()]
+
+
 def parse_frontmatter(text: str) -> tuple[dict[str, str | list[str]], str]:
     """Split '---\\nkey: val\\n---\\nbody' into (fields, body).
 
@@ -92,7 +101,7 @@ def parse_frontmatter(text: str) -> tuple[dict[str, str | list[str]], str]:
             continue
         key, _, value = line.partition(":")
         key, value = key.strip(), value.strip()
-        fields[key] = TAG_LIST_RE.findall(value) if value.startswith("[") else unquote(value)
+        fields[key] = parse_tag_list(value) if value.startswith("[") else unquote(value)
     return fields, body.strip()
 
 
@@ -119,7 +128,7 @@ def load_note(path: Path, kb_home: Path) -> NoteRow:
         type=derive_type(fields, path),
         title=fields.get("title") or path.stem,
         source=fields.get("source", ""),
-        date=fields.get("published") or fields.get("fetched", ""),
+        date=fields.get("published") or fields.get("fetched") or fields.get("date", ""),
         status=fields.get("status", "active"),
         tags=" ".join(tags) if isinstance(tags, list) else "",
         body=body,

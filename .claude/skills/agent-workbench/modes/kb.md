@@ -1,6 +1,7 @@
 # agent-workbench: kb mode
 
-Knowledgebase vault ops: init/add/path/index/clip/put/query/atomize/status.
+Knowledgebase vault ops:
+init/add/path/index/clip/put/query/atomize/status/decision.
 Replaces `scripts/kb.sh`.
 
 ```bash
@@ -22,6 +23,31 @@ HTTP error body on failure instead of swallowing it.
 The clip path preserves kb-clip.py's http/https scheme allowlist verbatim
 (it delegates to the same `check_url_scheme`), so `file://` and other
 schemes stay rejected with zero new code.
+
+## decision -- dated, auditable decision notes
+
+```bash
+$AW kb decision record --project <project> --topic <stable-kebab-key> \
+  --title "<title>" --text "<decision statement>" \
+  [--rationale "<why>"] [--refs "<paths/tickets>"] [--tags "a, b"]
+$AW kb decision audit <topic> [--project <project>] [--human]
+```
+
+`record` requires `--project` (decisions are never "inbox"). If the topic
+already has an `active` note, it auto-flips to `status: superseded` and
+the new note's `supersedes` field points at it -- exactly one `active`
+note per topic at any time, and the audit chain is the files plus their
+frontmatter, never a separate database.
+
+`audit` is read-only and scans every project's `decisions/` dir unless
+`--project` narrows it (topic keys are unique by convention, so a reader
+auditing a topic rarely knows which project holds it). JSON by default;
+`--human` prints a one-line-per-note table.
+
+Decision notes use a different frontmatter dialect from `kb put`'s notes:
+bare, unquoted scalars (`title/topic/date/status/supersedes/tags`), not
+`put`'s quoted `type/title/source/...` schema -- see
+`cli/kb_decision.py`'s `render_decision` for the exact byte shape.
 
 ## kb-serve LLM endpoints (agent-facing)
 
