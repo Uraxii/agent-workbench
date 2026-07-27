@@ -2,14 +2,13 @@
 .claude/skills/agent-workbench/cli/.
 
 One subcommand module per section (kb, hub, board, init-workspace,
-deploy, main dispatcher). Every test keeps KB_HOME / BEADS_HUB_DIR /
+main dispatcher). Every test keeps KB_HOME / BEADS_HUB_DIR /
 XDG_RUNTIME_DIR / HOME pinned under tmp_path (or mocks the subprocess /
 urllib calls a real host would otherwise receive), so nothing here ever
 touches the real ~/.knowledgebase, ~/.beads-hub, or a live kb-serve /
 artifact-serve / bdui process. Mirrors tests/test_kb_serve.py's style:
 tmp_path per vault, mocked urllib for anything that would hit the
-network, real subprocess only where it is provably read-only (never
-here -- deploy's mutating verbs are always mocked).
+network, real subprocess only where it is provably read-only.
 
 Each audit-fix test names its fix (M1/M3/M4/LOW) in its docstring; see
 docs/agent-workbench-hardening-plan.md's "Audit fold-in mapping" table.
@@ -32,7 +31,7 @@ _AGENT_WORKBENCH_DIR = Path(__file__).resolve().parent.parent / ".claude" / "ski
 if str(_AGENT_WORKBENCH_DIR) not in sys.path:
     sys.path.insert(0, str(_AGENT_WORKBENCH_DIR))
 
-from cli import board, deploy, hub, init_workspace, kb  # noqa: E402
+from cli import board, hub, init_workspace, kb  # noqa: E402
 from cli import main as cli_main  # noqa: E402
 
 
@@ -376,146 +375,6 @@ def test_install_post_commit_hook_never_overwrites_an_existing_hook(tmp_path: Pa
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# deploy
-# ═══════════════════════════════════════════════════════════════════════
-
-
-def test_cmd_status_only_runs_read_only_systemctl_status_never_mutating_verbs(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
-) -> None:
-    """deploy status happy path: proves the read-only path never invokes
-    build/start/stop, and no real network call is made (health probe is
-    mocked unreachable), so this test cannot touch a live host service."""
-    monkeypatch.setenv("BEADS_HUB_DIR", str(tmp_path / "hub"))  # keep hub.hub_root() off the real host
-    calls: list[list[str]] = []
-    monkeypatch.setattr(
-        deploy.subprocess, "run",
-        lambda cmd, check=False, **kwargs: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0, stdout=""),
-    )
-    monkeypatch.setattr(deploy, "_http_status", lambda url: None)
-
-    assert deploy.cmd_status(argparse.Namespace(json=False)) == 0
-    assert calls == [
-        ["systemctl", "--user", "is-active", "kb-serve"],
-        ["systemctl", "--user", "is-active", "artifact-serve"],
-        ["systemctl", "--user", "is-active", "bdui"],
-        ["systemctl", "--user", "is-active", "n8n"],
-    ]
-    assert "unreachable" in capsys.readouterr().out
-
-
-def test_build_image_surfaces_subprocess_failure_instead_of_swallowing_it(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def fake_run(cmd: list[str], check: bool) -> None:
-        raise subprocess.CalledProcessError(1, cmd)
-
-    monkeypatch.setattr(deploy.subprocess, "run", fake_run)
-    with pytest.raises(subprocess.CalledProcessError):
-        deploy.build_image("localhost/kb-serve:latest", "Containerfile", "ctx")
-
-
-def test_wait_for_http_returns_true_on_first_200(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(deploy, "_http_status", lambda url: 200)
-    monkeypatch.setattr(deploy.time, "sleep", lambda s: None)
-    assert deploy.wait_for_http("http://127.0.0.1:9100/health") is True
-
-
-def test_wait_for_http_gives_up_after_max_tries_without_raising(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(deploy, "_http_status", lambda url: None)
-    monkeypatch.setattr(deploy.time, "sleep", lambda s: None)
-    assert deploy.wait_for_http("http://127.0.0.1:9100/health") is False
-
-
-def test_quadlet_owned_true_only_for_this_bundles_own_symlink(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(deploy.Path, "home", classmethod(lambda cls: tmp_path))
-    src = tmp_path / "kb-serve.container"
-    src.write_text("", encoding="utf-8")
-    assert deploy.quadlet_owned("kb-serve", str(src)) is False  # nothing installed yet
-
-    quadlet_dir = deploy.quadlet_dir()
-    quadlet_dir.mkdir(parents=True)
-    (quadlet_dir / "kb-serve.container").symlink_to(src)
-    assert deploy.quadlet_owned("kb-serve", str(src)) is True
-
-    hand_installed = quadlet_dir / "artifact-serve.container"
-    hand_installed.write_text("", encoding="utf-8")  # real file, not our symlink
-    assert deploy.quadlet_owned("artifact-serve", str(src)) is False
-
-
-def test_n8n_image_is_pinned_by_digest_never_a_floating_tag() -> None:
-    """Regression: N8N_IMAGE must stay a manifest-list digest pin, never
-    ``:latest`` or any other floating tag."""
-    assert deploy.N8N_IMAGE.startswith("docker.io/n8nio/n8n@sha256:")
-
-
-def test_cmd_up_installs_and_starts_n8n(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """cmd_up wires n8n alongside kb-serve/artifact-serve: quadlet installed,
-    unit started, health-waited -- none of it touches a live host."""
-    monkeypatch.setattr(deploy.Path, "home", classmethod(lambda cls: tmp_path))
-    monkeypatch.setenv("BEADS_HUB_DIR", str(tmp_path / "hub"))
-    calls: list[list[str]] = []
-
-    def fake_run(cmd: list[str], check: bool = False) -> subprocess.CompletedProcess:
-        calls.append(cmd)
-        returncode = 1 if "is-active" in cmd else 0  # nothing pre-existing is active
-        return subprocess.CompletedProcess(cmd, returncode)
-
-    monkeypatch.setattr(deploy.subprocess, "run", fake_run)
-    monkeypatch.setattr(deploy, "wait_for_http", lambda url, tries=None: True)
-
-    assert deploy.cmd_up(argparse.Namespace()) == 0
-
-    assert ["systemctl", "--user", "start", "n8n"] in calls
-    n8n_src = str(deploy.paths.N8N_CONTAINER_DIR / "n8n.container")
-    assert deploy.quadlet_owned("n8n", n8n_src) is True
-
-
-def test_cmd_down_stops_and_removes_bundle_owned_n8n_quadlet(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(deploy.Path, "home", classmethod(lambda cls: tmp_path))
-    n8n_src = str(deploy.paths.N8N_CONTAINER_DIR / "n8n.container")
-    quadlet_dir = deploy.quadlet_dir()
-    quadlet_dir.mkdir(parents=True)
-    (quadlet_dir / "n8n.container").symlink_to(Path(n8n_src).resolve())
-    calls: list[list[str]] = []
-    monkeypatch.setattr(
-        deploy.subprocess, "run",
-        lambda cmd, check=False: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0),
-    )
-
-    assert deploy.cmd_down(argparse.Namespace()) == 0
-
-    assert ["systemctl", "--user", "stop", "n8n"] in calls
-    assert ["systemctl", "--user", "disable", "n8n"] in calls
-    assert not (quadlet_dir / "n8n.container").exists()
-
-
-def test_cmd_down_leaves_hand_installed_n8n_quadlet_untouched(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(deploy.Path, "home", classmethod(lambda cls: tmp_path))
-    quadlet_dir = deploy.quadlet_dir()
-    quadlet_dir.mkdir(parents=True)
-    (quadlet_dir / "n8n.container").write_text("", encoding="utf-8")  # real file, not our symlink
-    calls: list[list[str]] = []
-    monkeypatch.setattr(
-        deploy.subprocess, "run",
-        lambda cmd, check=False: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0),
-    )
-
-    assert deploy.cmd_down(argparse.Namespace()) == 0
-
-    assert ["systemctl", "--user", "stop", "n8n"] not in calls
-    assert (quadlet_dir / "n8n.container").is_file()
-
-
-# ═══════════════════════════════════════════════════════════════════════
 # main dispatcher
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -526,7 +385,7 @@ def test_build_parser_registers_every_subcommand() -> None:
         action for action in parser._subparsers._group_actions if action.dest == "command"
     ]
     assert set(command_action.choices) == {
-        "kb", "bd", "artifact", "deploy", "install", "init-workspace", "doctor",
+        "kb", "bd", "artifact", "install", "init-workspace", "doctor",
     }
 
 

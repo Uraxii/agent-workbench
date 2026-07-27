@@ -3,10 +3,10 @@
 The skill lives at ``<repo>/.claude/skills/agent-workbench/``. Every
 ported subcommand needs to locate artifacts elsewhere in the repo: the
 `kb` port delegates to ``<repo>/scripts/kb-serve.py`` (and its hyphenated
-siblings), and `deploy` builds from the two Containerfiles under
-``<repo>/scripts/kb-container/`` and
-``<repo>/.claude/skills/artifact-serve/container/``. Centralizing that
-math here keeps it out of the individual subcommand modules.
+siblings), and the `artifact` port delegates to
+``<repo>/.claude/skills/artifact-serve/scripts/artifact-serve.py``.
+Centralizing that math here keeps it out of the individual subcommand
+modules.
 
 ``resolve_kb_home`` lives here for the same reason: both `cli.kb` and
 `cli.kb_decision` need the vault root, and `cli.kb` already imports
@@ -22,11 +22,7 @@ from pathlib import Path
 __all__ = [
     "REPO_ROOT",
     "SCRIPTS_DIR",
-    "KB_CONTAINER_DIR",
-    "N8N_CONTAINER_DIR",
-    "BDUI_CONTAINER_DIR",
     "ARTIFACT_SKILL_DIR",
-    "ARTIFACT_CONTAINER_DIR",
     "repo_root",
     "resolve_kb_home",
 ]
@@ -35,14 +31,7 @@ __all__ = [
 # the repo root is four parents up. Resolved once at import.
 REPO_ROOT: Path = Path(__file__).resolve().parents[4]
 SCRIPTS_DIR: Path = REPO_ROOT / "scripts"
-KB_CONTAINER_DIR: Path = SCRIPTS_DIR / "kb-container"
-BDUI_CONTAINER_DIR: Path = SCRIPTS_DIR / "bdui-container"
-# n8n has no Containerfile of ours (official image, pinned by digest in its
-# quadlet). This dir holds only the n8n.container quadlet, n8n-secret.py,
-# and n8n.env.example; `deploy` installs the quadlet but never builds here.
-N8N_CONTAINER_DIR: Path = SCRIPTS_DIR / "n8n-container"
 ARTIFACT_SKILL_DIR: Path = REPO_ROOT / ".claude" / "skills" / "artifact-serve"
-ARTIFACT_CONTAINER_DIR: Path = ARTIFACT_SKILL_DIR / "container"
 
 
 def repo_root() -> Path:

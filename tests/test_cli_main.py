@@ -26,13 +26,12 @@ def run_cli(*args: str) -> subprocess.CompletedProcess[str]:
 
 
 def test_top_level_help_lists_expected_subcommands() -> None:
-    """--help lists kb/bd/artifact/deploy/install/init-workspace/doctor, not hub/board."""
+    """--help lists kb/bd/artifact/install/init-workspace/doctor, not hub/board/deploy."""
     result = run_cli("--help")
     assert result.returncode == 0
     assert "kb" in result.stdout
     assert "bd" in result.stdout
     assert "artifact" in result.stdout
-    assert "deploy" in result.stdout
     assert "install" in result.stdout
     assert "init-workspace" in result.stdout
     assert "doctor" in result.stdout
@@ -40,7 +39,7 @@ def test_top_level_help_lists_expected_subcommands() -> None:
     # `bd`; the exact choices set proves they no longer appear as top-level
     # subcommands (a stray "hub"/"board" would only show up folded inside
     # `bd`'s own help text, checked separately in test_bd_help_lists_*).
-    assert "{kb,bd,artifact,deploy,install,init-workspace,doctor}" in result.stdout
+    assert "{kb,bd,artifact,install,init-workspace,doctor}" in result.stdout
 
 
 @pytest.mark.parametrize("flag", ["--help", "-h"])
@@ -82,6 +81,13 @@ def test_install_with_no_flags_errors_nonzero() -> None:
     result = run_cli("install")
     assert result.returncode != 0
     assert "one of the arguments --link --copy --uninstall is required" in result.stderr
+
+
+def test_retired_deploy_subcommand_is_rejected() -> None:
+    """`deploy` was retired in favour of docker-compose; argparse must reject it."""
+    result = run_cli("deploy", "status")
+    assert result.returncode != 0
+    assert "invalid choice: 'deploy'" in result.stderr
 
 
 def test_missing_top_level_subcommand_errors_nonzero() -> None:
