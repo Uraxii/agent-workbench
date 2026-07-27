@@ -19,7 +19,7 @@ $AW <subcommand> [ARGS]
 
 | Subcommand | Replaces | Purpose |
 |---|---|---|
-| `kb` | `scripts/kb.sh` | knowledgebase vault: init/add/path/index/clip/put/query/atomize/status |
+| `kb` | `scripts/kb.sh` | knowledgebase service client: init/add/path/index/clip/put/query/atomize/status/decision |
 | `bd` | `scripts/beads-hub.sh` + `scripts/board-ui.sh` | bd board hub (init/add/sync/list/path/status) + bdui web front end (ui-up/ui-down/ui-status, bare-host, per-repo -- separate from the always-on compose `bdui` service below, which is the single global hub-aggregator view) |
 | `artifact` | (new) | artifact review app: publish/feedback/serve/status, a facade over `.claude/skills/artifact-serve/scripts/artifact-serve.py` |
 | `deploy` | `deploy/agent-workbench/agent-workbench` | build + run the kb-serve / artifact-serve / bdui containers |
@@ -27,7 +27,7 @@ $AW <subcommand> [ARGS]
 | `init-workspace` | `scripts/init-agent-workspace.sh` | scaffold docs/kb + workstreams + bd board + reindex hook into a repo |
 
 - `kb` -- see `modes/kb.md` for the full kb walkthrough (clip/put/query,
-  service-vs-in-process fallback, the kb-serve LLM endpoints).
+  decisions, the derived-index rebuild, the optional LLM passes).
 - `bd` -- see `modes/bd.md` for board-hub + bdui detail (bare-host
   `ui-up` vs the always-on hub-aggregator `bdui` service).
 - `artifact` -- see `modes/artifact.md` for the artifact review app
@@ -51,9 +51,9 @@ repo. `deploy` is detailed in "Deploy + hardening" below.
 
 **Pure Python, single entrypoint.** The five separate shell scripts + the
 bash deploy driver collapse into one executable with subcommands. The
-`kb` family stays a thin facade over the existing `scripts/kb-serve.py`
-(which already facades kb-index / kb-clip / kb-atomize), and `artifact`
-is the same shape over `scripts/artifact-serve.py`; the `bd` family
+`kb` family is now an HTTP client of the knowledgebase service (which
+owns the vault outright -- no CLI code touches it), and `artifact` is a
+facade over `scripts/artifact-serve.py`; the `bd` family
 (former `hub`/`board`) and `init-workspace`/`deploy` are genuine
 rewrites. kb- and bd-specific audit fixes are documented in their own
 mode docs above.

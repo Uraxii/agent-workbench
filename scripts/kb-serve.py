@@ -1,652 +1,340 @@
 #!/usr/bin/env python3
-"""kb-serve.py -- containerizable HTTP facade over the personal
-knowledgebase vault (see scripts/kb.sh).
+"""kb-serve.py -- the knowledgebase service.
 
-A thin facade, not a rewrite: every endpoint delegates to the existing
-kb-index.py (FTS5 build/query) and kb-clip.py (deterministic web capture)
-scripts, loaded by path since their hyphenated filenames aren't importable
-as normal modules. The only genuinely new logic here is deterministic
-atomization (kb-atomize.py, sibling script) and the optional, pluggable
-LLM enrichment pass.
+Endpoints only, no UI: Obsidian already opens the vault. This process is
+the ONLY thing that opens ``$KB_HOME``; the agent-workbench CLI is an
+HTTP client of it and there is no filesystem fallback anywhere.
+
+The vault is Obsidian-compatible markdown and is the only source of
+truth. ``index/kb.db`` (FTS5 rows plus vectors) is derived from it and
+nothing else, which is why ``POST /reindex`` is a complete recovery path.
+Atomization, indexing and embedding are unconditional on every ingest
+route -- there is no flag that skips them and no ingest path that omits
+them.
 
 Endpoints (all JSON):
-    GET  /health              -> {status, kb_home, indexed_count}
-    POST /put                 -> write a note, atomize, reindex
-    POST /clip                -> capture a URL, atomize, reindex
-    GET  /query                -> FTS5 search (q, project, type, all)
-    POST /enrich               -> fill question/summary via the configured
-                                   LLM provider; clean no-op if disabled
-    POST /atomize               -> ingest a URL or raw content, split it into
-                                   atomic notes via a cheap LLM tier, falling
-                                   back to the deterministic heading-splitter
-                                   if disabled or the call fails; reindex
+    GET  /health                     status, vault, indexed + vector counts
+    GET  /status                     vault root, initialized, projects
+    GET  /project?project=P          P's vault path and whether it exists
+    GET  /query?q=&project=&type=&all=1
+                                     hybrid keyword + vector search
+    GET  /decision/audit?topic=&project=
+                                     a topic's supersession chain
+    POST /vault/init                 create the vault dirs (idempotent)
+    POST /project/init {project}     create a project's note dirs
+    POST /put   {project,title,type,source,content}
+                                     write a note, atomize, reindex
+    POST /clip  {url,project}        capture a URL, atomize, reindex
+    POST /atomize {project,url|content,title,type}
+                                     ingest either shape, atomize, reindex
+    POST /reindex                    rebuild every derived artifact
+    POST /decision {project,topic,title,text,...}
+                                     record a decision, supersede the prior
+    POST /enrich {project?,note?}    fill question/summary via the LLM
 
-CLI (also usable without the HTTP server, same functions):
+CLI:
     kb-serve.py run [--host H] [--port P] [--kb-home DIR]
-    kb-serve.py put PROJECT TITLE [--type T] [--source S] [--kb-home DIR]
-                    (content read from stdin)
-    kb-serve.py clip URL [--project P] [--kb-home DIR]
-    kb-serve.py query Q [--project P] [--type T] [--all] [--kb-home DIR]
-    kb-serve.py atomize (--url URL | --content) [--project P] [--title T]
-                    [--type T] [--kb-home DIR]
-                    (with --content, content is read from stdin)
-    kb-serve.py resolve-secret [--kb-home DIR]
-                    prints "KB_LLM_API_KEY=<value>" for an EnvironmentFile=
-                    to consume; never logs the value.
 
-Enrichment config (env, optionally sourced from the gitignored
-<kb_home>/kb.env): KB_ENRICH (0/1, default 0), KB_LLM_BASE_URL (default
-OpenRouter), KB_LLM_MODEL (default openai/gpt-4o-mini), KB_ATOMIZE_MODEL
-(default anthropic/claude-sonnet-4.5, a capable general model chosen for
-reliable decontextualization; used only by /atomize, override for a
-cheaper tier if desired), and the API key via either KB_LLM_API_KEY (static) or
-KB_LLM_API_KEY_CMD (a vault CLI command whose stdout is the key, e.g.
-Proton Pass's pass-cli -- wins over the static value if both are set).
-With KB_ENRICH=0 or no resolvable key, /enrich is a clean no-op (zero
-network calls, zero crashes) and /atomize falls back to the deterministic
-splitter. The put/clip/query path never depends on any of this.
+Config (env, optionally from the gitignored ``<kb_home>/kb.env``) is
+documented in kb_config.py. Everything model-backed is off by default and
+degrades to the deterministic path rather than failing.
 """
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
 import logging
 import os
-import re
 import sqlite3
-import subprocess
 import sys
-import types
 import urllib.error
-import urllib.request
 from collections.abc import Mapping
-from dataclasses import dataclass
-from datetime import date
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import ModuleType
 from urllib.parse import parse_qs, urlparse
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+import kb_decision  # noqa: E402
+import kb_embed  # noqa: E402
+import kb_llm  # noqa: E402
+import kb_vault  # noqa: E402
+from kb_config import (  # noqa: E402
+    DEFAULT_PORT,
+    KbServeConfig,
+    build_config,
+    load_kb_env,
+    load_sibling,
+    resolve_api_key,
+    resolve_kb_home,
+)
+from kb_llm import (  # noqa: E402
+    apply_enrichment,
+    find_unenriched_notes,
+    kb_atomize_via_llm,
+    kb_enrich,
+    request_atomize_split,
+    request_enrichment,
+)
 
 __all__ = [
     "KbServeConfig",
+    "apply_enrichment",
     "build_config",
     "build_parser",
-    "kb_atomize",
+    "count_indexed_notes",
+    "find_unenriched_notes",
     "kb_atomize_via_llm",
     "kb_clip_and_atomize",
+    "kb_clip_module",
     "kb_enrich",
     "kb_ingest_and_atomize",
     "kb_put",
     "load_kb_env",
     "main",
+    "rebuild_derived",
+    "record_decision",
     "request_atomize_split",
+    "request_enrichment",
     "resolve_api_key",
+    "search",
 ]
 
 log = logging.getLogger("kb-serve")
 
-SCRIPT_DIR = Path(__file__).resolve().parent
-
-DEFAULT_PORT = 9100
-TYPE_TO_DIR = {
-    "decision": "decisions", "note": "notes",
-    "research": "research", "source": "sources",
-}
-DEFAULT_NOTE_TYPE = "note"
-
-DEFAULT_LLM_BASE_URL = "https://openrouter.ai/api/v1"
-DEFAULT_LLM_MODEL = "openai/gpt-4o-mini"
-# A capable general-purpose model: atomize's decontextualization + section
-# granularity needs stay reliable. Override via KB_ATOMIZE_MODEL for a
-# cheaper tier if desired.
-DEFAULT_ATOMIZE_MODEL = "anthropic/claude-sonnet-4.5"
-LLM_TIMEOUT_SEC = 30.0
-API_KEY_CMD_TIMEOUT_SEC = 15.0
-# Atomizing needs the whole document to find its section boundaries,
-# hence a much bigger cap than enrich's 4000 (which only needs a gist).
-ATOMIZE_PROMPT_CHAR_LIMIT = 12000
-# ponytail: bounds one /enrich call's model spend to a fixed batch; call
-# /enrich again to keep going rather than adding pagination for a personal
-# vault of this size.
-ENRICH_BATCH_LIMIT = 20
-
-# Bounds the frontmatter block a rewrite touches: "---\n...\n---\n", so
-# question/summary get patched in place without disturbing the body.
-FRONTMATTER_BOUNDS_RE = re.compile(r"^(---\n)(.*?)(\n---\n)", re.DOTALL)
+INDEX_DIR = "index"
+INDEX_DB_NAME = "kb.db"
+# One request body is one note, not a file upload: 8 MiB is far past any
+# real note and keeps an unauthenticated loopback caller from making the
+# service read an unbounded body into memory.
+MAX_BODY_BYTES = 8 * 1024 * 1024
 
 
-def _load_sibling(name: str) -> types.ModuleType:
-    """Dynamically import a hyphenated sibling script as a module.
+def kb_index_module() -> ModuleType:
+    """The FTS5 index script (hyphenated filename, loaded by path)."""
+    return load_sibling("kb-index")
 
-    kb-index.py / kb-clip.py are executable CLIs with hyphenated
-    filenames, which a normal `import` statement cannot name. Loading them
-    by path lets kb-serve.py call their functions directly instead of
-    copy-pasting logic (it stays a thin facade, per its own docstring).
+
+def kb_clip_module() -> ModuleType:
+    """The deterministic web-capture script."""
+    return load_sibling("kb-clip")
+
+
+def index_db_path(kb_home: Path) -> Path:
+    """``<kb_home>/index/kb.db`` -- the whole derived layer, one file."""
+    return kb_home / INDEX_DIR / INDEX_DB_NAME
+
+
+# ── derived layer: rebuildable from the vault alone ───────────────────
+
+
+def _note_texts(kb_home: Path) -> list[tuple[str, str]]:
+    """``(path, text)`` for every vault note, skipping unreadable ones."""
+    texts: list[tuple[str, str]] = []
+    for path in kb_index_module().find_markdown_files(kb_home):
+        try:
+            texts.append((str(path), path.read_text(encoding="utf-8")))
+        except (OSError, UnicodeDecodeError) as exc:
+            log.warning("skipping unreadable note %s: %s", path, exc)
+    return texts
+
+
+def rebuild_derived(config: KbServeConfig) -> dict[str, object]:
+    """Rebuild every derived artifact from the vault markdown alone.
+
+    Drops and repopulates both the FTS5 rows and the vector table. Takes
+    no input but the vault, which is what makes it the recovery path when
+    the index is lost or the vault was edited outside this service.
     """
-    path = SCRIPT_DIR / f"{name}.py"
-    module_name = name.replace("-", "_")
-    spec = importlib.util.spec_from_file_location(module_name, path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"cannot load sibling module {path}")
-    module = importlib.util.module_from_spec(spec)
-    # dataclasses (3.11+) resolves annotations via sys.modules[cls.__module__],
-    # so the module must be registered there BEFORE exec_module runs any
-    # @dataclass decorators inside it, else that lookup returns None and
-    # dataclass() raises AttributeError.
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-_kb_index_module: types.ModuleType | None = None
-_kb_clip_module: types.ModuleType | None = None
-_kb_atomize_module: types.ModuleType | None = None
-
-
-def kb_index_module() -> types.ModuleType:
-    global _kb_index_module
-    if _kb_index_module is None:
-        _kb_index_module = _load_sibling("kb-index")
-    return _kb_index_module
-
-
-def kb_clip_module() -> types.ModuleType:
-    global _kb_clip_module
-    if _kb_clip_module is None:
-        _kb_clip_module = _load_sibling("kb-clip")
-    return _kb_clip_module
-
-
-def kb_atomize_module() -> types.ModuleType:
-    global _kb_atomize_module
-    if _kb_atomize_module is None:
-        _kb_atomize_module = _load_sibling("kb-atomize")
-    return _kb_atomize_module
-
-
-# ── config + secret resolution ────────────────────────────────────────
-
-
-@dataclass(frozen=True)
-class KbServeConfig:
-    """Resolved runtime config for one server/CLI invocation."""
-
-    kb_home: Path
-    enrich_enabled: bool
-    llm_base_url: str
-    llm_model: str
-    llm_api_key: str | None
-    atomize_model: str = DEFAULT_ATOMIZE_MODEL
-
-
-def load_kb_env(kb_home: Path) -> dict[str, str]:
-    """Parse simple KEY=VALUE lines from <kb_home>/kb.env.
-
-    Missing file, blank lines, and '#' comments are silently skipped;
-    never raises. Not a shell parser -- values may be optionally wrapped
-    in matching quotes, nothing fancier (matches kb.env.example's shape).
-    """
-    env_path = kb_home / "kb.env"
-    values: dict[str, str] = {}
-    if not env_path.is_file():
-        return values
-    for line in env_path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        values[key.strip()] = value.strip().strip('"').strip("'")
-    return values
-
-
-def resolve_api_key(env: Mapping[str, str]) -> str | None:
-    """Resolve the LLM API key: KB_LLM_API_KEY_CMD (a vault CLI command,
-    e.g. Proton Pass's `pass-cli item view ... --field api-key`) wins over
-    a static KB_LLM_API_KEY when it succeeds with a non-empty result. If
-    the command is unset, fails, or yields nothing usable, falls back to
-    the static KB_LLM_API_KEY. Returns None if neither yields one. Never
-    logs the resolved value.
-    """
-    static_key = env.get("KB_LLM_API_KEY", "").strip() or None
-    cmd = env.get("KB_LLM_API_KEY_CMD", "").strip()
-    if not cmd:
-        return static_key
-    try:
-        result = subprocess.run(
-            cmd, shell=True, capture_output=True, text=True,
-            timeout=API_KEY_CMD_TIMEOUT_SEC, check=True,
-        )
-    except (subprocess.SubprocessError, OSError) as exc:
-        log.warning("KB_LLM_API_KEY_CMD failed (%s); no key resolved", exc)
-        return static_key
-    return result.stdout.strip() or static_key
-
-
-def build_config(kb_home: Path) -> KbServeConfig:
-    """Merge kb.env under the real process env (env wins) and resolve the
-    enrichment flags + API key. The put/clip/query/atomize path never
-    touches any value built here."""
-    merged: dict[str, str] = {**load_kb_env(kb_home), **os.environ}
-    enrich_enabled = merged.get("KB_ENRICH", "0") == "1"
-    api_key = resolve_api_key(merged) if enrich_enabled else None
-    return KbServeConfig(
-        kb_home=kb_home,
-        enrich_enabled=enrich_enabled,
-        llm_base_url=merged.get("KB_LLM_BASE_URL", DEFAULT_LLM_BASE_URL),
-        llm_model=merged.get("KB_LLM_MODEL", DEFAULT_LLM_MODEL),
-        llm_api_key=api_key,
-        atomize_model=merged.get("KB_ATOMIZE_MODEL", "").strip() or DEFAULT_ATOMIZE_MODEL,
-    )
-
-
-# ── deterministic core: put / clip / atomize / query ──────────────────
-
-
-def _require_str(payload: Mapping[str, object], key: str) -> str:
-    value = payload.get(key)
-    if not isinstance(value, str) or not value.strip():
-        raise KeyError(f"{key!r} is required")
-    return value
-
-
-def render_note(note_type: str, title: str, source: str, project: str, body: str) -> str:
-    """Serialize one manually-put note: LOCKED frontmatter + body + Refs.
-
-    Same frontmatter shape as kb-clip.py's captured source notes (reuses
-    its field list + quoting helpers), just generic to any note type.
-    """
-    frontmatter = {
-        "type": note_type, "title": title, "source": source, "author": "",
-        "site": "", "published": "", "fetched": date.today().isoformat(),
-        "description": "", "tags": kb_clip_module().yaml_list([]), "project": project,
-        "status": "active", "question": "", "summary": "",
-    }
-    lines = ["---"]
-    for key in kb_clip_module().FRONTMATTER_FIELDS:
-        value = frontmatter[key]
-        rendered = value if key == "tags" else kb_clip_module().yaml_quote(str(value))
-        lines.append(f"{key}: {rendered}")
-    lines.extend(["---", "", body, "", "## Refs", ""])
-    if source:
-        lines.append(f"- {source}")
-    return "\n".join(lines) + "\n"
-
-
-def build_index(kb_home: Path) -> None:
-    """Rebuild kb.db from every project. Thin wrapper over kb-index.py."""
-    kb_index_module().build_index(kb_home, kb_home / "index" / "kb.db")
-
-
-def kb_atomize(note_path: Path, kb_home: Path) -> list[Path]:
-    """Split a long source/research note into atomic children. See
-    kb-atomize.py's own docstring for the deterministic split rule."""
-    return kb_atomize_module().kb_atomize(note_path, kb_home)
-
-
-def _write_note_file(
-    kb_home: Path, project: str, note_type: str, title: str, source: str, content: str,
-) -> Path:
-    """Build the note's path under kb_home/<project>/<type dir>, render it,
-    and write it. Raises ValueError on an unrecognized note_type."""
-    dir_name = TYPE_TO_DIR.get(note_type)
-    if dir_name is None:
-        raise ValueError(f"unknown type {note_type!r}, expected one of {sorted(TYPE_TO_DIR)}")
-    notes_dir = kb_home / project / dir_name
-    notes_dir.mkdir(parents=True, exist_ok=True)
-    note_path = kb_clip_module().build_note_path(notes_dir, kb_clip_module().slugify(title))
-    note_path.write_text(render_note(note_type, title, source, project, content), encoding="utf-8")
-    return note_path
-
-
-def kb_put(kb_home: Path, config: KbServeConfig, payload: Mapping[str, object]) -> dict[str, object]:
-    """Write one note, atomize it if it qualifies, reindex. Returns the
-    created note path(s). Raises KeyError/ValueError on bad input."""
-    project = _require_str(payload, "project")
-    content = _require_str(payload, "content")
-    note_type = str(payload.get("type") or DEFAULT_NOTE_TYPE)
-    title = str(payload.get("title") or "untitled")
-    source = str(payload.get("source") or "")
-
-    note_path = _write_note_file(kb_home, project, note_type, title, source, content)
-
-    children, _method = kb_atomize_via_llm(config, note_path, kb_home)
-    build_index(kb_home)
-    return {"path": str(note_path), "children": [str(p) for p in children]}
-
-
-def kb_clip_and_atomize(kb_home: Path, payload: Mapping[str, object]) -> dict[str, object]:
-    """Capture a URL (kb-clip.py), atomize it if it qualifies, reindex."""
-    url = _require_str(payload, "url")
-    project = _require_str(payload, "project")
-    note_path = kb_clip_module().clip(url, project, kb_home)
-    children = kb_atomize(note_path, kb_home)
-    build_index(kb_home)
-    return {"path": str(note_path), "children": [str(p) for p in children]}
-
-
-def run_query(kb_home: Path, q: str, project: str | None, note_type: str | None, include_all: bool) -> list[dict]:
-    """Thin wrapper over kb-index.py's FTS5 query."""
-    db_path = kb_home / "index" / "kb.db"
-    return kb_index_module().query_index(db_path, q, project, note_type, include_all)
+    kb_home = config.kb_home
+    kb_vault.vault_init(kb_home)
+    db_path = index_db_path(kb_home)
+    indexed = kb_index_module().build_index(kb_home, db_path)
+    embedded = kb_embed.rebuild_vectors(config, db_path, _note_texts(kb_home))
+    return {"indexed": indexed, "embedded": embedded, "db": str(db_path)}
 
 
 def count_indexed_notes(kb_home: Path) -> int:
-    """Row count in kb.db, or 0 if it hasn't been built yet."""
-    db_path = kb_home / "index" / "kb.db"
+    """FTS5 row count, or 0 if the index has not been built yet."""
+    db_path = index_db_path(kb_home)
     if not db_path.exists():
         return 0
-    con = sqlite3.connect(db_path)
+    connection = sqlite3.connect(db_path)
     try:
-        return con.execute("SELECT COUNT(*) FROM kb").fetchone()[0]
+        return connection.execute("SELECT COUNT(*) FROM kb").fetchone()[0]
+    except sqlite3.Error:
+        return 0
     finally:
-        con.close()
+        connection.close()
 
 
-# ── LLM enrichment (the only model-spend path, off by default) ────────
+def search(
+    config: KbServeConfig,
+    query: str,
+    project: str | None,
+    note_type: str | None,
+    include_all: bool,
+) -> list[dict[str, object]]:
+    """Hybrid retrieval: FTS5 keyword hits, reranked by vector similarity.
 
-
-def find_unenriched_notes(
-    kb_home: Path, project: str | None, note_filter: str | None,
-) -> list[Path]:
-    """Notes with an empty question or summary, capped at
-    ENRICH_BATCH_LIMIT. note_filter, if given, targets exactly that path,
-    resolved against kb_home -- an absolute or ../-escaping value that
-    lands outside kb_home is treated as "no matching note" (empty list),
-    never read, per this module's clean-no-op philosophy."""
-    if note_filter:
-        candidate = (kb_home / note_filter).resolve()
-        if not candidate.is_relative_to(kb_home.resolve()) or not candidate.is_file():
-            return []
-        return [candidate]
-    unenriched: list[Path] = []
-    for path in kb_index_module().find_markdown_files(kb_home):
-        if project and kb_index_module().derive_project(path, kb_home) != project:
-            continue
-        fields, _ = kb_index_module().parse_frontmatter(path.read_text(encoding="utf-8"))
-        if not fields.get("question") or not fields.get("summary"):
-            unenriched.append(path)
-        if len(unenriched) >= ENRICH_BATCH_LIMIT:
-            break
-    return unenriched
-
-
-def _chat_completion_json(config: KbServeConfig, model: str, prompt: str) -> dict:
-    """One chat-completions POST expecting a JSON object back; shared by
-    request_enrichment and request_atomize_split -- only the model and
-    prompt differ between the two call sites.
-
-    Raises on any network/parse failure; callers decide how to degrade.
+    The keyword half decides WHICH notes match (and applies the project,
+    type and superseded filters); the vector half only reorders them, so
+    an unavailable or unconfigured embedding backend degrades to plain
+    keyword ranking instead of changing what is visible.
     """
-    payload = json.dumps({
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "response_format": {"type": "json_object"},
-    }).encode("utf-8")
-    request = urllib.request.Request(
-        f"{config.llm_base_url}/chat/completions",
-        data=payload,
-        headers={
-            "Authorization": f"Bearer {config.llm_api_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
+    db_path = index_db_path(config.kb_home)
+    if not db_path.exists():
+        return []
+    keyword_results = kb_index_module().query_index(
+        db_path, query, project, note_type, include_all,
     )
-    with urllib.request.urlopen(request, timeout=LLM_TIMEOUT_SEC) as response:
-        data = json.loads(response.read())
-    content = data["choices"][0]["message"]["content"]
-    return json.loads(content)
+    vector_paths = kb_embed.search_ranking(config, db_path, query)
+    return kb_embed.fuse_rankings(keyword_results, vector_paths)
 
 
-def request_enrichment(config: KbServeConfig, title: str, body: str) -> dict[str, str]:
-    """One chat-completions call asking for {question, summary} JSON.
+# ── ingest: atomize + index + embed, always ───────────────────────────
 
-    Raises on any network/parse failure; kb_enrich decides how to degrade
-    (skip that note, keep going).
+
+def _finish_ingest(
+    config: KbServeConfig, note_path: Path,
+) -> dict[str, object]:
+    """Atomize, then rebuild the derived layer. Every ingest ends here.
+
+    Keeping this on one path is the invariant: no caller can write a note
+    into the vault without its children, its index rows and its vectors
+    being produced in the same request.
     """
-    prompt = (
-        "Given this knowledgebase note, respond with ONLY a JSON object "
-        '{"question": "...", "summary": "..."}. question = the question '
-        "someone would search to find this note. summary = a 2-3 sentence "
-        f"summary of its content.\n\nTitle: {title}\n\n{body[:4000]}"
+    children, method = kb_llm.kb_atomize_via_llm(
+        config, note_path, config.kb_home,
     )
-    parsed = _chat_completion_json(config, config.llm_model, prompt)
+    derived = rebuild_derived(config)
     return {
-        "question": str(parsed.get("question", "")),
-        "summary": str(parsed.get("summary", "")),
+        "path": str(note_path),
+        "children": [str(child) for child in children],
+        "method": method,
+        "indexed": derived["indexed"],
+        "embedded": derived["embedded"],
     }
 
 
-def _hard_cut_chunks(text: str, limit: int) -> list[str]:
-    return [text[index:index + limit] for index in range(0, len(text), limit)]
+def kb_put(
+    kb_home: Path, config: KbServeConfig, payload: Mapping[str, object],
+) -> dict[str, object]:
+    """Write one note, atomize it, rebuild the derived layer."""
+    note_path = kb_vault.write_note(
+        kb_home,
+        payload.get("project"),
+        payload.get("type"),
+        payload.get("title"),
+        payload.get("source"),
+        payload.get("content"),
+    )
+    return _finish_ingest(config, note_path)
 
 
-def _paragraph_chunks(section: str, limit: int) -> list[str]:
-    paragraphs = section.split("\n\n")
-    chunks: list[str] = []
-    current = ""
-    for index, paragraph in enumerate(paragraphs):
-        suffix = "\n\n" if index < len(paragraphs) - 1 else ""
-        unit = f"{paragraph}{suffix}"
-        if len(unit) > limit:
-            if current:
-                chunks.append(current)
-                current = ""
-            chunks.extend(_hard_cut_chunks(unit, limit))
-        elif current and len(current) + len(unit) > limit:
-            chunks.append(current)
-            current = unit
-        else:
-            current += unit
-    if current:
-        chunks.append(current)
-    return chunks
+def _clip_url(kb_home: Path, url: object, project: object) -> Path:
+    """Capture a URL into the vault, validating both inputs first.
 
-
-def _heading_sections(body: str) -> list[str]:
-    headings = list(re.finditer(r"(?m)^#", body))
-    if not headings:
-        return [body]
-    sections: list[str] = []
-    if headings[0].start() > 0:
-        sections.append(body[:headings[0].start()])
-    for index, heading in enumerate(headings):
-        end = headings[index + 1].start() if index + 1 < len(headings) else len(body)
-        sections.append(body[heading.start():end])
-    return [section for section in sections if section]
-
-
-def _atomize_prompt_body_chunks(body: str) -> list[str]:
-    if len(body) <= ATOMIZE_PROMPT_CHAR_LIMIT:
-        return [body]
-    chunks: list[str] = []
-    current = ""
-    for section in _heading_sections(body):
-        if len(section) > ATOMIZE_PROMPT_CHAR_LIMIT:
-            if current:
-                chunks.append(current)
-                current = ""
-            chunks.extend(_paragraph_chunks(section, ATOMIZE_PROMPT_CHAR_LIMIT))
-        elif current and len(current) + len(section) > ATOMIZE_PROMPT_CHAR_LIMIT:
-            chunks.append(current)
-            current = section
-        else:
-            current += section
-    if current:
-        chunks.append(current)
-    return chunks
-
-
-def _parse_atomize_notes(parsed: dict[str, object]) -> list[dict[str, str]]:
-    notes = parsed["notes"]
-    if not isinstance(notes, list):
-        raise KeyError("'notes' in atomize response is not a list")
-    return [
-        {"title": str(item.get("title", "")), "body": str(item.get("body", ""))}
-        for item in notes if isinstance(item, dict)
-    ]
-
-
-def request_atomize_split(config: KbServeConfig, title: str, body: str) -> list[dict[str, str]]:
-    """Ask the cheap atomize tier to split a document into self-contained
-    atomic notes: {"notes": [{"title", "body"}, ...]}.
-
-    Raises on any network/parse failure (including a missing/malformed
-    "notes" list); kb_atomize_via_llm decides how to degrade (falls back
-    to the deterministic splitter).
+    kb-clip.py owns the URL checks (http/https scheme allowlist, refusal
+    to fetch a private or loopback destination); this only guarantees the
+    project directory it writes into is a legitimate one.
     """
-    notes: list[dict[str, str]] = []
-    for chunk in _atomize_prompt_body_chunks(body):
-        prompt = (
-            "Split the following knowledgebase note into distinct, "
-            "self-contained atomic notes. Respond with ONLY a JSON object "
-            '{"notes": [{"title": "...", "body": "..."}, ...]}.\n\n'
-            f"Title: {title}\n\n{chunk}"
-        )
-        parsed = _chat_completion_json(config, config.atomize_model, prompt)
-        notes.extend(_parse_atomize_notes(parsed))
-    return notes
+    if not isinstance(url, str) or not url.strip():
+        raise ValueError("url is required")
+    name = kb_vault.validate_project(project)
+    kb_vault.project_init(kb_home, name)
+    return kb_clip_module().clip(url, name, kb_home)
 
 
-def apply_enrichment(note_path: Path, question: str, summary: str) -> None:
-    """Rewrite only the question/summary frontmatter lines in place; every
-    other line, including the body, is left byte-for-byte untouched."""
-    text = note_path.read_text(encoding="utf-8")
-    match = FRONTMATTER_BOUNDS_RE.match(text)
-    if not match:
-        return
-    head, raw_fields, tail = match.groups()
-    raw_fields = re.sub(
-        r"^question:.*$", f"question: {kb_clip_module().yaml_quote(question)}",
-        raw_fields, count=1, flags=re.MULTILINE,
-    )
-    raw_fields = re.sub(
-        r"^summary:.*$", f"summary: {kb_clip_module().yaml_quote(summary)}",
-        raw_fields, count=1, flags=re.MULTILINE,
-    )
-    note_path.write_text(head + raw_fields + tail + text[match.end():], encoding="utf-8")
-
-
-def kb_enrich(config: KbServeConfig, payload: Mapping[str, object]) -> dict[str, object]:
-    """Fill question/summary on unenriched notes via the configured LLM.
-
-    Clean no-op (zero network calls) if KB_ENRICH=0 or no API key
-    resolved -- the caller always gets a 200 with a clear `message`,
-    never a crash.
-    """
-    if not config.enrich_enabled:
-        return {"enriched": 0, "message": "KB_ENRICH is 0; enrichment disabled"}
-    if not config.llm_api_key:
-        return {
-            "enriched": 0,
-            "message": "KB_ENRICH=1 but no API key resolved "
-                       "(checked KB_LLM_API_KEY_CMD, KB_LLM_API_KEY)",
-        }
-
-    project = payload.get("project")
-    note_filter = payload.get("note")
-    notes = find_unenriched_notes(
-        config.kb_home,
-        str(project) if project else None,
-        str(note_filter) if note_filter else None,
-    )
-    enriched: list[str] = []
-    for note_path in notes:
-        try:
-            fields, body = kb_index_module().parse_frontmatter(note_path.read_text(encoding="utf-8"))
-            result = request_enrichment(config, str(fields.get("title", note_path.stem)), body)
-        except (OSError, urllib.error.URLError, TimeoutError, json.JSONDecodeError, KeyError, IndexError) as exc:
-            log.warning("enrichment failed for %s: %s", note_path, exc)
-            continue
-        apply_enrichment(note_path, result["question"], result["summary"])
-        enriched.append(str(note_path))
-
-    if enriched:
-        build_index(config.kb_home)
-    return {"enriched": len(enriched), "notes": enriched}
-
-
-# ── LLM-tier atomize (deterministic fallback, second model-spend path) ──
-
-
-def _write_llm_child_note(
-    note_path: Path, fields: dict[str, object], item: dict[str, str],
-) -> Path:
-    """Write one LLM-proposed atomic child note as a sibling of
-    note_path, reusing kb-atomize.py's own child-note renderer."""
-    slug = f"{note_path.stem}--{kb_clip_module().slugify(item['title'])}"
-    child_path = kb_clip_module().build_note_path(note_path.parent, slug)
-    child_path.write_text(
-        kb_atomize_module().render_child_note(fields, note_path, item["title"], item["body"]),
-        encoding="utf-8",
-    )
-    return child_path
-
-
-def kb_atomize_via_llm(config: KbServeConfig, note_path: Path, kb_home: Path) -> tuple[list[Path], str]:
-    """Split note_path into atomic children via the configured cheap LLM
-    tier; falls back to the deterministic heading-splitter (kb_atomize)
-    when disabled, no key resolved, or the call fails -- same no-op
-    philosophy as kb_enrich, applied per-note. Returns (children, method)
-    where method is "llm" or "deterministic".
-    """
-    fields, body = kb_index_module().parse_frontmatter(note_path.read_text(encoding="utf-8"))
-    if config.enrich_enabled and config.llm_api_key:
-        try:
-            notes = request_atomize_split(config, str(fields.get("title", note_path.stem)), body)
-        except (
-            OSError, urllib.error.URLError, TimeoutError, json.JSONDecodeError,
-            KeyError, IndexError, ValueError,
-        ) as exc:
-            log.warning("LLM atomize failed for %s: %s", note_path, exc)
-        else:
-            children = [_write_llm_child_note(note_path, fields, item) for item in notes]
-            return children, "llm"
-
-    return kb_atomize(note_path, kb_home), "deterministic"
+def kb_clip_and_atomize(
+    kb_home: Path, config: KbServeConfig, payload: Mapping[str, object],
+) -> dict[str, object]:
+    """Capture a URL, atomize it, rebuild the derived layer."""
+    note_path = _clip_url(kb_home, payload.get("url"), payload.get("project"))
+    return _finish_ingest(config, note_path)
 
 
 def kb_ingest_and_atomize(
     kb_home: Path, config: KbServeConfig, payload: Mapping[str, object],
 ) -> dict[str, object]:
-    """Ingest a URL or raw content, atomize it via the configured LLM
-    tier (deterministic fallback), reindex. Mirrors kb_put's and
-    kb_clip_and_atomize's shape; unit-testable without a server. Raises
-    KeyError/ValueError on bad input, OSError/URLError on a failed fetch.
+    """Ingest a URL or raw content, atomize, rebuild the derived layer.
+
+    Raises KeyError/ValueError on bad input, OSError/URLError on a failed
+    fetch.
     """
-    project = _require_str(payload, "project")
     url = payload.get("url")
-    content = payload.get("content")
-    title = str(payload.get("title") or "untitled")
-    note_type = str(payload.get("type") or "source")
-
     if url:
-        note_path = kb_clip_module().clip(str(url), project, kb_home)
-    elif content:
-        note_path = _write_note_file(kb_home, project, note_type, title, source="", content=str(content))
+        note_path = _clip_url(kb_home, url, payload.get("project"))
+    elif payload.get("content"):
+        note_path = kb_vault.write_note(
+            kb_home,
+            payload.get("project"),
+            payload.get("type") or "source",
+            payload.get("title"),
+            "",
+            payload.get("content"),
+        )
     else:
-        raise KeyError("either 'url' or 'content' is required")
+        raise ValueError("either 'url' or 'content' is required")
 
-    children, method = kb_atomize_via_llm(config, note_path, kb_home)
-    build_index(kb_home)
-    return {"parent": str(note_path), "children": [str(p) for p in children], "method": method}
+    result = _finish_ingest(config, note_path)
+    return {"parent": result["path"], **result}
 
 
-# ── HTTP server ─────────────────────────────────────────────────────────
+def record_decision(
+    config: KbServeConfig, payload: Mapping[str, object],
+) -> dict[str, object]:
+    """Record a decision note and reindex so it is immediately findable."""
+    result = kb_decision.record(config.kb_home, payload)
+    derived = rebuild_derived(config)
+    return {**result, "indexed": derived["indexed"]}
+
+
+def audit_decisions(
+    kb_home: Path, topic: str, project: str | None,
+) -> list[dict[str, str]]:
+    """A topic's supersession chain as plain JSON rows, oldest first."""
+    dirs = kb_decision.find_decision_dirs(kb_home, project)
+    return [
+        {
+            "date": note.decision_date,
+            "status": note.status,
+            "title": note.title,
+            "path": str(note.path),
+            "supersedes": note.supersedes,
+        }
+        for note in kb_decision.audit(dirs, topic)
+    ]
+
+
+# ── HTTP server ───────────────────────────────────────────────────────
 
 
 class KbHTTPServer(ThreadingHTTPServer):
     """ThreadingHTTPServer carrying the resolved KbServeConfig."""
 
-    def __init__(self, address: tuple[str, int], handler_cls: type, config: KbServeConfig) -> None:
+    def __init__(
+        self,
+        address: tuple[str, int],
+        handler_cls: type[BaseHTTPRequestHandler],
+        config: KbServeConfig,
+    ) -> None:
         self.config = config
         super().__init__(address, handler_cls)
 
 
 class KbRequestHandler(BaseHTTPRequestHandler):
-    """Dispatches the JSON endpoints onto the module-level pure functions
-    above; carries no logic of its own beyond wiring."""
+    """Routes the JSON endpoints onto the module functions above.
 
-    server: KbHTTPServer  # type: ignore[assignment]  # narrows the stdlib base's untyped .server attr
+    Carries no vault logic of its own: every path, project name and
+    frontmatter scalar is validated by kb_vault before it is used, and
+    this class only turns the resulting exceptions into status codes.
+    """
+
+    server: KbHTTPServer  # type: ignore[assignment]  # narrows the stdlib base
 
     def log_message(self, fmt: str, *args: object) -> None:
         log.info("%s - %s", self.address_string(), fmt % args)
@@ -661,77 +349,149 @@ class KbRequestHandler(BaseHTTPRequestHandler):
 
     def _read_json_body(self) -> dict[str, object]:
         length = int(self.headers.get("Content-Length", "0"))
+        if length > MAX_BODY_BYTES:
+            raise ValueError(f"request body exceeds {MAX_BODY_BYTES} bytes")
         raw = self.rfile.read(length) if length else b""
-        return json.loads(raw) if raw else {}
+        parsed = json.loads(raw) if raw else {}
+        if not isinstance(parsed, dict):
+            raise ValueError("request body must be a JSON object")
+        return parsed
+
+    # ── GET ───────────────────────────────────────────────────────────
 
     def do_GET(self) -> None:  # noqa: N802 stdlib override name
         parsed = urlparse(self.path)
-        if parsed.path == "/health":
-            kb_home = self.server.config.kb_home
-            return self._send_json(200, {
-                "status": "ok", "kb_home": str(kb_home),
-                "indexed_count": count_indexed_notes(kb_home),
-            })
-        if parsed.path == "/query":
-            return self._handle_query(parse_qs(parsed.query))
-        self._send_json(404, {"error": "not found"})
+        params = parse_qs(parsed.query)
+        routes = {
+            "/health": self._handle_health,
+            "/status": self._handle_status,
+            "/project": self._handle_project,
+            "/query": self._handle_query,
+            "/decision/audit": self._handle_audit,
+        }
+        handler = routes.get(parsed.path)
+        if handler is None:
+            return self._send_json(404, {"error": "not found"})
+        try:
+            handler(params)
+        except (KeyError, ValueError) as exc:
+            self._send_json(400, {"error": str(exc)})
 
-    def _handle_query(self, qs: dict[str, list[str]]) -> None:
-        q = (qs.get("q") or [""])[0]
-        if not q:
+    def _handle_health(self, _params: dict[str, list[str]]) -> None:
+        config = self.server.config
+        self._send_json(200, {
+            "status": "ok",
+            "kb_home": str(config.kb_home),
+            "indexed_count": count_indexed_notes(config.kb_home),
+            "vector_count": kb_embed.count_vectors(index_db_path(config.kb_home)),
+            "embeddings_enabled": kb_embed.embeddings_enabled(config),
+        })
+
+    def _handle_status(self, _params: dict[str, list[str]]) -> None:
+        self._send_json(200, kb_vault.vault_status(self.server.config.kb_home))
+
+    def _handle_project(self, params: dict[str, list[str]]) -> None:
+        name = kb_vault.validate_project((params.get("project") or [""])[0])
+        path = self.server.config.kb_home / name
+        self._send_json(200, {
+            "project": name, "path": str(path), "exists": path.is_dir(),
+        })
+
+    def _handle_query(self, params: dict[str, list[str]]) -> None:
+        query = (params.get("q") or [""])[0]
+        if not query.strip():
             return self._send_json(400, {"error": "q is required"})
-        project = (qs.get("project") or [None])[0]
-        note_type = (qs.get("type") or [None])[0]
-        include_all = (qs.get("all") or ["0"])[0] == "1"
-        results = run_query(self.server.config.kb_home, q, project, note_type, include_all)
+        results = search(
+            self.server.config,
+            query,
+            (params.get("project") or [None])[0],
+            (params.get("type") or [None])[0],
+            (params.get("all") or ["0"])[0] == "1",
+        )
         self._send_json(200, {"results": results})
+
+    def _handle_audit(self, params: dict[str, list[str]]) -> None:
+        topic = (params.get("topic") or [""])[0]
+        if not topic.strip():
+            return self._send_json(400, {"error": "topic is required"})
+        project = (params.get("project") or [None])[0]
+        chain = audit_decisions(self.server.config.kb_home, topic, project)
+        self._send_json(200, {"chain": chain})
+
+    # ── POST ──────────────────────────────────────────────────────────
 
     def do_POST(self) -> None:  # noqa: N802 stdlib override name
         parsed = urlparse(self.path)
         try:
             payload = self._read_json_body()
-        except json.JSONDecodeError as exc:
-            return self._send_json(400, {"error": f"invalid JSON body: {exc}"})
+        except (json.JSONDecodeError, ValueError) as exc:
+            return self._send_json(400, {"error": f"invalid request body: {exc}"})
 
-        if parsed.path == "/put":
-            return self._handle_put(payload)
-        if parsed.path == "/clip":
-            return self._handle_clip(payload)
-        if parsed.path == "/enrich":
-            return self._send_json(200, kb_enrich(self.server.config, payload))
-        if parsed.path == "/atomize":
-            return self._handle_atomize(payload)
-        self._send_json(404, {"error": "not found"})
+        routes = {
+            "/vault/init": self._handle_vault_init,
+            "/project/init": self._handle_project_init,
+            "/put": self._handle_put,
+            "/clip": self._handle_clip,
+            "/atomize": self._handle_atomize,
+            "/reindex": self._handle_reindex,
+            "/decision": self._handle_decision,
+            "/enrich": self._handle_enrich,
+        }
+        handler = routes.get(parsed.path)
+        if handler is None:
+            return self._send_json(404, {"error": "not found"})
+        try:
+            handler(payload)
+        except (KeyError, ValueError) as exc:
+            self._send_json(400, {"error": str(exc)})
+        except (OSError, urllib.error.URLError) as exc:
+            self._send_json(502, {"error": f"vault operation failed: {exc}"})
+
+    def _handle_vault_init(self, _payload: dict[str, object]) -> None:
+        self._send_json(200, kb_vault.vault_init(self.server.config.kb_home))
+
+    def _handle_project_init(self, payload: dict[str, object]) -> None:
+        result = kb_vault.project_init(
+            self.server.config.kb_home, payload.get("project"),
+        )
+        self._send_json(201, result)
 
     def _handle_put(self, payload: dict[str, object]) -> None:
-        try:
-            result = kb_put(self.server.config.kb_home, self.server.config, payload)
-        except (KeyError, ValueError) as exc:
-            return self._send_json(400, {"error": str(exc)})
-        self._send_json(201, result)
+        config = self.server.config
+        self._send_json(201, kb_put(config.kb_home, config, payload))
 
     def _handle_clip(self, payload: dict[str, object]) -> None:
-        try:
-            result = kb_clip_and_atomize(self.server.config.kb_home, payload)
-        except (KeyError, ValueError) as exc:
-            return self._send_json(400, {"error": str(exc)})
-        except (OSError, urllib.error.URLError) as exc:
-            return self._send_json(502, {"error": f"clip fetch failed: {exc}"})
-        self._send_json(201, result)
+        config = self.server.config
+        self._send_json(
+            201, kb_clip_and_atomize(config.kb_home, config, payload),
+        )
 
     def _handle_atomize(self, payload: dict[str, object]) -> None:
-        try:
-            result = kb_ingest_and_atomize(self.server.config.kb_home, self.server.config, payload)
-        except (KeyError, ValueError) as exc:
-            return self._send_json(400, {"error": str(exc)})
-        except (OSError, urllib.error.URLError) as exc:
-            return self._send_json(502, {"error": f"atomize fetch failed: {exc}"})
-        self._send_json(201, result)
+        config = self.server.config
+        self._send_json(
+            201, kb_ingest_and_atomize(config.kb_home, config, payload),
+        )
+
+    def _handle_reindex(self, _payload: dict[str, object]) -> None:
+        self._send_json(200, rebuild_derived(self.server.config))
+
+    def _handle_decision(self, payload: dict[str, object]) -> None:
+        self._send_json(201, record_decision(self.server.config, payload))
+
+    def _handle_enrich(self, payload: dict[str, object]) -> None:
+        config = self.server.config
+        result = kb_enrich(config, payload)
+        if result.get("enriched"):
+            rebuild_derived(config)
+        self._send_json(200, result)
 
 
 def serve_forever(config: KbServeConfig, host: str, port: int) -> None:
+    """Bind and serve until interrupted."""
     server = KbHTTPServer((host, port), KbRequestHandler, config)
-    log.info("kb-serve listening on %s:%s (kb_home=%s)", host, port, config.kb_home)
+    log.info(
+        "kb-serve listening on %s:%s (kb_home=%s)", host, port, config.kb_home,
+    )
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -740,120 +500,43 @@ def serve_forever(config: KbServeConfig, host: str, port: int) -> None:
         server.server_close()
 
 
-# ── CLI ─────────────────────────────────────────────────────────────────
+# ── CLI ───────────────────────────────────────────────────────────────
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    kb_home = kb_index_module().resolve_kb_home(args.kb_home)
-    (kb_home / "index").mkdir(parents=True, exist_ok=True)
+    """Serve in the foreground. The only subcommand: everything else is
+    reached over HTTP through the agent-workbench CLI."""
+    kb_home = resolve_kb_home(args.kb_home)
+    kb_vault.vault_init(kb_home)
+    (kb_home / INDEX_DIR).mkdir(parents=True, exist_ok=True)
     serve_forever(build_config(kb_home), args.host, args.port)
     return 0
 
 
-def cmd_put(args: argparse.Namespace) -> int:
-    kb_home = kb_index_module().resolve_kb_home(args.kb_home)
-    payload = {
-        "project": args.project, "title": args.title, "type": args.type,
-        "source": args.source, "content": sys.stdin.read(),
-    }
-    print(json.dumps(kb_put(kb_home, build_config(kb_home), payload)))
-    return 0
-
-
-def cmd_clip(args: argparse.Namespace) -> int:
-    kb_home = kb_index_module().resolve_kb_home(args.kb_home)
-    print(json.dumps(kb_clip_and_atomize(kb_home, {"url": args.url, "project": args.project})))
-    return 0
-
-
-def cmd_atomize(args: argparse.Namespace) -> int:
-    kb_home = kb_index_module().resolve_kb_home(args.kb_home)
-    payload: dict[str, object] = {"project": args.project, "title": args.title, "type": args.type}
-    if args.url:
-        payload["url"] = args.url
-    else:
-        payload["content"] = sys.stdin.read()
-    print(json.dumps(kb_ingest_and_atomize(kb_home, build_config(kb_home), payload)))
-    return 0
-
-
-def cmd_query(args: argparse.Namespace) -> int:
-    kb_home = kb_index_module().resolve_kb_home(args.kb_home)
-    results = run_query(kb_home, args.q, args.project, args.type, args.all)
-    print(json.dumps({"results": results}, indent=2))
-    return 0
-
-
-def cmd_resolve_secret(args: argparse.Namespace) -> int:
-    """Print `KB_LLM_API_KEY=<value>` for an EnvironmentFile= to consume.
-
-    The only line ever written to stdout; the resolved value is never
-    logged. Empty value (still prints the key, blank) if neither
-    KB_LLM_API_KEY_CMD nor KB_LLM_API_KEY resolves -- callers treat that
-    the same as "no key configured".
-    """
-    kb_home = kb_index_module().resolve_kb_home(args.kb_home)
-    merged = {**load_kb_env(kb_home), **os.environ}
-    print(f"KB_LLM_API_KEY={resolve_api_key(merged) or ''}")
-    return 0
-
-
 def build_parser() -> argparse.ArgumentParser:
+    """Construct the ``run`` CLI."""
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
-
-    run_cmd = sub.add_parser("run", help="serve the HTTP facade in the foreground")
-    run_cmd.add_argument("--host", default=os.environ.get("KB_SERVE_HOST", "127.0.0.1"))
-    run_cmd.add_argument("--port", type=int, default=int(os.environ.get("KB_SERVE_PORT", DEFAULT_PORT)))
+    run_cmd = sub.add_parser("run", help="serve the knowledgebase service")
+    run_cmd.add_argument(
+        "--host", default=os.environ.get("KB_SERVE_HOST", "127.0.0.1"),
+    )
+    run_cmd.add_argument(
+        "--port",
+        type=int,
+        default=int(os.environ.get("KB_SERVE_PORT", DEFAULT_PORT)),
+    )
     run_cmd.add_argument("--kb-home", default=None)
-
-    put_cmd = sub.add_parser("put", help="write + atomize + index one note (content on stdin)")
-    put_cmd.add_argument("project")
-    put_cmd.add_argument("title")
-    put_cmd.add_argument("--type", default=DEFAULT_NOTE_TYPE)
-    put_cmd.add_argument("--source", default="")
-    put_cmd.add_argument("--kb-home", default=None)
-
-    clip_cmd = sub.add_parser("clip", help="capture a URL + atomize + index")
-    clip_cmd.add_argument("url")
-    clip_cmd.add_argument("--project", default="inbox")
-    clip_cmd.add_argument("--kb-home", default=None)
-
-    atomize_cmd = sub.add_parser(
-        "atomize",
-        help="ingest a URL or raw content (stdin), atomize via the LLM tier "
-             "(deterministic fallback), index",
-    )
-    atomize_cmd.add_argument("--url", default=None, help="URL to ingest; omit to read content from stdin")
-    atomize_cmd.add_argument("--project", default="inbox")
-    atomize_cmd.add_argument("--title", default="untitled")
-    atomize_cmd.add_argument("--type", default="source")
-    atomize_cmd.add_argument("--kb-home", default=None)
-
-    query_cmd = sub.add_parser("query", help="full-text search the index")
-    query_cmd.add_argument("q")
-    query_cmd.add_argument("--project", default=None)
-    query_cmd.add_argument("--type", default=None)
-    query_cmd.add_argument("--all", action="store_true", help="include superseded notes")
-    query_cmd.add_argument("--kb-home", default=None)
-
-    secret_cmd = sub.add_parser(
-        "resolve-secret",
-        help="print the resolved LLM API key for a systemd EnvironmentFile=",
-    )
-    secret_cmd.add_argument("--kb-home", default=None)
-
     return parser
 
 
 def main(argv: list[str]) -> int:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
+    """CLI entry point."""
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(name)s %(message)s",
+    )
     args = build_parser().parse_args(argv)
-    dispatch = {
-        "run": cmd_run, "put": cmd_put, "clip": cmd_clip, "atomize": cmd_atomize,
-        "query": cmd_query, "resolve-secret": cmd_resolve_secret,
-    }
-    return dispatch[args.command](args)
+    return cmd_run(args)
 
 
 if __name__ == "__main__":

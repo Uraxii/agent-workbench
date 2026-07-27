@@ -40,6 +40,9 @@ def _load_kb_serve():
 
 
 kb_serve = _load_kb_serve()
+# The model-backed passes live in scripts/kb_llm.py; kb-serve.py only
+# re-exports them, so a patch must target the defining module.
+kb_llm = sys.modules["kb_llm"]
 KbServeConfig = kb_serve.KbServeConfig
 
 
@@ -88,7 +91,10 @@ def test_health_reports_kb_home_indexed_count_and_ok_status(live_server: tuple[s
     with urllib.request.urlopen(f"{base_url}/health") as response:
         assert response.status == 200
         body = json.loads(response.read())
-    assert body == {"status": "ok", "kb_home": str(config.kb_home), "indexed_count": 0}
+    assert body == {
+        "status": "ok", "kb_home": str(config.kb_home), "indexed_count": 0,
+        "vector_count": 0, "embeddings_enabled": False,
+    }
 
 
 # ── /put ────────────────────────────────────────────────────────────────
@@ -114,7 +120,7 @@ def test_put_uses_llm_atomize_when_enrichment_enabled(tmp_path: Path) -> None:
     llm_items = [{"title": "Child A", "body": "Body A content."}]
     with (
         _server_for_config(config) as base_url,
-        patch.object(kb_serve, "request_atomize_split", return_value=llm_items) as mock_split,
+        patch.object(kb_llm, "request_atomize_split", return_value=llm_items) as mock_split,
     ):
         status, body = _post(base_url, "/put", {
             "project": "proj1", "title": "Parent Note", "content": "Some parent content.",
@@ -122,7 +128,7 @@ def test_put_uses_llm_atomize_when_enrichment_enabled(tmp_path: Path) -> None:
 
     mock_split.assert_called_once()
     assert status == 201
-    assert set(body.keys()) == {"path", "children"}
+    assert set(body.keys()) == {"path", "children", "method", "indexed", "embedded"}
     assert len(body["children"]) == 1
     child_text = Path(str(body["children"][0])).read_text(encoding="utf-8")
     assert 'title: "Child A"' in child_text
@@ -163,7 +169,7 @@ def test_query_no_hits_returns_empty_list(live_server: tuple[str, KbServeConfig]
 
 def test_enrich_disabled_by_default_makes_zero_network_calls(tmp_path: Path) -> None:
     config = _config(tmp_path, enrich_enabled=False)
-    with patch.object(kb_serve, "request_enrichment") as mock_request:
+    with patch.object(kb_llm, "request_enrichment") as mock_request:
         result = kb_serve.kb_enrich(config, {})
     mock_request.assert_not_called()
     assert result == {"enriched": 0, "message": "KB_ENRICH is 0; enrichment disabled"}
@@ -174,7 +180,7 @@ def test_enrich_disabled_by_default_makes_zero_network_calls(tmp_path: Path) -> 
 
 def test_enrich_enabled_without_key_makes_zero_network_calls(tmp_path: Path) -> None:
     config = _config(tmp_path, enrich_enabled=True, llm_api_key=None)
-    with patch.object(kb_serve, "request_enrichment") as mock_request:
+    with patch.object(kb_llm, "request_enrichment") as mock_request:
         result = kb_serve.kb_enrich(config, {})
     mock_request.assert_not_called()
     assert result["enriched"] == 0
@@ -194,7 +200,7 @@ def test_enrich_success_rewrites_only_question_and_summary(tmp_path: Path) -> No
     body_before = text_before.split("---\n", 2)[2]
 
     with patch.object(
-        kb_serve, "request_enrichment",
+        kb_llm, "request_enrichment",
         return_value={"question": "What does the widget do?", "summary": "The widget does things well."},
     ) as mock_request:
         result = kb_serve.kb_enrich(config, {})
@@ -246,7 +252,7 @@ def test_kb_enrich_degrades_cleanly_when_note_read_fails(tmp_path: Path) -> None
     vanished_note = tmp_path / "vanished.md"  # never created on disk
     with (
         patch.object(kb_serve, "find_unenriched_notes", return_value=[vanished_note]),
-        patch.object(kb_serve, "request_enrichment") as mock_request,
+        patch.object(kb_llm, "request_enrichment") as mock_request,
     ):
         result = kb_serve.kb_enrich(config, {})  # must not raise
     mock_request.assert_not_called()  # read_text raised before the network call
@@ -379,7 +385,9 @@ def test_clip_happy_path_writes_source_note_with_extracted_content(
     assert 'title: "Canned OG Title"' in text
     assert 'source: "https://example.invalid/article"' in text
     assert "canned paragraph" in text
-    assert set(body.keys()) == {"path", "children"}  # no unexpected/leaked fields in the response
+    assert set(body.keys()) == {
+        "path", "children", "method", "indexed", "embedded",
+    }  # no unexpected/leaked fields in the response
 
 
 def test_clip_fetch_failure_returns_clean_error_and_writes_no_note(tmp_path: Path) -> None:
@@ -497,7 +505,7 @@ def _long_sectioned_body() -> str:
 def test_request_atomize_split_small_body_makes_one_model_call(tmp_path: Path) -> None:
     config = _config(tmp_path, enrich_enabled=True, llm_api_key="fake-key")
     with patch.object(
-        kb_serve, "_chat_completion_json",
+        kb_llm, "_chat_completion_json",
         return_value={"notes": [{"title": "Only Child", "body": "Small body note."}]},
     ) as mock_chat:
         result = kb_serve.request_atomize_split(config, "Small Parent", "Small parent body.")
@@ -520,7 +528,7 @@ def test_request_atomize_split_long_body_keeps_tail_content(tmp_path: Path) -> N
             return {"notes": [{"title": "Tail Child", "body": f"Saw {tail_marker}."}]}
         return {"notes": [{"title": "Earlier Child", "body": "Earlier chunk."}]}
 
-    with patch.object(kb_serve, "_chat_completion_json", side_effect=fake_chat) as mock_chat:
+    with patch.object(kb_llm, "_chat_completion_json", side_effect=fake_chat) as mock_chat:
         result = kb_serve.request_atomize_split(config, "Long Parent", body)
 
     assert mock_chat.call_count > 1
@@ -534,7 +542,7 @@ def test_atomize_degrades_to_deterministic_when_later_chunk_fails(tmp_path: Path
     with (
         _server_for_config(config) as base_url,
         patch.object(
-            kb_serve, "_chat_completion_json",
+            kb_llm, "_chat_completion_json",
             side_effect=[
                 {"notes": [{"title": "First LLM Child", "body": "First chunk."}]},
                 json.JSONDecodeError("bad json", "doc", 0),
@@ -575,7 +583,7 @@ def test_atomize_content_happy_path_returns_llm_children_with_parent_ref(tmp_pat
     ]
     with (
         _server_for_config(config) as base_url,
-        patch.object(kb_serve, "request_atomize_split", return_value=llm_items) as mock_split,
+        patch.object(kb_llm, "request_atomize_split", return_value=llm_items) as mock_split,
     ):
         status, body = _post(base_url, "/atomize", {
             "project": "proj1", "title": "Parent Note", "content": "Some parent content.",
@@ -602,7 +610,7 @@ def test_atomize_url_happy_path_returns_llm_children(tmp_path: Path) -> None:
     with (
         _server_for_config(config) as base_url,
         patch("urllib.request.build_opener", return_value=_fake_opener(html=_CANNED_HTML)),
-        patch.object(kb_serve, "request_atomize_split", return_value=llm_items) as mock_split,
+        patch.object(kb_llm, "request_atomize_split", return_value=llm_items) as mock_split,
         # example.invalid never resolves via real DNS; the SSRF guard is
         # exercised on its own in test_kb_clip.py, not re-derived here.
         patch.object(kb_serve.kb_clip_module(), "check_destination_is_public"),
@@ -625,7 +633,7 @@ def test_atomize_deterministic_fallback_when_enrich_disabled(tmp_path: Path) -> 
     config = _config(tmp_path, enrich_enabled=False)
     with (
         _server_for_config(config) as base_url,
-        patch.object(kb_serve, "request_atomize_split") as mock_split,
+        patch.object(kb_llm, "request_atomize_split") as mock_split,
     ):
         status, body = _post(base_url, "/atomize", {
             "project": "proj1", "title": "Long Parent", "content": _long_sectioned_body(),
@@ -642,7 +650,7 @@ def test_atomize_degrades_to_deterministic_on_llm_failure(tmp_path: Path) -> Non
     with (
         _server_for_config(config) as base_url,
         patch.object(
-            kb_serve, "request_atomize_split",
+            kb_llm, "request_atomize_split",
             side_effect=json.JSONDecodeError("bad json", "doc", 0),
         ) as mock_split,
     ):
@@ -664,7 +672,7 @@ def test_atomize_degrades_to_deterministic_on_llm_value_error(tmp_path: Path) ->
     with (
         _server_for_config(config) as base_url,
         patch.object(
-            kb_serve, "request_atomize_split",
+            kb_llm, "request_atomize_split",
             side_effect=ValueError("malformed atomize response"),
         ) as mock_split,
     ):

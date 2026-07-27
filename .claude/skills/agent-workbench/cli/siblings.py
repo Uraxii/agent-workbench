@@ -1,17 +1,14 @@
 """Load hyphenated sibling scripts as importable modules.
 
-The `kb` subcommand is a thin facade over the existing, proven
-``scripts/kb-serve.py`` (which itself facades kb-index.py / kb-clip.py /
-kb-atomize.py), and the `artifact` subcommand is the same shape over
-``.claude/skills/artifact-serve/scripts/artifact-serve.py``. Those files
-have hyphenated names a normal ``import`` cannot address, so this reuses
-kb-serve.py's own proven load-by-path pattern
-(importlib.util.spec_from_file_location, register in sys.modules BEFORE
-exec so dataclass annotation resolution works). This is deliberate reuse,
-not a rewrite: the deterministic clip/put/query/atomize logic and the
-http/https scheme allowlist (kb-clip.check_url_scheme) are inherited
-verbatim, never reimplemented here -- same for artifact-serve.py's push /
-feedback / start / run / status handlers.
+Some repo scripts have hyphenated filenames a normal ``import``
+statement cannot address, so this loads them by path
+(importlib.util.spec_from_file_location, registered in sys.modules BEFORE
+exec so dataclass annotation resolution works).
+
+Note what is NOT here: the `kb` subcommand does not load kb-serve.py.
+The knowledgebase service owns the vault and the CLI reaches it over
+HTTP, so an in-process loader would be a second way into the same
+files.
 """
 from __future__ import annotations
 
@@ -22,7 +19,7 @@ from pathlib import Path
 
 from cli.paths import ARTIFACT_SKILL_DIR, SCRIPTS_DIR
 
-__all__ = ["load_script", "load_module_at", "load_kb_serve", "load_artifact_serve"]
+__all__ = ["load_script", "load_module_at", "load_artifact_serve"]
 
 
 def load_module_at(path: Path, module_name: str) -> types.ModuleType:
@@ -64,17 +61,6 @@ def load_script(name: str) -> types.ModuleType:
     if scripts_dir not in sys.path:
         sys.path.insert(0, scripts_dir)
     return load_module_at(SCRIPTS_DIR / f"{name}.py", name.replace("-", "_"))
-
-
-def load_kb_serve() -> types.ModuleType:
-    """Load ``scripts/kb-serve.py`` (the in-process fallback target).
-
-    Returns:
-        The kb-serve module, exposing kb_put / kb_clip_and_atomize /
-        run_query / resolve_kb_home-backed helpers the `kb` port calls
-        when the HTTP service is down.
-    """
-    return load_script("kb-serve")
 
 
 def load_artifact_serve() -> types.ModuleType:

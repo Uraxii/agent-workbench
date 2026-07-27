@@ -1,8 +1,9 @@
 """Tests for the pure-Python agent-workbench CLI at
 .claude/skills/agent-workbench/cli/.
 
-One subcommand module per section (kb, hub, board, init-workspace,
-deploy, main dispatcher). Every test keeps KB_HOME / BEADS_HUB_DIR /
+One subcommand module per section (hub, board, init-workspace, deploy,
+main dispatcher; the kb HTTP client's own tests live in
+tests/test_cli_kb.py). Every test keeps KB_HOME / BEADS_HUB_DIR /
 XDG_RUNTIME_DIR / HOME pinned under tmp_path (or mocks the subprocess /
 urllib calls a real host would otherwise receive), so nothing here ever
 touches the real ~/.knowledgebase, ~/.beads-hub, or a live kb-serve /
@@ -34,97 +35,6 @@ if str(_AGENT_WORKBENCH_DIR) not in sys.path:
 
 from cli import board, deploy, hub, init_workspace, kb  # noqa: E402
 from cli import main as cli_main  # noqa: E402
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# kb
-# ═══════════════════════════════════════════════════════════════════════
-
-
-def test_resolve_kb_home_defaults_to_home_knowledgebase(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("KB_HOME", raising=False)
-    monkeypatch.setenv("HOME", str(tmp_path))
-    assert kb.resolve_kb_home(None) == tmp_path / ".knowledgebase"
-
-
-def test_cmd_init_creates_vault_dirs(tmp_path: Path) -> None:
-    kb_home = tmp_path / "vault"
-    assert kb.cmd_init(argparse.Namespace(kb_home=str(kb_home))) == 0
-    assert (kb_home / ".obsidian").is_dir()
-    assert (kb_home / "index").is_dir()
-
-
-def test_cmd_add_creates_note_dirs_for_project(tmp_path: Path) -> None:
-    kb_home = tmp_path / "vault"
-    assert kb.cmd_add(argparse.Namespace(project="proj1", kb_home=str(kb_home))) == 0
-    for note_dir in kb.NOTE_DIRS:
-        assert (kb_home / "proj1" / note_dir).is_dir()
-
-
-def test_cmd_path_prints_kb_home_slash_project(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    kb_home = tmp_path / "vault"
-    kb.cmd_path(argparse.Namespace(project="proj1", kb_home=str(kb_home)))
-    assert capsys.readouterr().out.strip() == str(kb_home / "proj1")
-
-
-def test_cmd_status_reports_initialized_and_projects(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    kb_home = tmp_path / "vault"
-    kb.cmd_add(argparse.Namespace(project="proj1", kb_home=str(kb_home)))
-    capsys.readouterr()  # discard cmd_add's own stdout
-    kb.cmd_status(argparse.Namespace(kb_home=str(kb_home)))
-    body = json.loads(capsys.readouterr().out)
-    assert body == {"kb_home": str(kb_home), "initialized": True, "projects": ["proj1"]}
-
-
-def test_cmd_status_uninitialized_vault_reports_false_and_no_projects(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str],
-) -> None:
-    kb.cmd_status(argparse.Namespace(kb_home=str(tmp_path / "never-created")))
-    body = json.loads(capsys.readouterr().out)
-    assert body["initialized"] is False
-    assert body["projects"] == []
-
-
-def test_service_base_url_honors_kb_serve_host_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """M3 fix: service_base_url reads BOTH KB_SERVE_HOST and KB_SERVE_PORT.
-    The old kb.sh (kb.sh:36) hardcoded 127.0.0.1 and ignored KB_SERVE_HOST
-    entirely; this proves the port no longer does."""
-    monkeypatch.setenv("KB_SERVE_HOST", "10.0.0.5")
-    monkeypatch.setenv("KB_SERVE_PORT", "9200")
-    assert kb.service_base_url() == "http://10.0.0.5:9200"
-
-
-def test_service_base_url_defaults_when_env_absent(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("KB_SERVE_HOST", raising=False)
-    monkeypatch.delenv("KB_SERVE_PORT", raising=False)
-    assert kb.service_base_url() == "http://127.0.0.1:9100"
-
-
-def test_post_json_surfaces_http_error_body_instead_of_swallowing_it() -> None:
-    """LOW fix: an HTTP error response body is read and folded into the
-    raised error, rather than dropped the way `curl -sf` did."""
-    def _raise_http_error(request: object, *a: object, **kw: object) -> None:
-        raise urllib.error.HTTPError(
-            "http://127.0.0.1:9100/put", 400, "Bad Request", None,
-            io.BytesIO(b'{"error": "bad project name"}'),
-        )
-
-    with patch("urllib.request.urlopen", side_effect=_raise_http_error):
-        with pytest.raises(RuntimeError, match="bad project name"):
-            kb._post_json("/put", {"project": "x"})
-
-
-def test_get_surfaces_http_error_body_instead_of_swallowing_it() -> None:
-    """LOW fix, GET side: same error-body surfacing as _post_json."""
-    def _raise_http_error(request: object, *a: object, **kw: object) -> None:
-        raise urllib.error.HTTPError(
-            "http://127.0.0.1:9100/query", 500, "Server Error", None,
-            io.BytesIO(b"index corrupt"),
-        )
-
-    with patch("urllib.request.urlopen", side_effect=_raise_http_error):
-        with pytest.raises(RuntimeError, match="index corrupt"):
-            kb._get("/query?q=x")
 
 
 # ═══════════════════════════════════════════════════════════════════════
