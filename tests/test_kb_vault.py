@@ -168,3 +168,21 @@ def test_vault_status_on_an_uninitialized_vault_reports_no_projects(
     assert status == {
         "kb_home": str(tmp_path), "initialized": False, "projects": [],
     }
+
+
+def test_a_symlinked_project_dir_cannot_be_written_through(
+    tmp_path: Path,
+) -> None:
+    """A name passing the pattern is not enough: if <kb_home>/proj is a
+    symlink out of the vault, every write below it lands outside."""
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (vault / "proj1").symlink_to(outside)
+
+    with pytest.raises(ValueError, match="outside the vault"):
+        kb_vault.write_note(vault, "proj1", "note", "Title", "", "body")
+    with pytest.raises(ValueError, match="outside the vault"):
+        kb_vault.project_init(vault, "proj1")
+    assert list(outside.iterdir()) == []

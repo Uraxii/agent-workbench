@@ -287,10 +287,16 @@ def kb_ingest_and_atomize(
 def record_decision(
     config: KbServeConfig, payload: Mapping[str, object],
 ) -> dict[str, object]:
-    """Record a decision note and reindex so it is immediately findable."""
+    """Record a decision note, then finish it like any other ingest.
+
+    Recording writes markdown into the vault, so it goes through the same
+    ``_finish_ingest`` as put and clip rather than around it. The
+    atomizer's own type rule then reports a decision as already atomic,
+    which is the answer, not an exemption.
+    """
     result = kb_decision.record(config.kb_home, payload)
-    derived = rebuild_derived(config)
-    return {**result, "indexed": derived["indexed"]}
+    finished = _finish_ingest(config, Path(result["path"]))
+    return {**finished, "supersedes": result["supersedes"]}
 
 
 def audit_decisions(
@@ -349,8 +355,12 @@ class KbRequestHandler(BaseHTTPRequestHandler):
 
     def _read_json_body(self) -> dict[str, object]:
         length = int(self.headers.get("Content-Length", "0"))
-        if length > MAX_BODY_BYTES:
-            raise ValueError(f"request body exceeds {MAX_BODY_BYTES} bytes")
+        # A negative length matters as much as an oversized one: rfile
+        # .read(-1) drains to EOF, which would ignore the cap entirely.
+        if not 0 <= length <= MAX_BODY_BYTES:
+            raise ValueError(
+                f"Content-Length must be 0..{MAX_BODY_BYTES}, got {length}"
+            )
         raw = self.rfile.read(length) if length else b""
         parsed = json.loads(raw) if raw else {}
         if not isinstance(parsed, dict):

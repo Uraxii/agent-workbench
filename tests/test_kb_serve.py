@@ -15,6 +15,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import logging
+import socket
 import sys
 import threading
 import urllib.error
@@ -116,6 +117,8 @@ def test_put_writes_note_with_expected_frontmatter(live_server: tuple[str, KbSer
 
 
 def test_put_uses_llm_atomize_when_enrichment_enabled(tmp_path: Path) -> None:
+    """type=source is splittable; note/decision are already atomic (see
+    test_put_of_an_atomic_type_is_never_split_by_the_model)."""
     config = _config(tmp_path, enrich_enabled=True, llm_api_key="fake-key")
     llm_items = [{"title": "Child A", "body": "Body A content."}]
     with (
@@ -123,7 +126,8 @@ def test_put_uses_llm_atomize_when_enrichment_enabled(tmp_path: Path) -> None:
         patch.object(kb_llm, "request_atomize_split", return_value=llm_items) as mock_split,
     ):
         status, body = _post(base_url, "/put", {
-            "project": "proj1", "title": "Parent Note", "content": "Some parent content.",
+            "project": "proj1", "title": "Parent Note", "type": "source",
+            "content": "Some parent content.",
         })
 
     mock_split.assert_called_once()
@@ -133,6 +137,45 @@ def test_put_uses_llm_atomize_when_enrichment_enabled(tmp_path: Path) -> None:
     child_text = Path(str(body["children"][0])).read_text(encoding="utf-8")
     assert 'title: "Child A"' in child_text
     assert "Body A content." in child_text
+
+
+def test_put_of_an_atomic_type_is_never_split_by_the_model(tmp_path: Path) -> None:
+    """Enabling the model changes how WELL a splittable note is split, not
+    WHICH notes get split: a note (like a decision) is one idea by
+    construction, and the deterministic splitter has always left both
+    alone."""
+    config = _config(tmp_path, enrich_enabled=True, llm_api_key="fake-key")
+    with (
+        _server_for_config(config) as base_url,
+        patch.object(kb_llm, "request_atomize_split") as mock_split,
+    ):
+        status, body = _post(base_url, "/put", {
+            "project": "proj1", "title": "Atomic Note", "type": "note",
+            "content": "One idea, stated once.",
+        })
+
+    mock_split.assert_not_called()
+    assert status == 201
+    assert body["children"] == []
+    assert body["method"] == "already-atomic"
+
+
+def test_decision_is_recorded_through_the_same_ingest_finish(
+    live_server: tuple[str, KbServeConfig],
+) -> None:
+    """POST /decision writes markdown, so it reports the same atomize +
+    index result every other ingest route does."""
+    base_url, _ = live_server
+    status, body = _post(base_url, "/decision", {
+        "project": "proj1", "topic": "widget-shape", "title": "Round",
+        "text": "Widgets ship round.",
+    })
+    assert status == 201
+    assert body["method"] == "already-atomic"
+    assert body["children"] == []
+    assert body["indexed"] == 1
+    assert body["supersedes"] == ""
+    assert Path(str(body["path"])).read_text(encoding="utf-8").startswith("---\n")
 
 
 def test_put_missing_required_field_returns_400(live_server: tuple[str, KbServeConfig]) -> None:
@@ -721,3 +764,37 @@ def test_atomize_both_url_and_content_given_prefers_url(tmp_path: Path) -> None:
     text = Path(str(body["parent"])).read_text(encoding="utf-8")
     assert "canned paragraph" in text
     assert "must be ignored" not in text
+
+
+# ── request body bounds ────────────────────────────────────────────────
+
+
+def test_a_negative_content_length_is_rejected(
+    live_server: tuple[str, KbServeConfig],
+) -> None:
+    """rfile.read(-1) drains to EOF, so a negative length would sail past
+    the byte cap on an unauthenticated loopback service."""
+    base_url, _ = live_server
+    host, port = base_url.removeprefix("http://").split(":")
+    with socket.create_connection((host, int(port)), timeout=5) as sock:
+        sock.sendall(
+            b"POST /put HTTP/1.1\r\nHost: kb\r\n"
+            b"Content-Length: -1\r\n\r\n"
+        )
+        status_line = sock.recv(4096).split(b"\r\n")[0]
+    assert b"400" in status_line
+
+
+def test_an_oversized_content_length_is_rejected(
+    live_server: tuple[str, KbServeConfig],
+) -> None:
+    base_url, _ = live_server
+    host, port = base_url.removeprefix("http://").split(":")
+    oversized = kb_serve.MAX_BODY_BYTES + 1
+    with socket.create_connection((host, int(port)), timeout=5) as sock:
+        sock.sendall(
+            b"POST /put HTTP/1.1\r\nHost: kb\r\n"
+            b"Content-Length: %d\r\n\r\n" % oversized
+        )
+        status_line = sock.recv(4096).split(b"\r\n")[0]
+    assert b"400" in status_line

@@ -23,7 +23,12 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
-from kb_vault import VAULT_OWN_DIRS, validate_project, validate_scalar
+from kb_vault import (
+    VAULT_OWN_DIRS,
+    assert_inside_vault,
+    validate_project,
+    validate_scalar,
+)
 
 __all__ = [
     "ACTIVE",
@@ -325,9 +330,12 @@ def record(kb_home: Path, payload: Mapping[str, object]) -> dict[str, str]:
         raise ValueError("text is required")
 
     project_decisions_dir = decisions_dir(kb_home, project)
+    assert_inside_vault(kb_home, project_decisions_dir)
     project_decisions_dir.mkdir(parents=True, exist_ok=True)
+    assert_inside_vault(kb_home, project_decisions_dir)
     today = date.today().isoformat()
     note_path = build_note_path(project_decisions_dir, slugify(topic), today)
+    assert_inside_vault(kb_home, note_path)
 
     supersedes_raw = payload.get("supersedes")
     supersedes_path = resolve_supersedes_path(

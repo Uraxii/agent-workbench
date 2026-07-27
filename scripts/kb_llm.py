@@ -311,14 +311,23 @@ def kb_atomize_via_llm(
 
     Falls back to the deterministic heading splitter when the model is
     disabled, no key resolved, or the call fails. Returns
-    ``(children, method)`` where method is ``"llm"`` or
-    ``"deterministic"``.
+    ``(children, method)`` where method is ``"llm"``, ``"deterministic"``
+    or ``"already-atomic"``.
+
+    Which note types are already atomic is the deterministic splitter's
+    rule (kb-atomize.py's ATOMIC_TYPES), and the model tier honours it
+    rather than deciding for itself: a decision or a note IS one idea by
+    construction, so splitting it would manufacture children that
+    contradict the type's meaning. Enabling the model must change how
+    well a splittable note is split, never which notes get split.
     """
     kb_index = load_sibling("kb-index")
     kb_atomize_script = load_sibling("kb-atomize")
     fields, body = kb_index.parse_frontmatter(
         note_path.read_text(encoding="utf-8")
     )
+    if kb_index.derive_type(fields, note_path) in kb_atomize_script.ATOMIC_TYPES:
+        return [], "already-atomic"
     if config.enrich_enabled and config.llm_api_key:
         try:
             notes = request_atomize_split(

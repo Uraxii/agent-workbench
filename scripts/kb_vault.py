@@ -22,6 +22,8 @@ from kb_config import load_sibling
 
 __all__ = [
     "NOTE_DIRS",
+    "VAULT_OWN_DIRS",
+    "assert_inside_vault",
     "TYPE_TO_DIR",
     "note_dir_for_type",
     "project_dir",
@@ -129,16 +131,35 @@ def resolve_vault_path(kb_home: Path, value: object) -> Path:
     return candidate
 
 
+def assert_inside_vault(kb_home: Path, path: Path) -> Path:
+    """Return ``path`` if it resolves inside the vault, else raise.
+
+    A valid project name is not enough on its own: if ``<kb_home>/proj``
+    is a SYMLINK to somewhere else, every write below it lands outside
+    the vault even though the name passed ``validate_project``. Resolving
+    before the write is what closes that.
+
+    Raises:
+        ValueError: the resolved path is not the vault root or under it.
+    """
+    root = kb_home.resolve()
+    resolved = path.resolve()
+    if resolved != root and not resolved.is_relative_to(root):
+        raise ValueError(f"{path} resolves outside the vault")
+    return path
+
+
 def project_dir(kb_home: Path, project: str) -> Path:
-    """``<kb_home>/<project>`` for an already-validated project name."""
-    return kb_home / validate_project(project)
+    """``<kb_home>/<project>``, validated by name AND by resolved path."""
+    return assert_inside_vault(kb_home, kb_home / validate_project(project))
 
 
 def note_dir_for_type(kb_home: Path, project: str, note_type: str) -> Path:
     """``<kb_home>/<project>/<type dir>``, created if missing."""
     notes_dir = project_dir(kb_home, project) / TYPE_TO_DIR[validate_type(note_type)]
+    assert_inside_vault(kb_home, notes_dir)
     notes_dir.mkdir(parents=True, exist_ok=True)
-    return notes_dir
+    return assert_inside_vault(kb_home, notes_dir)
 
 
 def vault_init(kb_home: Path) -> dict[str, object]:
@@ -151,10 +172,12 @@ def vault_init(kb_home: Path) -> dict[str, object]:
 def project_init(kb_home: Path, project: object) -> dict[str, object]:
     """Create a project's four note dirs under the vault (idempotent)."""
     name = validate_project(project)
+    root = project_dir(kb_home, name)
     vault_init(kb_home)
     for note_dir in NOTE_DIRS:
-        (kb_home / name / note_dir).mkdir(parents=True, exist_ok=True)
-    return {"project": name, "path": str(kb_home / name)}
+        assert_inside_vault(kb_home, root / note_dir)
+        (root / note_dir).mkdir(parents=True, exist_ok=True)
+    return {"project": name, "path": str(root)}
 
 
 def vault_status(kb_home: Path) -> dict[str, object]:
@@ -219,6 +242,7 @@ def write_note(
     kb_clip = load_sibling("kb-clip")
     notes_dir = note_dir_for_type(kb_home, project, note_type)
     note_path = kb_clip.build_note_path(notes_dir, kb_clip.slugify(title))
+    assert_inside_vault(kb_home, note_path)
     note_path.write_text(
         render_note(note_type, title, source, project, content),
         encoding="utf-8",
