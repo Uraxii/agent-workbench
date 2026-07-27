@@ -1,11 +1,11 @@
 ---
 name: agent-workbench
-description: Locally deployable agent workbench (knowledgebase vault + bd board hub + bdui web front end + hardened kb-serve/artifact-serve containers) driven by ONE pure-Python CLI. Use to run knowledgebase clip/put/query, manage bd boards under the central hub, launch the board web UI, scaffold a repo's agent workspace, build and deploy the artifact and knowledgebase containers locally, or record/audit an architectural or scope decision the moment it's settled ("record decision", "we decided", "log this decision").
+description: Locally deployable agent workbench (knowledgebase vault + bd board hub + bdui web front end + hardened kb-serve/artifact-serve containers) driven by ONE pure-Python CLI. Use to run knowledgebase clip/put/query, manage bd boards under the central hub, launch the board web UI, scaffold a repo's agent workspace, or record/audit an architectural or scope decision the moment it's settled ("record decision", "we decided", "log this decision").
 ---
 
 # agent-workbench
 
-One skill, one executable, six subcommands. Every tool is pure Python
+One skill, one executable. Every tool is pure Python
 (argparse, stdlib + the two pre-existing lxml/readability deps kb-clip
 already used). No bash, no `.sh` shims. The CLI lives BESIDE the hardened
 container, never inside its image.
@@ -22,7 +22,6 @@ $AW <subcommand> [ARGS]
 | `kb` | `scripts/kb.sh` | knowledgebase vault: init/add/path/index/clip/put/query/atomize/status |
 | `bd` | `scripts/beads-hub.sh` + `scripts/board-ui.sh` | bd board hub (init/add/sync/list/path/status) + bdui web front end (ui-up/ui-down/ui-status, bare-host, per-repo -- separate from the always-on compose `bdui` service below, which is the single global hub-aggregator view) |
 | `artifact` | (new) | artifact review app: publish/feedback/serve/status, a facade over `.claude/skills/artifact-serve/scripts/artifact-serve.py` |
-| `deploy` | `deploy/agent-workbench/agent-workbench` | build + run the kb-serve / artifact-serve / bdui containers |
 | `install` | (new) | (un)install this repo's skill into `$HOME/.claude/skills/agent-workbench` (`--link`/`--copy`/`--uninstall`) |
 | `init-workspace` | `scripts/init-agent-workspace.sh` | scaffold docs/kb + workstreams + bd board + reindex hook into a repo |
 
@@ -34,45 +33,37 @@ $AW <subcommand> [ARGS]
   (publish/feedback/serve/status), which now also carries everything the
   retired standalone `artifact-serve` skill used to document.
 
-### deploy / install / init-workspace
+### install / init-workspace
 
 ```bash
 $AW install --link
 $AW init-workspace [TARGET_DIR] [--prefix PREFIX]
-$AW deploy up | down | status
 ```
 
 `install` (un)installs this repo's skill dir into
 `$HOME/.claude/skills/agent-workbench`. `init-workspace` scaffolds
 `docs/kb/` + `workstreams/` + a bd board + the reindex hook into a target
-repo. `deploy` is detailed in "Deploy + hardening" below.
+repo.
 
 ## How it differs from the old scripts
 
-**Pure Python, single entrypoint.** The five separate shell scripts + the
-bash deploy driver collapse into one executable with subcommands. The
+**Pure Python, single entrypoint.** The five separate shell scripts
+collapse into one executable with subcommands. The
 `kb` family stays a thin facade over the existing `scripts/kb-serve.py`
 (which already facades kb-index / kb-clip / kb-atomize), and `artifact`
 is the same shape over `scripts/artifact-serve.py`; the `bd` family
-(former `hub`/`board`) and `init-workspace`/`deploy` are genuine
+(former `hub`/`board`) and `init-workspace` are genuine
 rewrites. kb- and bd-specific audit fixes are documented in their own
 mode docs above.
 
 ## Deploy + hardening
 
-`deploy up` builds and starts kb-serve, artifact-serve, and bdui as
-rootless podman-quadlet user units (n8n's quadlet is also installed, but
-its image is pulled by digest rather than built -- see the n8n note
-below). Hardening (read-only rootfs, `cap-drop=ALL`, `no-new-privileges`,
+Hardening (read-only rootfs, `cap-drop=ALL`, `no-new-privileges`,
 seccomp default, digest-pinned base image, HEALTHCHECK, narrowed mounts)
 and the env config surface are documented in
 `docs/agent-workbench-hardening-plan.md`.
 
-bdui (the bd board web front end) is a `deploy`-managed quadlet unit like
-the other two, not compose-only: `deploy up` builds
-`localhost/bdui:latest`, installs `scripts/bdui-container/bdui.container`,
-and health-checks `http://127.0.0.1:3100/`; `deploy down` removes it if
-this bundle owns the installed quadlet. It runs with `UserNS=keep-id` so
+bdui (the bd board web front end) runs with `UserNS=keep-id` so
 the container's user maps to the real host user, matching ownership of
 the bind-mounted `$HOME/.beads-hub` board files (0700/0600). See `modes/bd.md`
 for how this compares to the bare-host `bd ui-up`.
@@ -90,15 +81,10 @@ As deployed (quadlet or compose), artifact-serve is local/loopback-only
 (127.0.0.1-bound) -- do not assume or rely on a network publish path. See
 `modes/artifact.md` for the full detail on this holdback.
 
-### docker-compose (portable alternative to the quadlets)
+### docker-compose
 
 `docker-compose.yml` at the repo root describes kb-serve, artifact-serve,
-n8n, and bdui as a podman-compose-compatible stack. It COEXISTS with the
-quadlets, it does not replace them:
-`$HOME/.claude/skills/agent-workbench/agent-workbench deploy up/down`
-(podman-quadlet user units) remains the live/production deploy mechanism
-on this host. The compose file is an additional portable artifact for
-hosts without systemd-quadlet (plain docker, a cloud VM).
+n8n, and bdui as a podman-compose-compatible stack.
 
 It mirrors the same hardening as the quadlets: read-only rootfs,
 `cap-drop=ALL`, `no-new-privileges`, tmpfs mounts, healthchecks, ports
@@ -112,8 +98,7 @@ podman-compose --profile n8n -f docker-compose.yml up -d # adds n8n
 ```
 
 `bdui` (web front end for `bd`) is on by default in compose -- no profile
-gate, it comes up with every plain compose-up -- and is also
-`deploy`-managed as its own quadlet unit (see above); either path
+gate, it comes up with every plain compose-up -- and
 publishes at `http://127.0.0.1:3100`. See `modes/bd.md` for the full
 bare-host-vs-always-on comparison.
 

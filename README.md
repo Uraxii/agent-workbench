@@ -25,7 +25,7 @@ Live runtime data stays where it already lives. This split does **not** move or 
 - `scripts/bdui-container/` beads-ui container files
 - `scripts/n8n-container/` n8n quadlet + helpers
 - `scripts/kb-serve.py` and sibling helpers for the knowledgebase service
-- `.claude/skills/agent-workbench/` CLI used for board, hub, kb, workspace, and deploy flows
+- `.claude/skills/agent-workbench/` CLI used for board, hub, kb, and workspace flows
 - `.claude/skills/artifact-serve/` review app service code and assets
 
 ## Quick checks

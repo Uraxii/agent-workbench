@@ -37,24 +37,13 @@ that open the viewer). Code files use `...&view=code` (per-line comments).
 ## Step 0: is a server already running?
 
 ```bash
-$AW deploy status                                                    # preferred
 curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:9099/      # 200 = up
 systemctl --user is-active artifact-serve                           # container instance?
 ```
 
-If it answers 200 (or `deploy status` reports it up), skip to Publish. If
-NOT, deploy one (next section).
+If it answers 200, skip to Publish. If NOT, deploy one (next section).
 
 ## Deploy a server (only if none is running)
-
-Preferred: rootless-podman container, durable across reboot (systemd
-quadlet), managed by this repo's deploy subcommand -- see the router
-SKILL.md's "Deploy + hardening" section for the full build/install/hardening
-detail:
-
-```bash
-$AW deploy up
-```
 
 Bare daemon (no container), fine for a quick one-off:
 
@@ -346,6 +335,4 @@ works as user.
   the staging root `/tmp/claude-artifacts/` wipes on reboot (re-push after).
 - Container specifics (build context, quadlet install) live at
   `.claude/skills/artifact-serve/container/README.md`; the router
-  SKILL.md's "Deploy + hardening" section is the current path for
-  building/installing via
-  `$HOME/.claude/skills/agent-workbench/agent-workbench deploy up`.
+  SKILL.md's "Deploy + hardening" section covers the hardening surface.
