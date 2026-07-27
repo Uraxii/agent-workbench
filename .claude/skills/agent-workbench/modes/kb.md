@@ -4,11 +4,12 @@ Knowledgebase vault ops: init/add/path/index/clip/put/query/atomize/status.
 Replaces `scripts/kb.sh`.
 
 ```bash
-agent-workbench kb clip "<url>" --project <project>
-agent-workbench kb put <project> "<title>" --type note --source "<url>"  # body on stdin
-agent-workbench kb query "<terms>" --project <project> --type source
-agent-workbench kb index
-agent-workbench kb status
+AW=$HOME/.claude/skills/agent-workbench/agent-workbench
+$AW kb clip "<url>" --project <project>
+$AW kb put <project> "<title>" --type note --source "<url>"  # body on stdin
+$AW kb query "<terms>" --project <project> --type source
+$AW kb index
+$AW kb status
 ```
 
 `clip` / `put` / `query` prefer the running kb-serve HTTP service (so the
@@ -41,6 +42,6 @@ Two optional, LLM-backed endpoints exist on the running kb-serve service
   heading-based split (no model call) -- never fails, just degrades.
 
 Both are off/degraded by default; opt in via `KB_ENRICH=1` plus a
-configured key in the real `~/.knowledgebase/kb.env` (see
+configured key in the real `$HOME/.knowledgebase/kb.env` (see
 `scripts/kb-container/kb.env.example` for the template -- never document
 or imply a real secret value there).

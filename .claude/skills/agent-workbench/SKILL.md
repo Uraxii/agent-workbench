@@ -11,7 +11,8 @@ already used). No bash, no `.sh` shims. The CLI lives BESIDE the hardened
 container, never inside its image.
 
 ```bash
-.claude/skills/agent-workbench/agent-workbench <subcommand> [ARGS]
+AW=$HOME/.claude/skills/agent-workbench/agent-workbench
+$AW <subcommand> [ARGS]
 ```
 
 ## Subcommands
@@ -22,7 +23,7 @@ container, never inside its image.
 | `bd` | `scripts/beads-hub.sh` + `scripts/board-ui.sh` | bd board hub (init/add/sync/list/path/status) + bdui web front end (ui-up/ui-down/ui-status, bare-host, per-repo -- separate from the always-on compose `bdui` service below, which is the single global hub-aggregator view) |
 | `artifact` | (new) | artifact review app: publish/feedback/serve/status, a facade over `.claude/skills/artifact-serve/scripts/artifact-serve.py` |
 | `deploy` | `deploy/agent-workbench/agent-workbench` | build + run the kb-serve / artifact-serve / bdui containers |
-| `install` | (new) | (un)install this repo's skill into `~/.claude/skills/agent-workbench` (`--link`/`--copy`/`--uninstall`) |
+| `install` | (new) | (un)install this repo's skill into `$HOME/.claude/skills/agent-workbench` (`--link`/`--copy`/`--uninstall`) |
 | `init-workspace` | `scripts/init-agent-workspace.sh` | scaffold docs/kb + workstreams + bd board + reindex hook into a repo |
 
 - `kb` -- see `modes/kb.md` for the full kb walkthrough (clip/put/query,
@@ -36,13 +37,13 @@ container, never inside its image.
 ### deploy / install / init-workspace
 
 ```bash
-agent-workbench install --link
-agent-workbench init-workspace [TARGET_DIR] [--prefix PREFIX]
-agent-workbench deploy up | down | status
+$AW install --link
+$AW init-workspace [TARGET_DIR] [--prefix PREFIX]
+$AW deploy up | down | status
 ```
 
 `install` (un)installs this repo's skill dir into
-`~/.claude/skills/agent-workbench`. `init-workspace` scaffolds
+`$HOME/.claude/skills/agent-workbench`. `init-workspace` scaffolds
 `docs/kb/` + `workstreams/` + a bd board + the reindex hook into a target
 repo. `deploy` is detailed in "Deploy + hardening" below.
 
@@ -73,11 +74,11 @@ the other two, not compose-only: `deploy up` builds
 and health-checks `http://127.0.0.1:3100/`; `deploy down` removes it if
 this bundle owns the installed quadlet. It runs with `UserNS=keep-id` so
 the container's user maps to the real host user, matching ownership of
-the bind-mounted `~/.beads-hub` board files (0700/0600). See `modes/bd.md`
+the bind-mounted `$HOME/.beads-hub` board files (0700/0600). See `modes/bd.md`
 for how this compares to the bare-host `bd ui-up`.
 
 Optional data-root overrides live in
-`.claude/skills/agent-workbench/agent-workbench.env.example`. NOTE:
+`$HOME/.claude/skills/agent-workbench/agent-workbench.env.example`. NOTE:
 `KB_HOME` / `ARTIFACTS_HOME` are NOT functional overrides once the
 containers are running (the quadlets bind `%h`-relative paths); only
 `BEADS_HUB_DIR` is read directly by the Python code. See the env.example
@@ -93,7 +94,8 @@ As deployed (quadlet or compose), artifact-serve is local/loopback-only
 
 `docker-compose.yml` at the repo root describes kb-serve, artifact-serve,
 n8n, and bdui as a podman-compose-compatible stack. It COEXISTS with the
-quadlets, it does not replace them: `agent-workbench deploy up/down`
+quadlets, it does not replace them:
+`$HOME/.claude/skills/agent-workbench/agent-workbench deploy up/down`
 (podman-quadlet user units) remains the live/production deploy mechanism
 on this host. The compose file is an additional portable artifact for
 hosts without systemd-quadlet (plain docker, a cloud VM).
@@ -131,7 +133,7 @@ path for this key in n8n Community edition.
 **Agent resolves the key:**
 
 ```bash
-API_KEY=$(scripts/n8n-container/n8n-secret.py resolve-api-key --data-dir ~/.local/share/n8n)
+API_KEY=$(scripts/n8n-container/n8n-secret.py resolve-api-key --data-dir $HOME/.local/share/n8n)
 ```
 
 **Create a workflow** (body = a workflow JSON file):

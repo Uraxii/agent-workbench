@@ -7,11 +7,18 @@ durable sqlite feedback the agent reads back. Linear-themed with a
 light/dark/auto toggle.
 
 This mode replaces the standalone `artifact-serve` skill. The CLI wrapper
-(`agent-workbench artifact ...`) is the preferred entrypoint; the underlying
-script it wraps is directly runnable too:
+(`$HOME/.claude/skills/agent-workbench/agent-workbench artifact ...`) is the
+preferred entrypoint; the underlying script it wraps is directly runnable
+too:
 
 ```
 .claude/skills/artifact-serve/scripts/artifact-serve.py
+```
+
+Examples below use:
+
+```bash
+AW=$HOME/.claude/skills/agent-workbench/agent-workbench
 ```
 
 ## Golden rule: share the VIEWER url, never a raw link
@@ -30,7 +37,7 @@ that open the viewer). Code files use `...&view=code` (per-line comments).
 ## Step 0: is a server already running?
 
 ```bash
-agent-workbench deploy status                                       # preferred
+$AW deploy status                                                    # preferred
 curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:9099/      # 200 = up
 systemctl --user is-active artifact-serve                           # container instance?
 ```
@@ -46,13 +53,13 @@ SKILL.md's "Deploy + hardening" section for the full build/install/hardening
 detail:
 
 ```bash
-agent-workbench deploy up
+$AW deploy up
 ```
 
 Bare daemon (no container), fine for a quick one-off:
 
 ```bash
-agent-workbench artifact serve --expose
+$AW artifact serve --expose
 ```
 
 Expose over Tailscale (host-level; the container path keeps this on the
@@ -79,8 +86,8 @@ deployed (quadlet or compose), artifact-serve is local/loopback-only
 ## Publish
 
 ```bash
-agent-workbench artifact publish --project NAME --src /path/to/dir --id <artifact-id>   # symlinks, never copies
-agent-workbench artifact serve                                                          # idempotent
+$AW artifact publish --project NAME --src /path/to/dir --id <artifact-id>   # symlinks, never copies
+$AW artifact serve                                                          # idempotent
 # share: http://127.0.0.1:9099/_/review?artifact=<artifact-id>
 ```
 
@@ -107,7 +114,7 @@ python3 .claude/skills/artifact-serve/scripts/artifact-serve.py <verb> ...
 ## Read reviewer feedback back
 
 ```bash
-agent-workbench artifact feedback --artifact <id>
+$AW artifact feedback --artifact <id>
 ```
 
 Returns JSON `{artifact_id, pushes[], threads[], comments[]}`. Each thread
@@ -138,10 +145,10 @@ human's pins + comments after they review.
 - Entries always symlinks to `--src` (no copy mode). Literal `--src` path preserved (no symlink-chain dereference).
 - Wipes on reboot.
 
-### Feedback (durable, ~/.local/share/)
+### Feedback (durable, $HOME/.local/share/)
 
 ```
-~/.local/share/claude-artifacts/
+$HOME/.local/share/claude-artifacts/
 ├── feedback.db              # sqlite: artifact_index, comment, upload
 └── uploads/
     └── <comment-id>/
@@ -291,10 +298,10 @@ CREATE TABLE setting (
 
 1. **Tailscale exposure is tailnet-wide.** `expose` publishes served root to every tailnet device over HTTPS. Persists until `unexpose` or `tailscaled` restart. Anyone w/ tailnet key reads every pushed artifact **and can post comments + uploads**.
 2. **No symlink-target sandbox.** Pushing parent dir of secrets exposes secrets. Push narrowly.
-3. **`/tmp/` wipes on reboot.** All `.serve.pid`, `.serve.port`, staged dirs vanish. Feedback DB at `~/.local/share/` survives.
+3. **`/tmp/` wipes on reboot.** All `.serve.pid`, `.serve.port`, staged dirs vanish. Feedback DB at `$HOME/.local/share/` survives.
 4. **No auth, no access control.** Single-user assumption. Shared NixOS box → gate exposure behind `unexpose` between sessions. Anyone on tailnet can POST comments anonymously.
 5. **Log retention.** `.serve.log` records every request path. Wipes w/ `/tmp/` on reboot. Inspect: `tail -f /tmp/claude-artifacts/.serve.log`.
-6. **Upload disk usage unbounded.** Feedback uploads accumulate at `~/.local/share/claude-artifacts/uploads/`. No auto-cleanup. Remove per-comment dirs manually or wipe entire `uploads/` when reviewing is done.
+6. **Upload disk usage unbounded.** Feedback uploads accumulate at `$HOME/.local/share/claude-artifacts/uploads/`. No auto-cleanup. Remove per-comment dirs manually or wipe entire `uploads/` when reviewing is done.
 7. **No CSRF guard on POST.** Browser on the tailnet can be tricked into POSTing comments. Low risk on a single-user tailnet; consider before exposing to a multi-user tailnet.
 
 ## Exit codes
@@ -335,9 +342,10 @@ works as user.
 
 ## Notes
 
-- Feedback DB + uploads are durable at `~/.local/share/claude-artifacts/`;
+- Feedback DB + uploads are durable at `$HOME/.local/share/claude-artifacts/`;
   the staging root `/tmp/claude-artifacts/` wipes on reboot (re-push after).
 - Container specifics (build context, quadlet install) live at
   `.claude/skills/artifact-serve/container/README.md`; the router
   SKILL.md's "Deploy + hardening" section is the current path for
-  building/installing via `agent-workbench deploy up`.
+  building/installing via
+  `$HOME/.claude/skills/agent-workbench/agent-workbench deploy up`.

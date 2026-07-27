@@ -5,8 +5,9 @@ bd board hub (init/add/sync/list/path/status) + bdui web front end
 `scripts/board-ui.sh`.
 
 ```bash
-agent-workbench bd add <name> [prefix]
-agent-workbench bd ui-up [REPO_DIR]        # prints the UI URL
+AW=$HOME/.claude/skills/agent-workbench/agent-workbench
+$AW bd add <name> [prefix]
+$AW bd ui-up [REPO_DIR]        # prints the UI URL
 ```
 
 `bd`'s `ui-*` verbs validate the hub board (`$HUB_ROOT/<name>/.beads`),
@@ -22,7 +23,8 @@ incidental-repo cleanup.
 There are two distinct ways to view a bd board, and they are not the
 same thing:
 
-- **`agent-workbench bd ui-up [REPO_DIR]`** -- bare-host, per-repo
+- **`$HOME/.claude/skills/agent-workbench/agent-workbench bd ui-up [REPO_DIR]`**
+  -- bare-host, per-repo
   dev-workstation tool. Scans a free port and shows one project's own
   board. Use this for ad-hoc local inspection of a single repo.
 - **`bdui` (the always-on compose/quadlet-managed service)** -- a
@@ -32,7 +34,7 @@ same thing:
   `http://127.0.0.1:3100/`; `deploy down` removes it if this bundle owns
   the installed quadlet. It runs with `UserNS=keep-id` so the
   container's user maps to the real host user, matching ownership of
-  the bind-mounted `~/.beads-hub` board files (0700/0600). It serves the
+  the bind-mounted `$HOME/.beads-hub` board files (0700/0600). It serves the
   bd **hub aggregator** board (the cross-project view, not a single
   repo) via the `${HOME}/.beads-hub` mount, and is also reachable via
   `podman-compose -f docker-compose.yml up -d` (on by default in
