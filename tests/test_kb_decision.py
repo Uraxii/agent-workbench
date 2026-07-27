@@ -388,6 +388,33 @@ def test_find_decision_dirs_skips_a_symlinked_project(tmp_path: Path) -> None:
     assert dirs == [vault / "proj" / "decisions"]
 
 
+def test_find_decision_dirs_skips_a_symlinked_decisions_dir(
+    tmp_path: Path,
+) -> None:
+    """The project dir can be real and its `decisions` dir a symlink out,
+    so the whole path has to resolve inside the vault, not just its head."""
+    vault = tmp_path / "vault"
+    (vault / "proj").mkdir(parents=True)
+    outside = tmp_path / "outside" / "decisions"
+    outside.mkdir(parents=True)
+    (vault / "proj" / "decisions").symlink_to(outside)
+
+    assert kb_decision.find_decision_dirs(vault, None) == []
+
+
+def test_find_decision_dirs_rejects_a_named_project_that_escapes(
+    tmp_path: Path,
+) -> None:
+    vault = tmp_path / "vault"
+    (vault / "proj").mkdir(parents=True)
+    outside = tmp_path / "outside" / "decisions"
+    outside.mkdir(parents=True)
+    (vault / "proj" / "decisions").symlink_to(outside)
+
+    with pytest.raises(ValueError, match="outside the vault"):
+        kb_decision.find_decision_dirs(vault, "proj")
+
+
 def test_find_notes_for_topic_skips_a_symlinked_note(tmp_path: Path) -> None:
     decision_dir = tmp_path / "vault" / "proj" / "decisions"
     decision_dir.mkdir(parents=True)

@@ -188,14 +188,20 @@ def find_decision_dirs(kb_home: Path, project: str | None) -> list[Path]:
     for entry in sorted(kb_home.iterdir()):
         if not entry.is_dir() or entry.name in VAULT_OWN_DIRS:
             continue
-        # entry.is_dir() follows symlinks, so a symlinked project would
-        # otherwise let an audit read decision notes outside the vault.
-        if not entry.resolve().is_relative_to(root):
-            log.warning("skipping %s, it resolves outside %s", entry, root)
-            continue
         project_decisions_dir = entry / DECISIONS_DIR_NAME
-        if project_decisions_dir.exists():
-            dirs.append(project_decisions_dir)
+        if not project_decisions_dir.exists():
+            continue
+        # Resolving the WHOLE path, not just the project dir, is what
+        # matters: is_dir() follows symlinks, so either a symlinked
+        # project or a symlinked decisions dir inside a real project
+        # would otherwise let an audit read notes outside the vault.
+        if not project_decisions_dir.resolve().is_relative_to(root):
+            log.warning(
+                "skipping %s, it resolves outside %s",
+                project_decisions_dir, root,
+            )
+            continue
+        dirs.append(project_decisions_dir)
     return dirs
 
 
