@@ -97,15 +97,13 @@ the only code change made to `artifact-serve.py` for containerization.
 
 ## Bare-to-container cutover
 
-1. Build the image and install the quadlet (above).
-2. Stop the bare instance with its own `stop` verb:
+1. Stop the bare instance with its own `stop` verb:
    ```bash
    /path/to/repo/.claude/skills/artifact-serve/scripts/artifact-serve.py stop
    ```
    Note: `stop` also runs `tailscale serve --https=443 off` as part of its
    normal shutdown — re-run the `tailscale serve --bg ...` command above
    once the container is up, to point port 443 back at 9099.
-3. `systemctl --user start artifact-serve` (or let the already-running unit
-   take over the now-free port).
-4. Verify: `curl http://127.0.0.1:9099/`, an artifact URL, and that
-   `systemctl --user restart artifact-serve` survives cleanly.
+2. Bring the service up with compose (see Build and run above).
+3. Verify: `curl http://127.0.0.1:9099/`, an artifact URL, and that the
+   container survives a restart.
