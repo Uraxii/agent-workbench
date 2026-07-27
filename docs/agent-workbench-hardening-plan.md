@@ -1,8 +1,8 @@
 # agent-workbench container hardening + port plan
 
 Ready-to-apply spec for implementation-specialist. Covers the two
-Containerfiles + two quadlets, the review-serve.py env surface, the
-scope decisions (H3, review-serve blast radius), the delete list, and the
+Containerfiles + two quadlets, the artifact-serve.py env surface, the
+scope decisions (H3, artifact-serve blast radius), the delete list, and the
 M1/M3/M4/LOW fold-in mapping. Skeleton for the CLI lives at
 `.claude/skills/agent-workbench/`.
 
@@ -14,7 +14,7 @@ M1/M3/M4/LOW fold-in mapping. Skeleton for the CLI lives at
   SKILL.md that those two are non-functional once containerized and keep
   only `BEADS_HUB_DIR` as a real override. (Done in the env.example +
   SKILL.md already written.)
-- **review-serve blast radius:** Keep the broad `%h:%h:ro` mount (needed to
+- **artifact-serve blast radius:** Keep the broad `%h:%h:ro` mount (needed to
   resolve artifact symlinks whose targets are not known statically) but
   shadow the known credential dirs with empty tmpfs mounts and layer
   read-only rootfs + `cap-drop=ALL` + `no-new-privileges` + default
@@ -107,33 +107,33 @@ harmless.
 ```dockerfile
 FROM python@sha256:6771159cd4fa5d9bba1258caf0b82e6b73458c694d178ad97c5e925c2d0e1a91
 
-# review-serve.py is stdlib-only: no pip step. Layout mirrors the source
-# repo so review-serve.py's Path(__file__) asset/root math is unchanged.
+# artifact-serve.py is stdlib-only: no pip step. Layout mirrors the source
+# repo so artifact-serve.py's Path(__file__) asset/root math is unchanged.
 WORKDIR /app
-COPY scripts/review-serve.py .claude/skills/artifact-serve/scripts/review-serve.py
+COPY scripts/artifact-serve.py .claude/skills/artifact-serve/scripts/artifact-serve.py
 COPY assets/ .claude/skills/artifact-serve/assets/
 
 EXPOSE 9099
 
-# H2 fix: no baked --port; review-serve.py's run --port default reads
-# REVIEW_SERVE_PORT (see the env-surface change spec below), --host reads
-# REVIEW_SERVE_HOST (quadlet sets 0.0.0.0).
+# H2 fix: no baked --port; artifact-serve.py's run --port default reads
+# ARTIFACT_SERVE_PORT (see the env-surface change spec below), --host reads
+# ARTIFACT_SERVE_HOST (quadlet sets 0.0.0.0).
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-  CMD ["python3", "-c", "import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('REVIEW_SERVE_PORT','9099')+'/', timeout=3)"]
+  CMD ["python3", "-c", "import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('ARTIFACT_SERVE_PORT','9099')+'/', timeout=3)"]
 
-ENTRYPOINT ["python3", "/app/.claude/skills/artifact-serve/scripts/review-serve.py", "run"]
+ENTRYPOINT ["python3", "/app/.claude/skills/artifact-serve/scripts/artifact-serve.py", "run"]
 ```
 
-## File 4: .claude/skills/artifact-serve/container/review-serve.container (full new content)
+## File 4: .claude/skills/artifact-serve/container/artifact-serve.container (full new content)
 
 ```ini
 [Unit]
-Description=review-serve artifact review app
+Description=artifact-serve artifact review app
 After=network-online.target
 
 [Container]
-Image=localhost/review-serve:latest
-ContainerName=review-serve
+Image=localhost/artifact-serve:latest
+ContainerName=artifact-serve
 
 User=%U
 Group=%U
@@ -145,11 +145,11 @@ Environment=HOME=%h
 # workaround (which dropped all network-namespace isolation). Container
 # binds 0.0.0.0 internally; PublishPort restricts the host side to
 # loopback -- podman's normal, intended model, same as kb-serve.
-Environment=REVIEW_SERVE_HOST=0.0.0.0
-Environment=REVIEW_SERVE_PORT=9099
+Environment=ARTIFACT_SERVE_HOST=0.0.0.0
+Environment=ARTIFACT_SERVE_PORT=9099
 PublishPort=127.0.0.1:9099:9099
 
-# rw: throwaway staging root review-serve symlinks artifacts into.
+# rw: throwaway staging root artifact-serve symlinks artifacts into.
 Volume=/tmp/claude-artifacts:/tmp/claude-artifacts:rw
 # rw: durable feedback sqlite DB + uploaded review files.
 Volume=%h/.local/share/claude-artifacts:%h/.local/share/claude-artifacts:rw
@@ -187,17 +187,17 @@ WantedBy=default.target
 ```
 
 Removed vs current: `Network=host` (replaced by 0.0.0.0-bind + PublishPort).
-Added: REVIEW_SERVE_HOST/PORT env, PublishPort, the five credential-dir
+Added: ARTIFACT_SERVE_HOST/PORT env, PublishPort, the five credential-dir
 tmpfs shadows, ReadOnly/Tmpfs/NoNewPrivileges/DropCapability.
 
-> review-serve stages uploads/feedback under `/tmp/claude-artifacts` and
+> artifact-serve stages uploads/feedback under `/tmp/claude-artifacts` and
 > `~/.local/share/claude-artifacts` (both rw mounts) -- confirm those are
 > the only writable paths it needs before shipping read-only rootfs; if it
 > writes elsewhere on rootfs, add a targeted `Tmpfs=` for that path.
 
-## review-serve.py env-surface change (additive; do NOT rewrite the body)
+## artifact-serve.py env-surface change (additive; do NOT rewrite the body)
 
-review-serve.py currently hardcodes `127.0.0.1` and reads no host/port
+artifact-serve.py currently hardcodes `127.0.0.1` and reads no host/port
 env. Make host + port configurable, mirroring kb-serve.py's argparse
 pattern. Precise edits (line numbers per this worktree's copy):
 
@@ -218,8 +218,8 @@ pattern. Precise edits (line numbers per this worktree's copy):
 5. `build_parser` (3477): on BOTH the `run` (3515-3520) and `start`
    (3510-3512) subparsers:
    - change `--port` default `DEFAULT_PORT` ->
-     `int(os.environ.get("REVIEW_SERVE_PORT", DEFAULT_PORT))`.
-   - add `sp.add_argument("--host", default=os.environ.get("REVIEW_SERVE_HOST", "127.0.0.1"))`.
+     `int(os.environ.get("ARTIFACT_SERVE_PORT", DEFAULT_PORT))`.
+   - add `sp.add_argument("--host", default=os.environ.get("ARTIFACT_SERVE_HOST", "127.0.0.1"))`.
 
 Default behavior for bare-host CLI users is unchanged (no env -> 127.0.0.1,
 DEFAULT_PORT). `os` is already imported.
@@ -267,7 +267,7 @@ deploy/agent-workbench/README.md   # (being deleted; ensure nothing else links i
 | M1 | `cli/board.py::resolve_repo` | validate the hub board `$HUB_ROOT/<name>/.beads`, not stale `<repo>/.beads` |
 | M3 | `cli/kb.py::service_base_url` | honor `KB_SERVE_HOST` + `KB_SERVE_PORT` |
 | M4 | `cli/hub.py::init_board` / `_bd_env_without_beads_dir` | strip `BEADS_DIR` from the `bd init` child env |
-| H2 | Files 1-4 + review-serve.py env surface | port genuinely env-driven; drop `Network=host` |
+| H2 | Files 1-4 + artifact-serve.py env surface | port genuinely env-driven; drop `Network=host` |
 | H3 | env.example + SKILL.md | KB_HOME/ARTIFACTS_HOME documented non-functional in containers |
 | LOW clip TOCTOU | `scripts/kb-clip.py::build_note_path` | use `os.open(..., O_CREAT\|O_EXCL)` in the collision loop, return the fd/path atomically |
 | LOW curl error body | `cli/kb.py::_get` / `_post_json` | read + surface the HTTP error response body |

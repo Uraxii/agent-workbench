@@ -37,7 +37,7 @@ RUN npm ci --omit=dev
 EXPOSE 3000
 
 # No curl/wget guaranteed in node:22-slim; a plain node http GET mirrors
-# kb-serve/review-serve's python3-urllib healthcheck pattern.
+# kb-serve/artifact-serve's python3-urllib healthcheck pattern.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
   CMD ["node", "-e", "require('http').get({host:'127.0.0.1',port:process.env.PORT||3000,path:'/'},res=>process.exit(res.statusCode<400?0:1)).on('error',()=>process.exit(1))"]
 
