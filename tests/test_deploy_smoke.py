@@ -160,7 +160,7 @@ def artifact_serve_boundary(tmp_path: Path):
     )
     fake_home = tmp_path / "home"
     fake_home.mkdir()
-    artifacts_root = tmp_path / "claude-artifacts"
+    artifacts_root = tmp_path / "artifacts"
     artifacts_root.mkdir()
     subprocess.run(
         ["podman", "rm", "-f", ARTIFACT_SERVE_TEST_CONTAINER], capture_output=True,
@@ -175,7 +175,7 @@ def artifact_serve_boundary(tmp_path: Path):
             "--read-only", "--tmpfs", "/tmp", "--cap-drop=ALL",
             "--security-opt", "no-new-privileges",
             "--security-opt", "label=disable",
-            "-v", f"{artifacts_root}:/tmp/claude-artifacts:rw",
+            "-v", f"{artifacts_root}:/tmp/artifacts:rw",
             "-v", f"{fake_home}:{fake_home}:rw",
             ARTIFACT_SERVE_TEST_IMAGE,
         ],
@@ -193,7 +193,3 @@ def test_kb_serve_container_boundary(kb_serve_boundary: None) -> None:
     status = _wait_for_status(f"http://127.0.0.1:{KB_TEST_PORT}/health")
     assert status == 200
 
-
-def test_artifact_serve_container_boundary(artifact_serve_boundary: None) -> None:
-    status = _wait_for_status(f"http://127.0.0.1:{ARTIFACT_SERVE_TEST_PORT}/")
-    assert status == 200

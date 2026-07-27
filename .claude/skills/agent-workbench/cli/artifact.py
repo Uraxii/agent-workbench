@@ -223,9 +223,10 @@ def cmd_status(args: argparse.Namespace) -> int:
     artifacts_url = f"{base}/_/api/artifacts"
     try:
         health = _json_request(health_url)
-        artifacts = _json_request(artifacts_url)
+        artifact_payload = _json_request(artifacts_url)
     except ArtifactRequestError as exc:
         url = health_url if "health" not in locals() else artifacts_url
         return _print_service_error("status", url, exc)
+    artifacts = artifact_payload.get("artifacts") if isinstance(artifact_payload, dict) else artifact_payload
     print(json.dumps({"endpoint": base, "health": health, "artifacts": artifacts}, sort_keys=True))
     return 0

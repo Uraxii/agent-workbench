@@ -4,32 +4,21 @@ from __future__ import annotations
 
 import io
 import tarfile
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 from django.db import connection
 from django.test import Client, override_settings
 
-from artifact_review import artifact_paths
+from artifact_review import artifact_paths, publish_policy, views_api
 from artifact_review.feedback_database import ensure_feedback_schema
 from artifact_review.models import ArtifactIndex, Reply, Setting, Thread, Upload
 from artifact_review.response_headers import APP_CSP, ARTIFACT_CSP
-from artifact_review.upload_validation import MAX_ARCHIVE_BYTES
-
-
-@pytest.fixture(autouse=True)
-def clean_database() -> None:
-    """Ensure unmanaged sqlite tables exist and start empty."""
-    ensure_feedback_schema()
-    Upload.objects.all().delete()
-    Reply.objects.all().delete()
-    Thread.objects.all().delete()
-    ArtifactIndex.objects.all().delete()
-    Setting.objects.exclude(key="schema_version").delete()
 
 
 @pytest.fixture
-def roots(tmp_path: Path):
+def roots(tmp_path: Path) -> Iterator[tuple[Path, Path, Path]]:
     """Provide isolated configured roots."""
     stage_root = tmp_path / "stage"
     feedback_root = tmp_path / "feedback"
@@ -42,8 +31,28 @@ def roots(tmp_path: Path):
         ARTIFACT_SERVE_FEEDBACK_ROOT=feedback_root,
         ARTIFACT_SERVE_SPA_ROOT=spa_root,
         ARTIFACT_SERVE_PUBLISH_ENABLED="1",
+        DATABASES={
+            "default": {
+                "ENGINE": "django.db.backends.sqlite3",
+                "NAME": str(feedback_root / "feedback.db"),
+                "OPTIONS": {"timeout": 10},
+                "TEST": {"NAME": str(feedback_root / "feedback-test.db")},
+            }
+        },
     ):
         yield stage_root, feedback_root, spa_root
+
+
+@pytest.fixture(autouse=True)
+def clean_database(roots: tuple[Path, Path, Path], db: object) -> None:
+    """Ensure unmanaged sqlite tables exist and start empty."""
+    del roots, db
+    ensure_feedback_schema()
+    Upload.objects.all().delete()
+    Reply.objects.all().delete()
+    Thread.objects.all().delete()
+    ArtifactIndex.objects.all().delete()
+    Setting.objects.exclude(key="schema_version").delete()
 
 
 def test_unmanaged_models_match_feedback_schema_v2() -> None:
@@ -167,14 +176,17 @@ def test_publish_rejects_symlink_member(client: Client, roots: tuple[Path, Path,
     assert response.json()["reason"] == "unsupported_member_type"
 
 
-def test_publish_rejects_oversize_archive(client: Client, roots: tuple[Path, Path, Path]) -> None:
-    """Content-Length larger than the archive limit is rejected before publish."""
-    archive = io.BytesIO(b"not a tar")
-    archive.name = "artifact.tar"
+def test_publish_rejects_oversize_archive(
+    client: Client,
+    roots: tuple[Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A real request body larger than the archive limit is rejected before publish."""
+    archive = _tar_bytes({"index.html": b"x"})
+    monkeypatch.setattr(publish_policy, "MAX_ARCHIVE_BYTES", len(archive.getvalue()) - 1)
     response = client.post(
         "/_/api/publish",
         {"project": "demo", "as": "shot", "archive": archive},
-        CONTENT_LENGTH=str(MAX_ARCHIVE_BYTES + 1),
     )
 
     assert response.status_code == 413
@@ -187,6 +199,30 @@ def test_publish_rejects_bad_project_name(client: Client, roots: tuple[Path, Pat
 
     assert response.status_code == 400
     assert response.json()["reason"] == "bad_artifact_name"
+
+
+def test_publish_write_failure_returns_json_error(
+    client: Client,
+    roots: tuple[Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Filesystem failures during publish return a machine-readable JSON 500."""
+    stage_root, _, _ = roots
+    response = _publish(client, {"index.html": b"old"})
+    assert response.status_code == 201
+
+    def raise_os_error(stage_root: Path, project: str, subdir: str, temp_path: Path, artifact_id: str) -> None:
+        del stage_root, project, subdir, temp_path, artifact_id
+        raise OSError("permission denied")
+
+    monkeypatch.setattr(views_api, "_swap_published_tree", raise_os_error)
+    response = _publish(client, {"index.html": b"new"})
+
+    assert response.status_code == 500
+    assert response.headers["Content-Type"] == "application/json"
+    assert response.json()["reason"] == "publish_write_failed"
+    assert response.json()["detail"] == "permission denied"
+    assert (stage_root / "demo" / "shot" / "index.html").read_bytes() == b"old"
 
 
 def test_publish_rejects_url_field(client: Client, roots: tuple[Path, Path, Path]) -> None:
@@ -268,6 +304,28 @@ def test_app_routes_use_app_csp_and_artifact_routes_do_not(
     assert app_response.headers["Content-Security-Policy"] == APP_CSP
     assert artifact_response.headers["Content-Security-Policy"] == ARTIFACT_CSP
     assert artifact_response.headers["Content-Security-Policy"] != APP_CSP
+
+
+
+
+def test_publish_unexpected_exception_returns_json_error(
+    client: Client,
+    roots: tuple[Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unexpected exception in publish returns JSON 500, not HTML."""
+    def raise_unexpected(project: str, subdir: str, artifact_id: str, archive_bytes: bytes) -> dict:
+        del project, subdir, artifact_id, archive_bytes
+        raise RuntimeError("unexpected database error")
+
+    monkeypatch.setattr(views_api, "_publish_archive", raise_unexpected)
+    response = _publish(client, {"index.html": b"test"})
+
+    assert response.status_code == 500
+    assert response.headers["Content-Type"] == "application/json"
+    assert response.json()["reason"] == "internal_error"
+    assert "traceback" not in response.text.lower()
+    assert "RuntimeError" not in response.text
 
 
 def _publish(

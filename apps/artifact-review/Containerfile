@@ -1,0 +1,32 @@
+FROM docker.io/library/node@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d AS spa-build
+
+WORKDIR /app/frontend
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend/ ./
+RUN npm run test && npm run build
+
+FROM python@sha256:6771159cd4fa5d9bba1258caf0b82e6b73458c694d178ad97c5e925c2d0e1a91 AS runtime
+
+ENV DJANGO_DEBUG=0 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    ARTIFACT_SERVE_PORT=9099
+
+WORKDIR /app/backend
+COPY backend/ ./
+RUN pip install --no-cache-dir .
+COPY --from=spa-build /app/backend/spa ./spa
+
+EXPOSE 9099
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+  CMD ["python3", "-c", "import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('ARTIFACT_SERVE_PORT','9099')+'/_/health', timeout=3)"]
+
+# H2 fix: do NOT bake --port. Gunicorn reads ARTIFACT_SERVE_PORT at runtime so
+# compose/quadlet port changes are not silently overridden by an image default.
+ENTRYPOINT ["gunicorn", "-c", "/app/backend/gunicorn.conf.py", "artifact_review_site.wsgi:application"]
+
+FROM runtime AS test
+
+RUN pip install --no-cache-dir ".[test]" && python -m pytest -q

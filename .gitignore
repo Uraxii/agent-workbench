@@ -3,6 +3,7 @@ __pycache__/
 *.pyo
 *.pyd
 /scripts/bdui-container/node_modules/
+apps/artifact-review/backend/spa/
 .claudex-worktrees/
 .claude/worktrees/
 spikes/frontend-directions/.render-unified/

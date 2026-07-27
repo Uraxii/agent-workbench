@@ -307,6 +307,29 @@ def test_dead_port_failures_name_url_and_os_error(verb: str, args: list[str], tm
     assert "Connection refused" in result.stderr or "Operation not permitted" in result.stderr
 
 
+def test_status_flattens_artifact_list(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    module = load_artifact_module()
+
+    def fake_json_request(url: str) -> object:
+        if url.endswith("/_/health"):
+            return {"status": "ok"}
+        if url.endswith("/_/api/artifacts"):
+            return {"artifacts": [{"artifact_id": "proj/item"}]}
+        raise AssertionError(url)
+
+    monkeypatch.setenv("ARTIFACT_SERVE_URL", "http://artifact.test")
+    monkeypatch.setattr(module, "_json_request", fake_json_request)
+
+    result = module.cmd_status(argparse.Namespace())
+
+    assert result == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "artifacts": [{"artifact_id": "proj/item"}],
+        "endpoint": "http://artifact.test",
+        "health": {"status": "ok"},
+    }
+
+
 def test_non_2xx_json_error_surfaces_reason(
     artifact_server: tuple[str, type[RecordingArtifactHandler]],
     tmp_path: Path,

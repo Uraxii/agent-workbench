@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import shutil
 import tarfile
 import time
@@ -19,6 +20,8 @@ from artifact_review.feedback_database import ensure_feedback_schema
 from artifact_review.models import Reply, Setting, Thread, Upload
 from artifact_review.response_headers import apply_app_headers, apply_artifact_headers
 from artifact_review.upload_validation import validate_archive_member
+
+logger = logging.getLogger(__name__)
 
 
 def api_settings(request: HttpRequest) -> JsonResponse:
@@ -141,18 +144,42 @@ def api_publish(request: HttpRequest) -> JsonResponse:
         archive = request.FILES.get("archive")
         if archive is None:
             return _json_error("archive_required", 400)
-        result = _publish_archive(
-            project=artifact_paths.validate_name(request.POST["project"]),
-            subdir=artifact_paths.validate_name(request.POST["as"]),
-            artifact_id=request.POST.get("artifact_id") or f"{request.POST['project']}/{request.POST['as']}",
-            archive_bytes=archive.read(),
-        )
+        project = artifact_paths.validate_name(request.POST["project"])
+        subdir = artifact_paths.validate_name(request.POST["as"])
+        destination = artifact_paths.safe_join(artifact_paths.stage_root(), f"{project}/{subdir}")
+        try:
+            result = _publish_archive(
+                project=project,
+                subdir=subdir,
+                artifact_id=request.POST.get("artifact_id") or f"{request.POST['project']}/{request.POST['as']}",
+                archive_bytes=archive.read(),
+            )
+        except OSError as exc:
+            logger.error("Publish write failed for %s: %s", destination, exc)
+            return apply_app_headers(
+                JsonResponse(
+                    {
+                        "error": "publish write failed",
+                        "reason": "publish_write_failed",
+                        "detail": str(exc),
+                    },
+                    status=500,
+                )
+            )
     except ssrf_guard.RemoteFetchRejected:
         return _json_error("remote_fetch_rejected", 400)
     except publish_policy.PublishPolicyError as exc:
         return _json_error(exc.reason, exc.status)
-    except (tarfile.TarError, OSError, ValueError) as exc:
+    except (tarfile.TarError, ValueError) as exc:
         return _json_error(str(exc), 400)
+    except Exception as exc:
+        logger.exception("Unexpected error in publish")
+        return apply_app_headers(
+            JsonResponse(
+                {"error": "server error", "reason": "internal_error"},
+                status=500,
+            )
+        )
     return apply_app_headers(JsonResponse(result, status=201))
 
 
@@ -270,3 +297,4 @@ __all__ = [
     "api_threads",
     "api_upload",
 ]
+

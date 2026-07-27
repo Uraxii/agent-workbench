@@ -233,7 +233,7 @@ def _ensure_data_dirs() -> None:
     only (H3: non-functional once containerized)."""
     kb_home = os.environ.get("KB_HOME", str(Path.home() / ".knowledgebase"))
     artifacts_home = os.environ.get(
-        "ARTIFACTS_HOME", str(Path.home() / ".local" / "share" / "claude-artifacts"),
+        "ARTIFACTS_HOME", str(Path.home() / ".local" / "share" / "artifacts"),
     )
     Path(kb_home).mkdir(parents=True, exist_ok=True)
     Path(artifacts_home).mkdir(parents=True, exist_ok=True)

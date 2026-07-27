@@ -10,8 +10,8 @@ import type {
   ArtifactSummary,
   ReviewRequestState,
   Thread,
-  ThreadListResponse,
 } from './api/artifactReviewTypes';
+import type { ThreadListResponse } from './api/artifactReviewSchemas';
 import { ThemeToggle } from './components/shell/ThemeToggle';
 import './styles/app.css';
 
