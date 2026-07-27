@@ -6,7 +6,7 @@ scope decisions (H3, artifact-serve blast radius), the delete list, and the
 M1/M3/M4/LOW fold-in mapping. Skeleton for the CLI lives at
 `.claude/skills/agent-workbench/`.
 
-## Scope-decision recommendations (tech-lead to `record-decision`)
+## Scope-decision recommendations (tech-lead to `kb decision record`)
 
 - **H3:** Do NOT try to make quadlets honor `KB_HOME` / `ARTIFACTS_HOME`
   (quadlet supports only `%h`, not arbitrary env substitution, so there is
