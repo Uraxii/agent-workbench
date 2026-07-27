@@ -103,7 +103,15 @@ def check_compose() -> Check:
     for label, binary, version_cmd in COMPOSE_CANDIDATES:
         if not shutil.which(binary):
             continue
-        result = subprocess.run(version_cmd, capture_output=True, check=False)
+        try:
+            result = subprocess.run(version_cmd, capture_output=True, check=False)
+        except OSError:
+            # The binary was on PATH a moment ago but could not be executed:
+            # a dangling symlink, a bad interpreter line, a lost mount. That
+            # is "present but not runnable", never a doctor crash -- doctor
+            # exists to report a broken machine, not to fall over on one.
+            broken.append(label)
+            continue
         (working if result.returncode == 0 else broken).append(label)
 
     if working:

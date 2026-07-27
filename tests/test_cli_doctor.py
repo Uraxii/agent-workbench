@@ -209,6 +209,27 @@ def test_compose_check_fails_when_binary_is_on_path_but_will_not_run(
     assert result.fix_hint != ""
 
 
+def test_compose_check_survives_a_binary_that_cannot_be_executed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A dangling symlink on PATH is "not runnable", not a doctor crash.
+
+    which() succeeds and the exec then fails with OSError; doctor must report
+    a broken machine rather than fall over on one.
+    """
+    def fake_run(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        raise FileNotFoundError(cmd[0])
+
+    monkeypatch.setattr(doctor.shutil, "which", _which_only("podman-compose"))
+    monkeypatch.setattr(doctor.subprocess, "run", fake_run)
+
+    result = doctor.check_compose()
+
+    assert result.ok is False
+    assert "not runnable: podman-compose" in result.detail
+    assert result.fix_hint != ""
+
+
 def test_compose_check_passes_but_names_the_broken_sibling(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
