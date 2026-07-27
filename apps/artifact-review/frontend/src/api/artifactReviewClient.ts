@@ -34,6 +34,22 @@ const jsonHeaders = {
   'Content-Type': 'application/json',
 } satisfies HeadersInit;
 
+const csrfHeaders = (): Record<string, string> => {
+  const cookie = document.cookie
+    .split(';')
+    .map((part) => part.trim())
+    .find((part) => part.startsWith('csrftoken='));
+  if (cookie === undefined) {
+    return {};
+  }
+  return { 'X-CSRFToken': decodeURIComponent(cookie.slice('csrftoken='.length)) };
+};
+
+const postHeaders = (headers: Record<string, string> = {}): HeadersInit => ({
+  ...csrfHeaders(),
+  ...headers,
+});
+
 const errorState = <T>(message: string): ReviewRequestState<T> => ({ status: 'error', message });
 
 type ParsedJsonState =
@@ -128,6 +144,7 @@ export const createThread = (input: CreateThreadFormInput): Promise<ReviewReques
   requestJson(
     fetch('/_/api/threads', {
       method: 'POST',
+      headers: postHeaders(),
       body: createThreadFormData(input),
     }),
     CreateThreadResponseSchema,
@@ -140,6 +157,7 @@ export const createReply = (
   requestJson(
     fetch(`/_/api/threads/${encodeURIComponent(String(threadId))}/replies`, {
       method: 'POST',
+      headers: postHeaders(),
       body: createReplyFormData(input),
     }),
     CreateReplyResponseSchema,
@@ -152,7 +170,7 @@ export const setThreadResolved = (
   requestJson(
     fetch(`/_/api/threads/${encodeURIComponent(String(id))}/resolve`, {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: postHeaders(jsonHeaders),
       body: JSON.stringify({ resolved }),
     }),
     ResolveThreadResponseSchema,
@@ -162,6 +180,7 @@ export const toggleThreadResolved = (id: number): Promise<ReviewRequestState<Res
   requestJson(
     fetch(`/_/api/threads/${encodeURIComponent(String(id))}/resolve`, {
       method: 'POST',
+      headers: postHeaders(),
     }),
     ResolveThreadResponseSchema,
   );

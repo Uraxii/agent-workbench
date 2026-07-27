@@ -6,8 +6,9 @@ export type ArtifactSummary = {
   readonly project: string;
   readonly subdir: string;
   readonly artifact_id: ArtifactId;
-  readonly last_pushed: string;
-  readonly entries: readonly unknown[];
+  readonly last_pushed: number;
+  readonly last_pushed_iso: string;
+  readonly entry_count: number;
 };
 
 export type ImageRegionAnchor = {

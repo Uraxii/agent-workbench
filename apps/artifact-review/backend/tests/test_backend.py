@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import connection
+from django.http import HttpResponse
 from django.test import Client, override_settings
 
 from artifact_review import artifact_paths, publish_policy, views_api
@@ -226,6 +227,34 @@ def test_publish_write_failure_returns_json_error(
     assert (stage_root / "demo" / "shot" / "index.html").read_bytes() == b"old"
 
 
+def test_publish_without_csrf_token_is_rejected(roots: tuple[Path, Path, Path]) -> None:
+    """CSRF middleware rejects unauthenticated local POSTs without a token."""
+    del roots
+    client = Client(enforce_csrf_checks=True)
+    response = client.post(
+        "/_/api/publish",
+        {"project": "demo", "as": "shot", "archive": _tar_bytes({"index.html": b"x"})},
+    )
+
+    assert response.status_code == 403
+
+
+def test_publish_with_valid_csrf_token_succeeds(roots: tuple[Path, Path, Path]) -> None:
+    """Clients that first obtain a CSRF cookie can publish."""
+    del roots
+    client = Client(enforce_csrf_checks=True)
+    token_response = client.get("/_/health")
+    csrf_token = token_response.cookies["csrftoken"].value
+
+    response = client.post(
+        "/_/api/publish",
+        {"project": "demo", "as": "shot", "archive": _tar_bytes({"index.html": b"x"})},
+        HTTP_X_CSRFTOKEN=csrf_token,
+    )
+
+    assert response.status_code == 201
+
+
 def test_publish_rejects_url_field(client: Client, roots: tuple[Path, Path, Path]) -> None:
     """SSRF guard rejects request fields that ask the server to fetch."""
     response = _publish(client, {"index.html": b"x"}, extra={"url": "http://127.0.0.1/x"})
@@ -251,7 +280,7 @@ def test_root_returns_missing_spa_500_with_named_path(client: Client, roots: tup
 
     assert response.status_code == 500
     assert response.json()["path"] == str(spa_root / "index.html")
-    assert response.headers["Content-Security-Policy"] == APP_CSP
+    _assert_app_security_headers(response)
 
 
 def test_root_returns_spa_shell_when_present(client: Client, roots: tuple[Path, Path, Path]) -> None:
@@ -263,7 +292,7 @@ def test_root_returns_spa_shell_when_present(client: Client, roots: tuple[Path, 
 
     assert response.status_code == 200
     assert b"<div id=\"root\"></div>" in b"".join(response.streaming_content)
-    assert response.headers["Content-Security-Policy"] == APP_CSP
+    _assert_app_security_headers(response)
 
 
 @pytest.mark.parametrize(
@@ -286,25 +315,81 @@ def test_artifact_scriptable_content_gets_sandbox_csp(
     response = client.get(f"/demo/shot/{filename}")
 
     assert response.status_code == 200
-    assert "sandbox" in response.headers["Content-Security-Policy"]
-    assert "script-src 'none'" in response.headers["Content-Security-Policy"]
-    assert response.headers["X-Content-Type-Options"] == "nosniff"
+    _assert_artifact_security_headers(response)
 
 
-def test_app_routes_use_app_csp_and_artifact_routes_do_not(
+def test_artifact_404_gets_sandbox_csp(client: Client, roots: tuple[Path, Path, Path]) -> None:
+    """Artifact misses still carry the untrusted-bytes policy."""
+    del roots
+    response = client.get("/demo/shot/nope.html")
+
+    assert response.status_code == 404
+    _assert_artifact_security_headers(response)
+
+
+def test_feedback_upload_gets_sandbox_csp(
     client: Client,
     roots: tuple[Path, Path, Path],
 ) -> None:
-    """App JSON routes carry APP_CSP and artifact routes carry ARTIFACT_CSP."""
-    publish_response = _publish(client, {"index.html": b"<h1>ok</h1>"})
-    assert publish_response.status_code == 201
+    """Feedback uploads are caller-supplied bytes and get artifact headers."""
+    del roots
+    thread_response = client.post(
+        "/_/api/threads",
+        {
+            "artifact": "demo/shot",
+            "sub_path": "",
+            "body": "A feedback",
+            "files": SimpleUploadedFile("note.txt", b"plain feedback", content_type="text/plain"),
+        },
+    )
+    assert thread_response.status_code == 201
+    upload_id = thread_response.json()["uploads"][0]["id"]
 
-    app_response = client.get("/_/health")
-    artifact_response = client.get("/demo/shot/index.html")
+    response = client.get(f"/_/api/uploads/{upload_id}")
 
-    assert app_response.headers["Content-Security-Policy"] == APP_CSP
-    assert artifact_response.headers["Content-Security-Policy"] == ARTIFACT_CSP
-    assert artifact_response.headers["Content-Security-Policy"] != APP_CSP
+    assert response.status_code == 200
+    _assert_artifact_security_headers(response)
+
+
+def test_feedback_upload_rejects_active_content(
+    client: Client,
+    roots: tuple[Path, Path, Path],
+) -> None:
+    """Feedback uploads reject active-content extensions."""
+    del roots
+    response = client.post(
+        "/_/api/threads",
+        {
+            "artifact": "demo/shot",
+            "sub_path": "",
+            "body": "A feedback",
+            "files": SimpleUploadedFile("note.html", b"<script>1</script>", content_type="text/html"),
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["reason"] == "bad_upload_extension"
+
+
+def test_app_routes_use_app_csp_and_never_artifact_csp(
+    client: Client,
+    roots: tuple[Path, Path, Path],
+) -> None:
+    """SPA, health, and JSON API routes carry only APP_CSP."""
+    _, _, spa_root = roots
+    (spa_root / "index.html").write_text("<!doctype html><div id=\"root\"></div>", encoding="utf-8")
+
+    responses = [
+        client.get("/"),
+        client.get("/_/health"),
+        client.get("/_/api/settings"),
+        client.get("/_/api/artifacts"),
+        client.get("/_/api/threads?artifact=demo%2Fshot"),
+    ]
+
+    for response in responses:
+        assert response.status_code == 200
+        _assert_app_security_headers(response)
 
 
 def test_threads_filter_by_required_artifact_and_echo_scope(client: Client, roots: tuple[Path, Path, Path]) -> None:
@@ -427,6 +512,33 @@ def test_feedback_mutation_response_keys_match_contract(client: Client, roots: t
     assert list(resolve.json().keys()) == ["id", "resolved"]
 
 
+def test_artifacts_response_keys_match_contract(client: Client, roots: tuple[Path, Path, Path]) -> None:
+    """Artifact listing returns the top-level keys validated by clients."""
+    del roots
+    publish = _publish(client, {"index.html": b"<h1>ok</h1>"})
+    assert publish.status_code == 201
+
+    response = client.get("/_/api/artifacts")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert list(data.keys()) == ["artifacts"]
+    artifact = data["artifacts"][0]
+    assert list(artifact.keys()) == [
+        "project",
+        "subdir",
+        "artifact_id",
+        "last_pushed",
+        "last_pushed_iso",
+        "entry_count",
+    ]
+    assert artifact["project"] == "demo"
+    assert artifact["subdir"] == "shot"
+    assert artifact["artifact_id"] == "demo/shot"
+    assert isinstance(artifact["last_pushed"], int)
+    assert artifact["last_pushed_iso"].endswith("Z")
+    assert artifact["entry_count"] == 1
+
 
 def test_publish_unexpected_exception_returns_json_error(
     client: Client,
@@ -472,3 +584,23 @@ def _tar_bytes(members: dict[str, bytes]) -> io.BytesIO:
     archive.seek(0)
     archive.name = "artifact.tar"
     return archive
+
+
+def _assert_artifact_security_headers(response: HttpResponse) -> None:
+    csp = response.headers["Content-Security-Policy"]
+    assert csp == ARTIFACT_CSP
+    assert _csp_directive_present(csp, "sandbox")
+    assert "script-src 'none'" in csp
+    assert response.headers["X-Content-Type-Options"] == "nosniff"
+    assert csp != APP_CSP
+
+
+def _assert_app_security_headers(response: HttpResponse) -> None:
+    csp = response.headers["Content-Security-Policy"]
+    assert csp == APP_CSP
+    assert csp != ARTIFACT_CSP
+    assert response.headers["X-Content-Type-Options"] == "nosniff"
+
+
+def _csp_directive_present(csp: str, directive: str) -> bool:
+    return directive in {part.strip() for part in csp.split(";")}

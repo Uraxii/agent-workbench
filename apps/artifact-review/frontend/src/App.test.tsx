@@ -6,8 +6,9 @@ const artifact = {
   project: 'demo',
   subdir: 'report',
   artifact_id: 'demo/report',
-  last_pushed: '2026-07-27T12:00:00Z',
-  entries: [],
+  last_pushed: 1785153600,
+  last_pushed_iso: '2026-07-27T12:00:00Z',
+  entry_count: 1,
 };
 
 const jsonResponse = (payload: unknown, status = 200): Response =>
@@ -20,6 +21,13 @@ const threadListResponse = {
   artifact_id: artifact.artifact_id,
   sub_path: '',
   threads: [],
+};
+
+const sandboxTokenCount = (frame: HTMLIFrameElement): number => {
+  if (frame.sandbox !== undefined) {
+    return frame.sandbox.length;
+  }
+  return frame.getAttribute('sandbox')?.trim().split(/\s+/).filter(Boolean).length ?? 0;
 };
 
 describe('App', () => {
@@ -40,6 +48,7 @@ describe('App', () => {
 
     expect(await screen.findByText('demo/report', { selector: '.artifact-title' })).not.toBeNull();
     expect(screen.getByText('demo/report', { selector: '.artifact-meta' })).not.toBeNull();
+    expect(screen.getByText('1 entry')).not.toBeNull();
   });
 
   it('renders an empty artifact index state', async () => {
@@ -70,7 +79,10 @@ describe('App', () => {
 
     render(<App />);
 
-    const frame = await screen.findByTitle('Artifact demo/report');
+    const frame = (await screen.findByTitle('Artifact demo/report')) as HTMLIFrameElement;
+    expect(frame.hasAttribute('sandbox')).toBe(true);
     expect(frame.getAttribute('sandbox')).toBe('');
+    expect(frame.getAttribute('sandbox')?.trim()).toBe('');
+    expect(sandboxTokenCount(frame)).toBe(0);
   });
 });

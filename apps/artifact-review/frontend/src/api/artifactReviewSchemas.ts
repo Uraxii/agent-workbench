@@ -39,8 +39,9 @@ export const ArtifactSummarySchema: z.ZodType<ArtifactSummary> = z.object({
   project: z.string(),
   subdir: z.string(),
   artifact_id: z.string(),
-  last_pushed: z.string(),
-  entries: z.array(z.unknown()),
+  last_pushed: z.number().int(),
+  last_pushed_iso: z.string(),
+  entry_count: z.number().int(),
 });
 
 export const ArtifactListResponseSchema = z.object({

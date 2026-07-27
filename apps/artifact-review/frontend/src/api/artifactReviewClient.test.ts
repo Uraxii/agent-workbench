@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { getArtifacts, getThreadsByArtifact } from './artifactReviewClient';
+import { createThread, getArtifacts, getThreadsByArtifact } from './artifactReviewClient';
+import {
+  ArtifactListResponseSchema,
+  CreateReplyResponseSchema,
+  CreateThreadResponseSchema,
+  ResolveThreadResponseSchema,
+  ThreadListResponseSchema,
+} from './artifactReviewSchemas';
 
 const threadPayload = {
   id: 123,
@@ -29,8 +36,26 @@ const jsonResponse = (payload: unknown, status = 200): Response =>
     headers: { 'Content-Type': 'application/json' },
   });
 
+// Captured from a real running artifact review service.
+const capturedArtifactListPayload = '{"artifacts": [{"project": "e2e", "subdir": "single", "artifact_id": "e2e/single", "last_pushed": 1785192638, "last_pushed_iso": "2026-07-27T22:50:38Z", "entry_count": 1}]}';
+
+// Captured from a real running artifact review service.
+const capturedThreadListPayload = '{"artifact_id": "e2e/single", "sub_path": "", "threads": [{"id": 1, "sub_path": "", "anchor_kind": "page", "anchor": null, "resolved": false, "author": "lead", "created_at": 1785192638, "created_at_iso": "2026-07-27T22:50:38Z", "bd_ticket": null, "replies": [{"id": 1, "body": "first note on single", "author": "lead", "created_at": 1785192638, "created_at_iso": "2026-07-27T22:50:38Z", "uploads": []}]}]}';
+
+// Captured from a real running artifact review service.
+const capturedCreateThreadPayload = '{"thread_id": 1, "reply_id": 1, "artifact_id": "e2e/single", "sub_path": "", "anchor_kind": "page", "uploads": []}';
+
+// Captured from a real running artifact review service.
+const capturedCreateReplyPayload = '{"reply_id": 2, "thread_id": 1, "uploads": []}';
+
+// Captured from a real running artifact review service.
+const capturedResolveThreadPayload = '{"id": 1, "resolved": true}';
+
+const parsePayload = (payload: string): unknown => JSON.parse(payload);
+
 describe('artifactReviewClient', () => {
   afterEach(() => {
+    document.cookie = 'csrftoken=; Max-Age=0; path=/';
     vi.unstubAllGlobals();
   });
 
@@ -42,8 +67,9 @@ describe('artifactReviewClient', () => {
             project: 'demo',
             subdir: 'image-set',
             artifact_id: 'demo/image-set',
-            last_pushed: '2026-07-27T12:00:00Z',
-            entries: [],
+            last_pushed: 1785153600,
+            last_pushed_iso: '2026-07-27T12:00:00Z',
+            entry_count: 1,
           },
         ],
       }),
@@ -119,5 +145,29 @@ describe('artifactReviewClient', () => {
       expect(result.message).not.toContain('ZodError');
       expect(result.message).not.toContain('stack');
     }
+  });
+
+  it('parses captured backend response contracts through zod schemas', () => {
+    expect(ArtifactListResponseSchema.safeParse(parsePayload(capturedArtifactListPayload)).success).toBe(true);
+    expect(ThreadListResponseSchema.safeParse(parsePayload(capturedThreadListPayload)).success).toBe(true);
+    expect(CreateThreadResponseSchema.safeParse(parsePayload(capturedCreateThreadPayload)).success).toBe(true);
+    expect(CreateReplyResponseSchema.safeParse(parsePayload(capturedCreateReplyPayload)).success).toBe(true);
+    expect(ResolveThreadResponseSchema.safeParse(parsePayload(capturedResolveThreadPayload)).success).toBe(true);
+  });
+
+  it('sends CSRF token from the cookie on POST requests', async () => {
+    document.cookie = 'csrftoken=csrf-token-123; path=/';
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(parsePayload(capturedCreateThreadPayload), 201));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await createThread({ artifact: 'demo/report', body: 'note' });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/_/api/threads',
+      expect.objectContaining({
+        method: 'POST',
+        headers: { 'X-CSRFToken': 'csrf-token-123' },
+      }),
+    );
   });
 });

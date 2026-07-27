@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict
 from datetime import UTC, datetime
 import json
 from typing import Any
@@ -61,7 +60,14 @@ def thread_to_json(thread: Thread) -> dict[str, Any]:
 
 def artifact_to_json(artifact: ArtifactSummary) -> dict[str, Any]:
     """Serialize an artifact summary."""
-    return asdict(artifact)
+    return {
+        "project": artifact.project,
+        "subdir": artifact.subdir,
+        "artifact_id": artifact.artifact_id,
+        "last_pushed": artifact.last_pushed,
+        "last_pushed_iso": _created_at_iso(artifact.last_pushed),
+        "entry_count": artifact.entry_count,
+    }
 
 
 def _anchor_to_json(thread: Thread) -> Any:

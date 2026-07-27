@@ -46,7 +46,7 @@ class RecordingArtifactHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.path == "/_/health":
-            self._send_json(200, {"status": "ok"})
+            self._send_json(200, {"status": "ok"}, csrf_cookie=True)
         elif self.path == "/_/api/artifacts":
             self._send_json(200, {"artifacts": [{"artifact_id": "proj/item"}]})
         elif self.path == "/_/api/threads?artifact=proj%2Fitem":
@@ -84,13 +84,17 @@ class RecordingArtifactHandler(BaseHTTPRequestHandler):
             "as": fields.get("as"),
             "artifact_id": fields.get("artifact_id"),
             "archive": fields["archive"],
+            "csrf": self.headers.get("X-CSRFToken"),
+            "cookie": self.headers.get("Cookie"),
         })
 
-    def _send_json(self, status: int, payload: dict[str, object]) -> None:
+    def _send_json(self, status: int, payload: dict[str, object], csrf_cookie: bool = False) -> None:
         body = json.dumps(payload).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+        if csrf_cookie:
+            self.send_header("Set-Cookie", "csrftoken=server-csrf-token; Path=/")
         self.end_headers()
         self.wfile.write(body)
 
@@ -146,6 +150,15 @@ class FakeResponse:
         return self.body
 
 
+class FakeCsrfOpener:
+    def __init__(self, handler: type[RecordingArtifactHandler]) -> None:
+        self.handler = handler
+
+    def open(self, request: Request, timeout: int) -> FakeResponse:
+        request.add_unredirected_header("Cookie", "csrftoken=mock-csrf-token")
+        return fake_urlopen(self.handler)(request, timeout)
+
+
 def run_publish(
     args: list[str],
     base_url: str,
@@ -158,6 +171,7 @@ def run_publish(
     module = load_artifact_module()
     monkeypatch.setenv("ARTIFACT_SERVE_URL", base_url)
     monkeypatch.setattr(module, "urlopen", fake_urlopen(handler))
+    monkeypatch.setattr(module, "_csrf_opener", lambda base, post: (FakeCsrfOpener(handler), "mock-csrf-token"))
     namespace = argparse.Namespace(project=args[2], src=args[4], as_name=None, artifact_id=None)
     if "--as" in args:
         namespace.as_name = args[args.index("--as") + 1]
@@ -196,6 +210,8 @@ def fake_urlopen(handler: type[RecordingArtifactHandler]):
             "as": fields.get("as"),
             "artifact_id": fields.get("artifact_id"),
             "archive": fields["archive"],
+            "csrf": header_items.get("X-csrftoken"),
+            "cookie": header_items.get("Cookie"),
         })
         return FakeResponse(json.dumps({"artifact_id": "proj/item", "url": "/proj/item/"}).encode())
     return _fake_urlopen
@@ -286,6 +302,24 @@ def test_publish_posts_to_url_without_local_artifact_writes(
     assert handler.publishes[0]["path"] == "/_/api/publish"
     assert not tmp_artifacts.exists()
     assert not home_artifacts.exists()
+
+
+def test_publish_sends_csrf_header_and_cookie(
+    artifact_server: tuple[str, type[RecordingArtifactHandler]],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    base_url, handler = artifact_server
+    source = tmp_path / "file.txt"
+    source.write_text("body", encoding="utf-8")
+
+    result = run_publish(["publish", "--project", "proj", "--src", str(source)], base_url, handler, monkeypatch, capsys)
+
+    expected_token = "mock-csrf-token" if base_url == "mock://artifact" else "server-csrf-token"
+    assert result.returncode == 0
+    assert handler.publishes[0]["csrf"] == expected_token
+    assert f"csrftoken={expected_token}" in str(handler.publishes[0]["cookie"])
 
 
 @pytest.mark.parametrize("verb,args", [

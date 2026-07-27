@@ -7,16 +7,19 @@ from pathlib import Path
 
 from django.conf import settings
 from django.http import FileResponse, HttpRequest, HttpResponse, JsonResponse
+from django.views.decorators.csrf import ensure_csrf_cookie
 
 from artifact_review import artifact_paths
 from artifact_review.response_headers import apply_app_headers, apply_artifact_headers
 
 
+@ensure_csrf_cookie
 def health(request: HttpRequest) -> JsonResponse:
     """Return the container health response."""
     return apply_app_headers(JsonResponse({"status": "ok"}))
 
 
+@ensure_csrf_cookie
 def root_index(request: HttpRequest) -> HttpResponse:
     """Return the React SPA shell."""
     return _spa_shell_response()
@@ -61,6 +64,7 @@ def spa_asset(request: HttpRequest, rel: str) -> HttpResponse:
     return _file_response(target_path, artifact=False)
 
 
+@ensure_csrf_cookie
 def spa_index(request: HttpRequest, rel: str) -> HttpResponse:
     """Return the React SPA shell for a frontend route."""
     if rel.startswith("_/") or rel.startswith("spa/"):

@@ -10,10 +10,11 @@ import posixpath
 import sys
 import tarfile
 import uuid
+from http.cookiejar import CookieJar
 from pathlib import Path, PurePosixPath
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+from urllib.request import HTTPCookieProcessor, OpenerDirector, Request, build_opener, urlopen
 
 __all__ = ["REQUEST_TIMEOUT_SECONDS", "register"]
 
@@ -69,10 +70,12 @@ def _json_request(
     *,
     data: bytes | None = None,
     headers: dict[str, str] | None = None,
+    opener: OpenerDirector | None = None,
 ) -> object:
     request = Request(url, data=data, headers=headers or {}, method="POST" if data else "GET")
     try:
-        with urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+        open_request = opener.open if opener else urlopen
+        with open_request(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
             body = response.read()
     except HTTPError as exc:
         body = exc.read()
@@ -86,6 +89,20 @@ def _json_request(
         return json.loads(body.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ArtifactRequestError(f"invalid JSON response: {exc}") from exc
+
+
+def _csrf_opener(base_url: str, post_url: str) -> tuple[OpenerDirector, str]:
+    jar = CookieJar()
+    opener = build_opener(HTTPCookieProcessor(jar))
+    health_url = f"{base_url}/_/health"
+    try:
+        _json_request(health_url, opener=opener)
+    except ArtifactRequestError as exc:
+        raise ArtifactRequestError(f"CSRF token request failed for {health_url}: {exc}") from exc
+    for cookie in jar:
+        if cookie.name == "csrftoken":
+            return opener, cookie.value
+    raise ArtifactRequestError(f"missing CSRF token from {health_url} before POST {post_url}")
 
 
 def _http_error_detail(exc: HTTPError, body: bytes) -> str:
@@ -206,7 +223,12 @@ def cmd_publish(args: argparse.Namespace) -> int:
         fields["artifact_id"] = args.artifact_id
     body, content_type = _multipart(fields, "archive", "artifact.tar", archive)
     headers = {"Content-Type": content_type, "Content-Length": str(len(body))}
-    return _run_json_command("publish", url, data=body, headers=headers)
+    try:
+        opener, csrf_token = _csrf_opener(_base_url(), url)
+    except ArtifactRequestError as exc:
+        return _print_service_error("publish", url, exc)
+    headers["X-CSRFToken"] = csrf_token
+    return _run_json_command("publish", url, data=body, headers=headers, opener=opener)
 
 
 def cmd_feedback(args: argparse.Namespace) -> int:

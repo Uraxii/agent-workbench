@@ -35,10 +35,13 @@ const artifactUrl = (artifact: ArtifactSummary): string => {
 const endpointError = (endpoint: string, message: string): string =>
   `${endpoint} failed: ${message}`;
 
-const formatPublishedTime = (lastPushed: string): string => {
-  const date = new Date(lastPushed);
+const formatEntryCount = (entryCount: number): string =>
+  entryCount === 1 ? '1 entry' : `${entryCount} entries`;
+
+const formatIsoTime = (isoTime: string): string => {
+  const date = new Date(isoTime);
   if (Number.isNaN(date.getTime())) {
-    return lastPushed;
+    return isoTime;
   }
   return new Intl.DateTimeFormat(undefined, {
     dateStyle: 'medium',
@@ -87,7 +90,8 @@ function ArtifactIndex(props: {
           >
             <span className="artifact-title">{artifact.project}/{artifact.subdir}</span>
             <span className="artifact-meta">{artifact.artifact_id}</span>
-            <span className="artifact-meta">{formatPublishedTime(artifact.last_pushed)}</span>
+            <span className="artifact-meta">{formatEntryCount(artifact.entry_count)}</span>
+            <span className="artifact-meta">{formatIsoTime(artifact.last_pushed_iso)}</span>
           </button>
         </li>
       ))}
@@ -222,7 +226,7 @@ function ThreadCard(props: {
       {thread.replies.map((reply) => (
         <section className="reply" key={reply.id}>
           <p>{reply.body}</p>
-          <footer>{reply.author ?? 'Unknown'} at {formatPublishedTime(reply.created_at_iso)}</footer>
+          <footer>{reply.author ?? 'Unknown'} at {formatIsoTime(reply.created_at_iso)}</footer>
         </section>
       ))}
       <ReplyForm threadId={thread.id} onCreated={onChanged} />
