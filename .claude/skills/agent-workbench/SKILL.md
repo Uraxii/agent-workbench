@@ -25,53 +25,37 @@ container, never inside its image.
 | `install` | (new) | (un)install this repo's skill into `~/.claude/skills/agent-workbench` (`--link`/`--copy`/`--uninstall`) |
 | `init-workspace` | `scripts/init-agent-workspace.sh` | scaffold docs/kb + workstreams + bd board + reindex hook into a repo |
 
-### kb
+- `kb` -- see `modes/kb.md` for the full kb walkthrough (clip/put/query,
+  service-vs-in-process fallback, the kb-serve LLM endpoints).
+- `bd` -- see `modes/bd.md` for board-hub + bdui detail (bare-host
+  `ui-up` vs the always-on hub-aggregator `bdui` service).
+- `artifact` -- see `modes/artifact.md` for the artifact review app
+  (publish/feedback/serve/status), which now also carries everything the
+  retired standalone `artifact-serve` skill used to document.
+
+### deploy / install / init-workspace
 
 ```bash
-agent-workbench kb clip "<url>" --project <project>
-agent-workbench kb put <project> "<title>" --type note --source "<url>"  # body on stdin
-agent-workbench kb query "<terms>" --project <project> --type source
-agent-workbench kb index
-agent-workbench kb status
-```
-
-`clip` / `put` / `query` prefer the running kb-serve HTTP service (so the
-call also atomizes + reindexes) and fall back to an in-process kb-serve.py
-call when the service is down. Same behavior kb.sh had.
-
-### bd / artifact / install / init-workspace / deploy
-
-```bash
-agent-workbench bd add <name> [prefix]
-agent-workbench bd ui-up [REPO_DIR]        # prints the UI URL
-agent-workbench artifact publish --project <project> --src <path>
-agent-workbench artifact status
 agent-workbench install --link
 agent-workbench init-workspace [TARGET_DIR] [--prefix PREFIX]
 agent-workbench deploy up | down | status
 ```
 
+`install` (un)installs this repo's skill dir into
+`~/.claude/skills/agent-workbench`. `init-workspace` scaffolds
+`docs/kb/` + `workstreams/` + a bd board + the reindex hook into a target
+repo. `deploy` is detailed in "Deploy + hardening" below.
+
 ## How it differs from the old scripts
 
-- **Pure Python, single entrypoint.** The five separate shell scripts +
-  the bash deploy driver collapse into one executable with subcommands.
-  The `kb` family stays a thin facade over the existing
-  `scripts/kb-serve.py` (which already facades kb-index / kb-clip /
-  kb-atomize), and `artifact` is the same shape over
-  `scripts/artifact-serve.py`; the `bd` family (former `hub`/`board`) and
-  `init-workspace`/`deploy` are genuine rewrites.
-- **Audit fixes folded in:**
-  - `kb` honors `KB_SERVE_HOST` (not only `KB_SERVE_PORT`) and surfaces
-    the HTTP error body on failure instead of swallowing it.
-  - `bd`'s `ui-*` verbs validate the hub board (`$HUB_ROOT/<name>/.beads`),
-    not a stale repo-local `<repo>/.beads`.
-  - `bd`'s board-hub verbs run `bd init` with `BEADS_DIR` stripped from
-    the child env so an ambient value cannot redirect where the board is
-    written, and use a correctly-sensed `git_repo_preexisted` flag for
-    incidental-repo cleanup.
-- **The clip path preserves kb-clip.py's http/https scheme allowlist
-  verbatim** (it delegates to the same `check_url_scheme`), so `file://`
-  and other schemes stay rejected with zero new code.
+**Pure Python, single entrypoint.** The five separate shell scripts + the
+bash deploy driver collapse into one executable with subcommands. The
+`kb` family stays a thin facade over the existing `scripts/kb-serve.py`
+(which already facades kb-index / kb-clip / kb-atomize), and `artifact`
+is the same shape over `scripts/artifact-serve.py`; the `bd` family
+(former `hub`/`board`) and `init-workspace`/`deploy` are genuine
+rewrites. kb- and bd-specific audit fixes are documented in their own
+mode docs above.
 
 ## Deploy + hardening
 
@@ -89,7 +73,8 @@ the other two, not compose-only: `deploy up` builds
 and health-checks `http://127.0.0.1:3100/`; `deploy down` removes it if
 this bundle owns the installed quadlet. It runs with `UserNS=keep-id` so
 the container's user maps to the real host user, matching ownership of
-the bind-mounted `~/.beads-hub` board files (0700/0600).
+the bind-mounted `~/.beads-hub` board files (0700/0600). See `modes/bd.md`
+for how this compares to the bare-host `bd ui-up`.
 
 Optional data-root overrides live in
 `.claude/skills/agent-workbench/agent-workbench.env.example`. NOTE:
@@ -101,7 +86,8 @@ comments.
 **artifact-serve's network artifact-publish endpoint is NOT shipped.** It
 is held back pending an XSS lockdown (tracked as `agent-workbench-wxh`).
 As deployed (quadlet or compose), artifact-serve is local/loopback-only
-(127.0.0.1-bound) -- do not assume or rely on a network publish path.
+(127.0.0.1-bound) -- do not assume or rely on a network publish path. See
+`modes/artifact.md` for the full detail on this holdback.
 
 ### docker-compose (portable alternative to the quadlets)
 
@@ -125,37 +111,9 @@ podman-compose --profile n8n -f docker-compose.yml up -d # adds n8n
 
 `bdui` (web front end for `bd`) is on by default in compose -- no profile
 gate, it comes up with every plain compose-up -- and is also
-`deploy`-managed as its own quadlet unit (see "Deploy + hardening"
-above); either path publishes at `http://127.0.0.1:3100`, built from
-`scripts/bdui-container/Containerfile`, and serves the bd hub aggregator
-board (the cross-project view, not a single repo) via the
-`${HOME}/.beads-hub` mount. This is distinct from the bare-host
-`agent-workbench bd ui-up <repo_dir>` subcommand above, which is a
-per-repo dev-workstation tool for viewing one project's own board on a
-scanned free port.
-
-## kb-serve LLM endpoints (agent-facing)
-
-Two optional, LLM-backed endpoints exist on the running kb-serve service
-(see `scripts/kb-serve.py`'s module docstring for exact behavior):
-
-- `POST /enrich` -- fills in a note's `question`/`summary` frontmatter
-  fields via the configured LLM. Gated by `KB_ENRICH` (must be `1`;
-  default `0` is a clean no-op, zero network calls) plus a resolvable API
-  key (`KB_LLM_API_KEY`, or preferably `KB_LLM_API_KEY_CMD`, a vault CLI
-  command whose stdout is the key -- see
-  `scripts/kb-container/kb.env.example` for the exact modes/format).
-- `POST /atomize` -- LLM-assisted atomize/split of a URL or raw document
-  content into decontextualized child notes, using a "strong" model tier
-  (bigger than enrich's, since atomize needs real
-  decontextualization/section-splitting, not just a gist). If
-  `KB_ENRICH`/the key isn't configured, it falls back to the deterministic
-  heading-based split (no model call) -- never fails, just degrades.
-
-Both are off/degraded by default; opt in via `KB_ENRICH=1` plus a
-configured key in the real `~/.knowledgebase/kb.env` (see
-`scripts/kb-container/kb.env.example` for the template -- never document
-or imply a real secret value there).
+`deploy`-managed as its own quadlet unit (see above); either path
+publishes at `http://127.0.0.1:3100`. See `modes/bd.md` for the full
+bare-host-vs-always-on comparison.
 
 ## n8n Public API (agent-facing)
 
