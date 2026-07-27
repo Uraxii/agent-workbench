@@ -30,8 +30,12 @@ from email.message import Message
 from pathlib import Path
 from typing import IO
 
-import lxml.html
-from readability import Document
+# lxml and readability are imported inside the three functions that parse
+# HTML, not here. They ship in the kb-serve image, but scripts/kb-serve.py
+# also loads this module just to reach slugify()/build_note_path(), which are
+# pure stdlib -- an eager import made those two helpers unreachable anywhere
+# the parsing libraries are absent. Annotations below name lxml types and
+# stay valid because `from __future__ import annotations` defers them.
 
 USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -249,6 +253,8 @@ def html_to_markdown(fragment: str | lxml.html.HtmlElement) -> str:
     # here. A block nested inside another matched block (e.g. <p> inside
     # <li>) can double-count; rare in readability's cleaned output.
     """
+    import lxml.html
+
     tree = lxml.html.fromstring(fragment) if isinstance(fragment, str) else fragment
     lines: list[str] = []
     for el in tree.xpath(BLOCK_XPATH):
@@ -276,6 +282,9 @@ def pick_densest_container(tree: lxml.html.HtmlElement) -> lxml.html.HtmlElement
 def extract_body_markdown(html: str) -> str:
     """Extract main content: readability-lxml first, a densest-block
     fallback second (kept for a machine without the lib installed)."""
+    import lxml.html
+    from readability import Document
+
     try:
         markdown = html_to_markdown(Document(html).summary())
         if markdown.strip():
@@ -379,6 +388,8 @@ def resolve_kb_home(cli_value: str | None) -> Path:
 
 def clip(url: str, project: str, kb_home: Path) -> Path:
     """Fetch url, extract metadata + body, write a type:source note."""
+    import lxml.html
+
     html = fetch_html(url)
     tree = lxml.html.fromstring(html)
     meta = parse_metadata(tree, url)
