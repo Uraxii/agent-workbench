@@ -70,7 +70,7 @@ tailscale serve --bg --https=443 http://127.0.0.1:9099
 > secrets; the server follows pushed symlinks. `artifact-serve.py stop` also
 > runs `tailscale serve --https=443 off` as a side effect, tearing down the
 > 443 mapping; for the container prefer
-> `systemctl --user restart artifact-serve`.
+> `podman-compose -f docker-compose.yml restart artifact-serve`.
 
 **artifact-serve's network artifact-publish endpoint is NOT shipped.** It is
 held back pending an XSS lockdown (tracked as `agent-workbench-wxh`, P2,
