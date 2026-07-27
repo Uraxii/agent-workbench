@@ -1,6 +1,0 @@
-Django==6.0
-gunicorn<24,>=23
-
-[test]
-pytest<9,>=8
-pytest-django<5,>=4.11

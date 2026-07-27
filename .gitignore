@@ -4,6 +4,7 @@ __pycache__/
 *.pyd
 /scripts/bdui-container/node_modules/
 apps/artifact-review/backend/spa/
+*.egg-info/
 .claudex-worktrees/
 .claude/worktrees/
 spikes/frontend-directions/.render-unified/

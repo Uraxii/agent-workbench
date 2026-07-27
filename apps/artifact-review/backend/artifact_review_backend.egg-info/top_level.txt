@@ -1,2 +1,0 @@
-artifact_review
-artifact_review_site
