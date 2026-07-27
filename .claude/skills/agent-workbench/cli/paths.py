@@ -18,8 +18,8 @@ __all__ = [
     "KB_CONTAINER_DIR",
     "N8N_CONTAINER_DIR",
     "BDUI_CONTAINER_DIR",
-    "REVIEW_SKILL_DIR",
-    "REVIEW_CONTAINER_DIR",
+    "ARTIFACT_SKILL_DIR",
+    "ARTIFACT_CONTAINER_DIR",
     "repo_root",
 ]
 
@@ -33,8 +33,8 @@ BDUI_CONTAINER_DIR: Path = SCRIPTS_DIR / "bdui-container"
 # quadlet). This dir holds only the n8n.container quadlet, n8n-secret.py,
 # and n8n.env.example; `deploy` installs the quadlet but never builds here.
 N8N_CONTAINER_DIR: Path = SCRIPTS_DIR / "n8n-container"
-REVIEW_SKILL_DIR: Path = REPO_ROOT / ".claude" / "skills" / "artifact-serve"
-REVIEW_CONTAINER_DIR: Path = REVIEW_SKILL_DIR / "container"
+ARTIFACT_SKILL_DIR: Path = REPO_ROOT / ".claude" / "skills" / "artifact-serve"
+ARTIFACT_CONTAINER_DIR: Path = ARTIFACT_SKILL_DIR / "container"
 
 
 def repo_root() -> Path:

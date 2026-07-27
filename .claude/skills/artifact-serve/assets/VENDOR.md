@@ -40,7 +40,7 @@ https://cdn.jsdelivr.net/npm/@recogito/annotorious-openseadragon@2.7.19/dist/ann
 Note: DESIGN.md section 5's file tree names this
 `annotorious-openseadragon.min.js` plus a separate `annotorious.min.js`
 core file; the actual package ships one merged file for the OSD build, so
-only two files (js + css) are vendored, not three. review-serve.py's
+only two files (js + css) are vendored, not three. artifact-serve.py's
 `ANNOTORIOUS_SCRIPT_URL` points at the merged file; there is no
 `ANNOTORIOUS_CORE_URL` constant because no separate core file exists to
 vendor.

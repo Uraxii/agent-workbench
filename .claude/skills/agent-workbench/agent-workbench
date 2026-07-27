@@ -9,12 +9,15 @@ cleanly, then hands off to cli.main.main(). All real logic lives in the
 
 Subcommands (see each cli/*.py module docstring):
     kb              knowledgebase vault ops (port of scripts/kb.sh)
-    hub             bd (beads) board hub ops (port of scripts/beads-hub.sh)
-    board           bdui web front-end lifecycle (port of scripts/board-ui.sh)
+    bd              bd (beads) board hub + web UI ops (folds the former
+                    hub and board subcommands; ports of
+                    scripts/beads-hub.sh and scripts/board-ui.sh)
+    artifact        artifact review app ops (publish/feedback/serve/status)
+    deploy          build + run the kb-serve / artifact-serve containers
+                    (port of deploy/agent-workbench/agent-workbench)
+    install         (un)install this repo's skill into ~/.claude/skills
     init-workspace  scaffold a repo's agent workspace (port of
                     scripts/init-agent-workspace.sh)
-    deploy          build + run the kb-serve / review-serve containers
-                    (port of deploy/agent-workbench/agent-workbench)
 """
 from __future__ import annotations
 

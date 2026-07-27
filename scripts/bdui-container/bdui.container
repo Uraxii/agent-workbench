@@ -21,7 +21,7 @@ UserNS=keep-id
 # bdui's own default host is 127.0.0.1 -- fine bare-host, but inside a
 # container that only reaches the container's own loopback. Bind broadly
 # inside the container and let PublishPort= below narrow the host side to
-# 127.0.0.1, same model as kb-serve/review-serve/n8n.
+# 127.0.0.1, same model as kb-serve/artifact-serve/n8n.
 Environment=HOST=0.0.0.0
 Environment=PORT=3000
 

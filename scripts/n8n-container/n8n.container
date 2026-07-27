@@ -28,7 +28,7 @@ UserNS=keep-id
 # binds 0.0.0.0 inside its OWN network namespace, and PublishPort below
 # restricts the host side to loopback only -- Podman's normal, intended
 # model (container binds broadly, host-side publish narrows), identical to
-# kb-serve/review-serve. This keeps n8n's network namespace isolated
+# kb-serve/artifact-serve. This keeps n8n's network namespace isolated
 # rather than sharing the host's.
 Environment=N8N_PORT=5678
 Environment=N8N_LISTEN_ADDRESS=0.0.0.0
@@ -41,7 +41,7 @@ PublishPort=127.0.0.1:5678:5678
 
 # Reachability fix (pasta backend, podman 5.8.2 rootless). n8n workflows
 # must reach two HOST-loopback-bound services: ComfyUI at
-# host.containers.internal:8188 and review-serve at
+# host.containers.internal:8188 and artifact-serve at
 # host.containers.internal:9099. Under pasta, host.containers.internal
 # resolves to 169.254.1.2 but is NOT forwarded to the host's 127.0.0.1 by
 # default (pasta's default map-host-loopback targets the LAN gateway, not
@@ -85,7 +85,7 @@ EnvironmentFile=%t/n8n.env
 # SELinux (enforcing on this host) would otherwise deny the data-dir bind
 # mount, or force a recursive relabel of it. Read-only rootfs + cap-drop +
 # no-new-privileges are the compensating controls for this one narrow
-# mount, same call as kb-serve/review-serve.
+# mount, same call as kb-serve/artifact-serve.
 SecurityLabelDisable=true
 
 # Quadlet-level health check (this image is not built by us, so there is

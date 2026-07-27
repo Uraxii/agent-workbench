@@ -34,9 +34,9 @@ def load_artifact_module() -> ModuleType:
 
 @pytest.fixture()
 def artifact_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[ModuleType, ModuleType, Path]:
-    """Point review-serve globals at temp storage for one test."""
+    """Point artifact-serve globals at temp storage for one test."""
     mod = load_artifact_module()
-    impl = mod._IMPL
+    impl = mod
     stage_root = tmp_path / "stage"
     feedback_root = tmp_path / "feedback"
     monkeypatch.setattr(impl, "ROOT", stage_root)

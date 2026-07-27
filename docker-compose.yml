@@ -1,9 +1,9 @@
 # Portable, docker/podman-compose deploy artifact for the agent-workbench
-# stack (kb-serve, review-serve, n8n).
+# stack (kb-serve, artifact-serve, n8n).
 #
 # This COEXISTS with the live rootless-podman + systemd quadlet deploy
 # (scripts/kb-container/kb-serve.container,
-# .claude/skills/artifact-serve/container/review-serve.container,
+# .claude/skills/artifact-serve/container/artifact-serve.container,
 # scripts/n8n-container/n8n.container), driven by `agent-workbench deploy
 # up/down`. It does NOT replace that mechanism, and running this file does
 # NOT cut over the live stack. Quadlets remain the production path on this
@@ -68,17 +68,17 @@ services:
       start_period: 5s
       retries: 3
 
-  review-serve:
+  artifact-serve:
     build:
       context: ./.claude/skills/artifact-serve
       dockerfile: container/Containerfile
-    image: localhost/review-serve:latest
+    image: localhost/artifact-serve:latest
     # ponytail: see kb-serve's user: comment -- same best-effort
     # approximation of the quadlet's User/Group/UserNS=keep-id.
     user: "${UID:-1000}:${GID:-1000}"
     environment:
-      REVIEW_SERVE_HOST: "0.0.0.0"
-      REVIEW_SERVE_PORT: "9099"
+      ARTIFACT_SERVE_HOST: "0.0.0.0"
+      ARTIFACT_SERVE_PORT: "9099"
       HOME: "${HOME}"
     ports:
       - "127.0.0.1:9099:9099"
@@ -99,7 +99,7 @@ services:
         - CMD
         - python3
         - -c
-        - "import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('REVIEW_SERVE_PORT','9099')+'/', timeout=3)"
+        - "import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('ARTIFACT_SERVE_PORT','9099')+'/', timeout=3)"
       interval: 30s
       timeout: 5s
       start_period: 5s
@@ -110,7 +110,7 @@ services:
       context: ./scripts/bdui-container
       dockerfile: Containerfile
     image: localhost/bdui:latest
-    # No `user:` override here, unlike kb-serve/review-serve -- PROVEN
+    # No `user:` override here, unlike kb-serve/artifact-serve -- PROVEN
     # broken for this service, not just a cosmetic approximation gap (their
     # own `user:` comment already says "drop it if it doesn't translate
     # cleanly"). Verified two-part failure and two-part fix:
@@ -197,7 +197,7 @@ services:
     # how to re-pin on upgrade).
     image: "docker.io/n8nio/n8n@sha256:cda6bafc7bb4873533e7affb82d1bd47282a7614bdf83242c2293f8ff281261a"
     # n8n is opt-in: `docker-compose up` / `podman-compose up` with no
-    # profile brings up only kb-serve + review-serve. n8n is intentionally
+    # profile brings up only kb-serve + artifact-serve. n8n is intentionally
     # down right now by user choice; run with `--profile n8n` to include it.
     profiles:
       - n8n
@@ -223,7 +223,7 @@ services:
       - "${HOME}/.local/share/n8n:/home/node/.n8n:rw"
     # ponytail: best-effort/untested equivalent of the quadlet's
     # `Network=pasta:--map-host-loopback,169.254.1.2` fix (which lets n8n
-    # workflows reach host-loopback services like ComfyUI/review-serve via
+    # workflows reach host-loopback services like ComfyUI/artifact-serve via
     # host.containers.internal). Plain compose has no pasta-specific
     # option; this may behave differently. n8n is profiled off by default,
     # so this isn't being relied on to be live by this change.

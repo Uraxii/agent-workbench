@@ -1,10 +1,10 @@
 [Unit]
-Description=review-serve artifact review app
+Description=artifact-serve artifact review app
 After=network-online.target
 
 [Container]
-Image=localhost/review-serve:latest
-ContainerName=review-serve
+Image=localhost/artifact-serve:latest
+ContainerName=artifact-serve
 
 User=%U
 Group=%U
@@ -16,21 +16,21 @@ Environment=HOME=%h
 # workaround (which dropped all network-namespace isolation). Container
 # binds 0.0.0.0 internally; PublishPort restricts the host side to
 # loopback -- podman's normal, intended model, same as kb-serve.
-Environment=REVIEW_SERVE_HOST=0.0.0.0
-Environment=REVIEW_SERVE_PORT=9099
+Environment=ARTIFACT_SERVE_HOST=0.0.0.0
+Environment=ARTIFACT_SERVE_PORT=9099
 PublishPort=127.0.0.1:9099:9099
 
-# rw: throwaway staging root review-serve symlinks artifacts into.
+# rw: throwaway staging root artifact-serve symlinks artifacts into.
 Volume=/tmp/claude-artifacts:/tmp/claude-artifacts:rw
 # rw: durable feedback sqlite DB + uploaded review files.
 Volume=%h/.local/share/claude-artifacts:%h/.local/share/claude-artifacts:rw
-# No whole-$HOME mount. review-serve.py only ever reads two home paths at
+# No whole-$HOME mount. artifact-serve.py only ever reads two home paths at
 # runtime: FEEDBACK_ROOT (mounted narrowly above) and AGENT_WORKBENCH_CLI
 # for the optional bd mirror (section 11 of DESIGN.md) -- but that CLI is
 # resolved relative to the repo root beside the script, which the image
 # never COPYs in, so AGENT_WORKBENCH_CLI.is_file() is always False
 # in-container and the bd mirror degrades to None by its own contract
-# (bd_mirror_enabled() / _bd_beads_dir() -- see review-serve.py). Artifact
+# (bd_mirror_enabled() / _bd_beads_dir() -- see artifact-serve.py). Artifact
 # symlink targets resolve through the separate /tmp/claude-artifacts mount
 # above, not through $HOME. Allowlisting to just the feedback dir closes
 # the credential blast radius (keyrings, .ssh, .netrc, .git-credentials,

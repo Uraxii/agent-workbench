@@ -1,16 +1,12 @@
 FROM python@sha256:6771159cd4fa5d9bba1258caf0b82e6b73458c694d178ad97c5e925c2d0e1a91
 
-# artifact-serve.py is the live compatibility entrypoint. It loads the
-# owned review runtime from review-serve.py, so the existing artifact-serve
-# script path keeps working without a second server.
 WORKDIR /app
 COPY scripts/artifact-serve.py .claude/skills/artifact-serve/scripts/artifact-serve.py
-COPY scripts/review-serve.py .claude/skills/artifact-serve/scripts/review-serve.py
 COPY assets/ .claude/skills/artifact-serve/assets/
 
 EXPOSE 9099
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-  CMD ["python3", "-c", "import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:'+(os.environ.get('ARTIFACT_SERVE_PORT') or os.environ.get('REVIEW_SERVE_PORT','9099'))+'/', timeout=3)"]
+  CMD ["python3", "-c", "import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('ARTIFACT_SERVE_PORT','9099')+'/', timeout=3)"]
 
 ENTRYPOINT ["python3", "/app/.claude/skills/artifact-serve/scripts/artifact-serve.py", "run"]

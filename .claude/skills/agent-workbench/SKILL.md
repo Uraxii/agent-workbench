@@ -1,11 +1,11 @@
 ---
 name: agent-workbench
-description: Locally deployable agent workbench (knowledgebase vault + bd board hub + bdui web front end + hardened kb-serve/review-serve containers) driven by ONE pure-Python CLI. Use to run knowledgebase clip/put/query, manage bd boards under the central hub, launch the board web UI, scaffold a repo's agent workspace, or build and deploy the two review/knowledgebase containers locally. Replaces the old scripts/*.sh shell tools and the bash deploy driver.
+description: Locally deployable agent workbench (knowledgebase vault + bd board hub + bdui web front end + hardened kb-serve/artifact-serve containers) driven by ONE pure-Python CLI. Use to run knowledgebase clip/put/query, manage bd boards under the central hub, launch the board web UI, scaffold a repo's agent workspace, or build and deploy the artifact and knowledgebase containers locally. Replaces the old scripts/*.sh shell tools and the bash deploy driver.
 ---
 
 # agent-workbench
 
-One skill, one executable, five subcommands. Every tool is pure Python
+One skill, one executable, six subcommands. Every tool is pure Python
 (argparse, stdlib + the two pre-existing lxml/readability deps kb-clip
 already used). No bash, no `.sh` shims. The CLI lives BESIDE the hardened
 container, never inside its image.
@@ -19,10 +19,11 @@ container, never inside its image.
 | Subcommand | Replaces | Purpose |
 |---|---|---|
 | `kb` | `scripts/kb.sh` | knowledgebase vault: init/add/path/index/clip/put/query/atomize/status |
-| `hub` | `scripts/beads-hub.sh` | bd board hub: init/add/sync/list/path/status |
-| `board` | `scripts/board-ui.sh` | bdui web front end: up/down/status (bare-host, per-repo -- separate from the always-on compose `bdui` service below, which is the single global hub-aggregator view) |
+| `bd` | `scripts/beads-hub.sh` + `scripts/board-ui.sh` | bd board hub (init/add/sync/list/path/status) + bdui web front end (ui-up/ui-down/ui-status, bare-host, per-repo -- separate from the always-on compose `bdui` service below, which is the single global hub-aggregator view) |
+| `artifact` | (new) | artifact review app: publish/feedback/serve/status, a facade over `.claude/skills/artifact-serve/scripts/artifact-serve.py` |
+| `deploy` | `deploy/agent-workbench/agent-workbench` | build + run the kb-serve / artifact-serve / bdui containers |
+| `install` | (new) | (un)install this repo's skill into `~/.claude/skills/agent-workbench` (`--link`/`--copy`/`--uninstall`) |
 | `init-workspace` | `scripts/init-agent-workspace.sh` | scaffold docs/kb + workstreams + bd board + reindex hook into a repo |
-| `deploy` | `deploy/agent-workbench/agent-workbench` | build + run the kb-serve / review-serve / bdui containers |
 
 ### kb
 
@@ -38,11 +39,14 @@ agent-workbench kb status
 call also atomizes + reindexes) and fall back to an in-process kb-serve.py
 call when the service is down. Same behavior kb.sh had.
 
-### hub / board / init-workspace / deploy
+### bd / artifact / install / init-workspace / deploy
 
 ```bash
-agent-workbench hub add <name> [prefix]
-agent-workbench board up [REPO_DIR]        # prints the UI URL
+agent-workbench bd add <name> [prefix]
+agent-workbench bd ui-up [REPO_DIR]        # prints the UI URL
+agent-workbench artifact publish --project <project> --src <path>
+agent-workbench artifact status
+agent-workbench install --link
 agent-workbench init-workspace [TARGET_DIR] [--prefix PREFIX]
 agent-workbench deploy up | down | status
 ```
@@ -53,23 +57,25 @@ agent-workbench deploy up | down | status
   the bash deploy driver collapse into one executable with subcommands.
   The `kb` family stays a thin facade over the existing
   `scripts/kb-serve.py` (which already facades kb-index / kb-clip /
-  kb-atomize); hub/board/init-workspace/deploy are genuine rewrites.
+  kb-atomize), and `artifact` is the same shape over
+  `scripts/artifact-serve.py`; the `bd` family (former `hub`/`board`) and
+  `init-workspace`/`deploy` are genuine rewrites.
 - **Audit fixes folded in:**
   - `kb` honors `KB_SERVE_HOST` (not only `KB_SERVE_PORT`) and surfaces
     the HTTP error body on failure instead of swallowing it.
-  - `board` validates the hub board (`$HUB_ROOT/<name>/.beads`), not a
-    stale repo-local `<repo>/.beads`.
-  - `hub` runs `bd init` with `BEADS_DIR` stripped from the child env so
-    an ambient value cannot redirect where the board is written, and uses
-    a correctly-sensed `git_repo_preexisted` flag for incidental-repo
-    cleanup.
+  - `bd`'s `ui-*` verbs validate the hub board (`$HUB_ROOT/<name>/.beads`),
+    not a stale repo-local `<repo>/.beads`.
+  - `bd`'s board-hub verbs run `bd init` with `BEADS_DIR` stripped from
+    the child env so an ambient value cannot redirect where the board is
+    written, and use a correctly-sensed `git_repo_preexisted` flag for
+    incidental-repo cleanup.
 - **The clip path preserves kb-clip.py's http/https scheme allowlist
   verbatim** (it delegates to the same `check_url_scheme`), so `file://`
   and other schemes stay rejected with zero new code.
 
 ## Deploy + hardening
 
-`deploy up` builds and starts kb-serve, review-serve, and bdui as
+`deploy up` builds and starts kb-serve, artifact-serve, and bdui as
 rootless podman-quadlet user units (n8n's quadlet is also installed, but
 its image is pulled by digest rather than built -- see the n8n note
 below). Hardening (read-only rootfs, `cap-drop=ALL`, `no-new-privileges`,
@@ -92,14 +98,14 @@ containers are running (the quadlets bind `%h`-relative paths); only
 `BEADS_HUB_DIR` is read directly by the Python code. See the env.example
 comments.
 
-**review-serve's network artifact-publish endpoint is NOT shipped.** It is
-held back pending an XSS lockdown (tracked as `agent-workbench-wxh`). As
-deployed (quadlet or compose), review-serve is local/loopback-only
+**artifact-serve's network artifact-publish endpoint is NOT shipped.** It
+is held back pending an XSS lockdown (tracked as `agent-workbench-wxh`).
+As deployed (quadlet or compose), artifact-serve is local/loopback-only
 (127.0.0.1-bound) -- do not assume or rely on a network publish path.
 
 ### docker-compose (portable alternative to the quadlets)
 
-`docker-compose.yml` at the repo root describes kb-serve, review-serve,
+`docker-compose.yml` at the repo root describes kb-serve, artifact-serve,
 n8n, and bdui as a podman-compose-compatible stack. It COEXISTS with the
 quadlets, it does not replace them: `agent-workbench deploy up/down`
 (podman-quadlet user units) remains the live/production deploy mechanism
@@ -110,10 +116,10 @@ It mirrors the same hardening as the quadlets: read-only rootfs,
 `cap-drop=ALL`, `no-new-privileges`, tmpfs mounts, healthchecks, ports
 bound to 127.0.0.1, and the same pinned n8n image digest. n8n sits behind
 a compose `profiles: ["n8n"]` entry, so a plain compose-up brings up only
-kb-serve + review-serve, matching n8n's current intentionally-down state:
+kb-serve + artifact-serve, matching n8n's current intentionally-down state:
 
 ```bash
-podman-compose -f docker-compose.yml up -d               # kb-serve + review-serve + bdui
+podman-compose -f docker-compose.yml up -d               # kb-serve + artifact-serve + bdui
 podman-compose --profile n8n -f docker-compose.yml up -d # adds n8n
 ```
 
@@ -124,7 +130,7 @@ above); either path publishes at `http://127.0.0.1:3100`, built from
 `scripts/bdui-container/Containerfile`, and serves the bd hub aggregator
 board (the cross-project view, not a single repo) via the
 `${HOME}/.beads-hub` mount. This is distinct from the bare-host
-`agent-workbench board up <repo_dir>` subcommand above, which is a
+`agent-workbench bd ui-up <repo_dir>` subcommand above, which is a
 per-repo dev-workstation tool for viewing one project's own board on a
 scanned free port.
 

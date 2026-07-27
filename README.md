@@ -4,7 +4,7 @@ Standalone home for the local agent-workbench service stack. This repo owns the 
 
 - `bdui`
 - `kb-serve`
-- `review-serve`
+- `artifact-serve`
 - `n8n`
 - the supporting `agent-workbench` and `artifact-serve` skills/CLI that drive them
 

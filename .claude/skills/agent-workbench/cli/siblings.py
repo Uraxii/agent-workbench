@@ -2,23 +2,47 @@
 
 The `kb` subcommand is a thin facade over the existing, proven
 ``scripts/kb-serve.py`` (which itself facades kb-index.py / kb-clip.py /
-kb-atomize.py). Those files have hyphenated names a normal ``import``
-cannot address, so this reuses kb-serve.py's own proven load-by-path
-pattern (importlib.util.spec_from_file_location, register in sys.modules
-BEFORE exec so dataclass annotation resolution works). This is deliberate
-reuse, not a rewrite: the deterministic clip/put/query/atomize logic and
-the http/https scheme allowlist (kb-clip.check_url_scheme) are inherited
-verbatim, never reimplemented here.
+kb-atomize.py), and the `artifact` subcommand is the same shape over
+``.claude/skills/artifact-serve/scripts/artifact-serve.py``. Those files
+have hyphenated names a normal ``import`` cannot address, so this reuses
+kb-serve.py's own proven load-by-path pattern
+(importlib.util.spec_from_file_location, register in sys.modules BEFORE
+exec so dataclass annotation resolution works). This is deliberate reuse,
+not a rewrite: the deterministic clip/put/query/atomize logic and the
+http/https scheme allowlist (kb-clip.check_url_scheme) are inherited
+verbatim, never reimplemented here -- same for artifact-serve.py's push /
+feedback / start / run / status handlers.
 """
 from __future__ import annotations
 
 import importlib.util
 import sys
 import types
+from pathlib import Path
 
-from cli.paths import SCRIPTS_DIR
+from cli.paths import ARTIFACT_SKILL_DIR, SCRIPTS_DIR
 
-__all__ = ["load_script", "load_kb_serve"]
+__all__ = ["load_script", "load_module_at", "load_kb_serve", "load_artifact_serve"]
+
+
+def load_module_at(path: Path, module_name: str) -> types.ModuleType:
+    """Import the script at ``path`` as a module named ``module_name``.
+
+    Postconditions: the module is registered in ``sys.modules`` under
+    ``module_name`` before its body executes (required so any
+    ``@dataclass`` inside it resolves annotations).
+    Raises:
+        ImportError: if the file cannot be located or loaded.
+    """
+    if not path.is_file():
+        raise ImportError(f"no such sibling script: {path}")
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load sibling module {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def load_script(name: str) -> types.ModuleType:
@@ -31,16 +55,7 @@ def load_script(name: str) -> types.ModuleType:
         The executed module object.
 
     Preconditions: ``<repo>/scripts/<name>.py`` exists.
-    Postconditions: the module is registered in ``sys.modules`` under its
-        underscored name before its body executes (required so any
-        ``@dataclass`` inside it resolves annotations).
-    Raises:
-        ImportError: if the file cannot be located or loaded.
     """
-    path = SCRIPTS_DIR / f"{name}.py"
-    if not path.is_file():
-        raise ImportError(f"no such sibling script: {path}")
-
     # A handful of siblings (e.g. build-kb-index.py -> kb_embeddings)
     # import a same-dir module by its plain underscored name, which only
     # resolves if SCRIPTS_DIR is on sys.path. Adding it once here keeps
@@ -48,15 +63,7 @@ def load_script(name: str) -> types.ModuleType:
     scripts_dir = str(SCRIPTS_DIR)
     if scripts_dir not in sys.path:
         sys.path.insert(0, scripts_dir)
-
-    module_name = name.replace("-", "_")
-    spec = importlib.util.spec_from_file_location(module_name, path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"cannot load sibling module {path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-    return module
+    return load_module_at(SCRIPTS_DIR / f"{name}.py", name.replace("-", "_"))
 
 
 def load_kb_serve() -> types.ModuleType:
@@ -68,3 +75,19 @@ def load_kb_serve() -> types.ModuleType:
         when the HTTP service is down.
     """
     return load_script("kb-serve")
+
+
+def load_artifact_serve() -> types.ModuleType:
+    """Load ``.claude/skills/artifact-serve/scripts/artifact-serve.py``.
+
+    Lives under the artifact-serve skill dir, not alongside the other
+    siblings in ``scripts/``, so it needs its own path rather than
+    ``load_script`` (which always resolves against SCRIPTS_DIR).
+
+    Returns:
+        The artifact-serve module, exposing cmd_push / cmd_feedback /
+        cmd_start / cmd_run / cmd_status the `artifact` port calls
+        in-process.
+    """
+    path = ARTIFACT_SKILL_DIR / "scripts" / "artifact-serve.py"
+    return load_module_at(path, "artifact_serve")
