@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from datetime import UTC, datetime
+import json
 from typing import Any
 
 from artifact_review.artifact_resolution import ArtifactSummary
@@ -18,12 +20,12 @@ def upload_to_json(upload: Upload) -> dict[str, Any]:
     """Serialize an upload row."""
     return {
         "id": upload.id,
-        "reply_id": upload.reply_id,
         "filename": upload.filename,
+        "stored_path": upload.stored_path,
         "mime": upload.mime,
         "size": upload.size,
-        "url": f"/_/api/uploads/{upload.id}",
         "created_at": upload.created_at,
+        "created_at_iso": _created_at_iso(upload.created_at),
     }
 
 
@@ -32,10 +34,10 @@ def reply_to_json(reply: Reply) -> dict[str, Any]:
     uploads = list(getattr(reply, "uploads").all()) if reply.id else []
     return {
         "id": reply.id,
-        "thread_id": reply.thread_id,
         "body": reply.body,
         "author": reply.author,
         "created_at": reply.created_at,
+        "created_at_iso": _created_at_iso(reply.created_at),
         "uploads": [upload_to_json(upload) for upload in uploads],
     }
 
@@ -45,13 +47,13 @@ def thread_to_json(thread: Thread) -> dict[str, Any]:
     replies = list(getattr(thread, "replies").all()) if thread.id else []
     return {
         "id": thread.id,
-        "artifact_id": thread.artifact_id,
         "sub_path": thread.sub_path,
         "anchor_kind": thread.anchor_kind,
-        "anchor_data": thread.anchor_data,
+        "anchor": _anchor_to_json(thread),
         "resolved": bool(thread.resolved),
         "author": thread.author,
         "created_at": thread.created_at,
+        "created_at_iso": _created_at_iso(thread.created_at),
         "bd_ticket": thread.bd_ticket,
         "replies": [reply_to_json(reply) for reply in replies],
     }
@@ -60,6 +62,16 @@ def thread_to_json(thread: Thread) -> dict[str, Any]:
 def artifact_to_json(artifact: ArtifactSummary) -> dict[str, Any]:
     """Serialize an artifact summary."""
     return asdict(artifact)
+
+
+def _anchor_to_json(thread: Thread) -> Any:
+    if thread.anchor_kind == "page" or not thread.anchor_data:
+        return None
+    return json.loads(thread.anchor_data)
+
+
+def _created_at_iso(created_at: int) -> str:
+    return datetime.fromtimestamp(created_at, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 __all__ = ["artifact_to_json", "reply_to_json", "setting_map", "thread_to_json", "upload_to_json"]

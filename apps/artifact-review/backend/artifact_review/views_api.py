@@ -50,14 +50,24 @@ def api_upload(request: HttpRequest, id: int) -> HttpResponse:
 def api_threads(request: HttpRequest) -> JsonResponse:
     """List feedback threads for an artifact."""
     ensure_feedback_schema()
-    queryset = Thread.objects.prefetch_related("replies__uploads").order_by("created_at", "id")
-    artifact_id = request.GET.get("artifact_id")
-    sub_path = request.GET.get("sub_path")
-    if artifact_id:
-        queryset = queryset.filter(artifact_id=artifact_id)
-    if sub_path is not None:
-        queryset = queryset.filter(sub_path=sub_path)
-    return apply_app_headers(JsonResponse({"threads": [feedback_json.thread_to_json(thread) for thread in queryset]}))
+    artifact_id = request.GET.get("artifact", "").strip()
+    if not artifact_id:
+        return _json_error("artifact_required", 400)
+    sub_path = request.GET.get("sub_path", "")
+    queryset = (
+        Thread.objects.prefetch_related("replies__uploads")
+        .filter(artifact_id=artifact_id, sub_path=sub_path)
+        .order_by("created_at", "id")
+    )
+    return apply_app_headers(
+        JsonResponse(
+            {
+                "artifact_id": artifact_id,
+                "sub_path": sub_path,
+                "threads": [feedback_json.thread_to_json(thread) for thread in queryset],
+            }
+        )
+    )
 
 
 def api_create_thread(request: HttpRequest) -> JsonResponse:
@@ -68,7 +78,7 @@ def api_create_thread(request: HttpRequest) -> JsonResponse:
         now = _now()
         with transaction.atomic():
             thread = Thread.objects.create(
-                artifact_id=feedback_forms.require_text(data, "artifact_id"),
+                artifact_id=feedback_forms.require_artifact(data),
                 sub_path=feedback_forms.optional_text(data, "sub_path"),
                 anchor_kind=feedback_forms.optional_text(data, "anchor_kind", "page"),
                 anchor_data=_json_text(data.get("anchor_data")),
@@ -76,19 +86,29 @@ def api_create_thread(request: HttpRequest) -> JsonResponse:
                 author=feedback_forms.optional_text(data, "author") or None,
                 created_at=now,
             )
-            body = feedback_forms.optional_text(data, "body")
-            if body:
-                reply = Reply.objects.create(
-                    thread=thread,
-                    body=body,
-                    author=feedback_forms.optional_text(data, "author") or None,
-                    created_at=now,
-                )
-                _store_feedback_uploads(request, reply)
-        thread = Thread.objects.prefetch_related("replies__uploads").get(id=thread.id)
+            reply = Reply.objects.create(
+                thread=thread,
+                body=feedback_forms.require_text(data, "body"),
+                author=feedback_forms.optional_text(data, "author") or None,
+                created_at=now,
+            )
+            _store_feedback_uploads(request, reply)
+        reply = Reply.objects.prefetch_related("uploads").get(id=reply.id)
     except (ValueError, json.JSONDecodeError) as exc:
         return _json_error(str(exc), 400)
-    return apply_app_headers(JsonResponse({"thread": feedback_json.thread_to_json(thread)}, status=201))
+    return apply_app_headers(
+        JsonResponse(
+            {
+                "thread_id": thread.id,
+                "reply_id": reply.id,
+                "artifact_id": thread.artifact_id,
+                "sub_path": thread.sub_path,
+                "anchor_kind": thread.anchor_kind,
+                "uploads": [feedback_json.upload_to_json(upload) for upload in reply.uploads.all()],
+            },
+            status=201,
+        )
+    )
 
 
 def api_create_reply(request: HttpRequest, id: int) -> JsonResponse:
@@ -110,7 +130,16 @@ def api_create_reply(request: HttpRequest, id: int) -> JsonResponse:
         reply = Reply.objects.prefetch_related("uploads").get(id=reply.id)
     except (ValueError, json.JSONDecodeError) as exc:
         return _json_error(str(exc), 400)
-    return apply_app_headers(JsonResponse({"reply": feedback_json.reply_to_json(reply)}, status=201))
+    return apply_app_headers(
+        JsonResponse(
+            {
+                "reply_id": reply.id,
+                "thread_id": thread.id,
+                "uploads": [feedback_json.upload_to_json(upload) for upload in reply.uploads.all()],
+            },
+            status=201,
+        )
+    )
 
 
 def api_resolve_thread(request: HttpRequest, id: int) -> JsonResponse:
@@ -126,8 +155,7 @@ def api_resolve_thread(request: HttpRequest, id: int) -> JsonResponse:
     resolved = data.get("resolved", True)
     thread.resolved = 1 if resolved in {True, "true", "1", 1} else 0
     thread.save(update_fields=["resolved"])
-    thread = Thread.objects.prefetch_related("replies__uploads").get(id=id)
-    return apply_app_headers(JsonResponse({"thread": feedback_json.thread_to_json(thread)}))
+    return apply_app_headers(JsonResponse({"id": thread.id, "resolved": bool(thread.resolved)}))
 
 
 def api_artifacts(request: HttpRequest) -> JsonResponse:
@@ -297,4 +325,3 @@ __all__ = [
     "api_threads",
     "api_upload",
 ]
-

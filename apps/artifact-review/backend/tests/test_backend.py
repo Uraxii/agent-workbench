@@ -8,6 +8,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import connection
 from django.test import Client, override_settings
 
@@ -305,6 +306,125 @@ def test_app_routes_use_app_csp_and_artifact_routes_do_not(
     assert artifact_response.headers["Content-Security-Policy"] == ARTIFACT_CSP
     assert artifact_response.headers["Content-Security-Policy"] != APP_CSP
 
+
+def test_threads_filter_by_required_artifact_and_echo_scope(client: Client, roots: tuple[Path, Path, Path]) -> None:
+    """Thread listing is scoped by the public artifact query parameter."""
+    del roots
+    first = client.post(
+        "/_/api/threads",
+        {
+            "artifact": "artifact/A",
+            "sub_path": "",
+            "body": "A feedback",
+            "files": SimpleUploadedFile("note.txt", b"note", content_type="text/plain"),
+        },
+    )
+    second = client.post(
+        "/_/api/threads",
+        {
+            "artifact": "artifact/B",
+            "sub_path": "",
+            "body": "B feedback",
+        },
+    )
+    assert first.status_code == 201
+    assert second.status_code == 201
+
+    response = client.get("/_/api/threads?artifact=artifact/A")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert list(data.keys()) == ["artifact_id", "sub_path", "threads"]
+    assert data["artifact_id"] == "artifact/A"
+    assert data["sub_path"] == ""
+    assert [thread["id"] for thread in data["threads"]] == [first.json()["thread_id"]]
+    thread = data["threads"][0]
+    assert list(thread.keys()) == [
+        "id",
+        "sub_path",
+        "anchor_kind",
+        "anchor",
+        "resolved",
+        "author",
+        "created_at",
+        "created_at_iso",
+        "bd_ticket",
+        "replies",
+    ]
+    reply = thread["replies"][0]
+    assert list(reply.keys()) == ["id", "body", "author", "created_at", "created_at_iso", "uploads"]
+    upload = reply["uploads"][0]
+    assert list(upload.keys()) == ["id", "filename", "stored_path", "mime", "size", "created_at", "created_at_iso"]
+
+
+def test_threads_requires_artifact_query(client: Client, roots: tuple[Path, Path, Path]) -> None:
+    """Unscoped thread listing is rejected."""
+    del roots
+    response = client.get("/_/api/threads")
+
+    assert response.status_code == 400
+    assert response.json()["reason"] == "artifact_required"
+
+
+def test_feedback_mutation_response_keys_match_contract(client: Client, roots: tuple[Path, Path, Path]) -> None:
+    """Mutation endpoints return the top-level keys validated by clients."""
+    del roots
+    create_thread = client.post(
+        "/_/api/threads",
+        {
+            "artifact": "artifact/A",
+            "sub_path": "",
+            "body": "Thread body",
+            "anchor_kind": "page",
+            "files": SimpleUploadedFile("thread.txt", b"thread", content_type="text/plain"),
+        },
+    )
+    assert create_thread.status_code == 201
+    assert list(create_thread.json().keys()) == [
+        "thread_id",
+        "reply_id",
+        "artifact_id",
+        "sub_path",
+        "anchor_kind",
+        "uploads",
+    ]
+    assert list(create_thread.json()["uploads"][0].keys()) == [
+        "id",
+        "filename",
+        "stored_path",
+        "mime",
+        "size",
+        "created_at",
+        "created_at_iso",
+    ]
+
+    thread_id = create_thread.json()["thread_id"]
+    create_reply = client.post(
+        f"/_/api/threads/{thread_id}/replies",
+        {
+            "body": "Reply body",
+            "files": SimpleUploadedFile("reply.txt", b"reply", content_type="text/plain"),
+        },
+    )
+    assert create_reply.status_code == 201
+    assert list(create_reply.json().keys()) == ["reply_id", "thread_id", "uploads"]
+    assert list(create_reply.json()["uploads"][0].keys()) == [
+        "id",
+        "filename",
+        "stored_path",
+        "mime",
+        "size",
+        "created_at",
+        "created_at_iso",
+    ]
+
+    resolve = client.post(
+        f"/_/api/threads/{thread_id}/resolve",
+        {"resolved": True},
+        content_type="application/json",
+    )
+    assert resolve.status_code == 200
+    assert list(resolve.json().keys()) == ["id", "resolved"]
 
 
 

@@ -31,6 +31,14 @@ def require_text(data: dict[str, Any], name: str) -> str:
     return value
 
 
+def require_artifact(data: dict[str, Any]) -> str:
+    """Return the required artifact id from the public API field."""
+    value = str(data.get("artifact", data.get("artifact_id", ""))).strip()
+    if not value:
+        raise ValueError("artifact_required")
+    return value
+
+
 def optional_text(data: dict[str, Any], name: str, default: str = "") -> str:
     """Return an optional text field."""
     value = data.get(name, default)
@@ -52,4 +60,4 @@ def validated_upload_names(files: MultiValueDict[str, object]) -> list[tuple[str
     return validated
 
 
-__all__ = ["optional_text", "request_data", "require_text", "validated_upload_names"]
+__all__ = ["optional_text", "request_data", "require_artifact", "require_text", "validated_upload_names"]
