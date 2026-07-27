@@ -798,3 +798,21 @@ def test_an_oversized_content_length_is_rejected(
         )
         status_line = sock.recv(4096).split(b"\r\n")[0]
     assert b"400" in status_line
+
+
+def test_a_symlinked_index_dir_is_refused_rather_than_written_to(
+    tmp_path: Path,
+) -> None:
+    """The derived database is a vault path like any other: a symlinked
+    index/ dir would put kb.db somewhere the service does not own."""
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (vault / "index").symlink_to(outside)
+
+    with pytest.raises(ValueError, match="outside the vault"):
+        kb_serve.index_db_path(vault)
+    with pytest.raises(ValueError, match="outside the vault"):
+        kb_serve.rebuild_derived(_config(vault))
+    assert list(outside.iterdir()) == []

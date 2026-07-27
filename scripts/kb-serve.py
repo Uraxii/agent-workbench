@@ -124,8 +124,15 @@ def kb_clip_module() -> ModuleType:
 
 
 def index_db_path(kb_home: Path) -> Path:
-    """``<kb_home>/index/kb.db`` -- the whole derived layer, one file."""
-    return kb_home / INDEX_DIR / INDEX_DB_NAME
+    """``<kb_home>/index/kb.db`` -- the whole derived layer, one file.
+
+    Checked like every other vault path: if ``index/`` is a symlink out
+    of the vault, the service would create and write the database
+    somewhere it does not own.
+    """
+    return kb_vault.assert_inside_vault(
+        kb_home, kb_home / INDEX_DIR / INDEX_DB_NAME,
+    )
 
 
 # ── derived layer: rebuildable from the vault alone ───────────────────
