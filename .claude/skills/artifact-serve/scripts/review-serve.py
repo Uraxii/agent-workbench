@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""review-serve — stage and serve generated artifacts for review.
+"""review-serve  -  stage and serve generated artifacts for review.
 
 Rebuild of artifact-serve into a review app: deep-zoom image gallery
 (OpenSeadragon), pin-to-region annotations (Annotorious), threaded resolvable
@@ -77,7 +77,7 @@ ASSETS_ROOT = SKILL_DIR / "assets"
 # optional bd mirror (section 11): `agent-workbench hub path <project>`.
 # This script always lives at
 # <repo>/.claude/skills/artifact-serve/scripts/review-serve.py, so the repo
-# root is computed relative to this file rather than hardcoded — keeps the
+# root is computed relative to this file rather than hardcoded  -  keeps the
 # path-standard identity-leak lint happy and the script portable.
 REPO_ROOT = Path(__file__).resolve().parents[4]
 AGENT_WORKBENCH_CLI = (
@@ -92,7 +92,7 @@ EXIT_SERVER = 2
 # ── review-app constants ──────────────────────────────────────────────
 
 # Current on-disk schema version. Bumped by the v1->v2 backfill migration.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # Anchor kinds a thread may carry.
 ANCHOR_PAGE = "page"
@@ -133,7 +133,7 @@ CODE_EXT = frozenset(
     }
 )
 
-# Upload guardrails (unchanged from legacy — do not regress).
+# Upload guardrails (unchanged from legacy  -  do not regress).
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 MAX_REQUEST_BYTES = 500 * 1024 * 1024
 UPLOAD_EXT_ALLOW = frozenset(
@@ -208,7 +208,36 @@ class Thread:
     author: str | None
     created_at: int
     bd_ticket: str | None = None
+    round_id: int | None = None
+    round_number: int | None = None
+    round_inferred: bool = False
     replies: Sequence[Reply] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class ReviewItem:
+    """One owned review target shown in the unified queue and landing cards."""
+
+    name: str
+    rel_path: str
+    kind: str
+    href: str
+    preview_src: str | None
+    open_threads: int
+    total_threads: int
+
+
+@dataclass(frozen=True)
+class ReviewListing:
+    """Owned review data for one artifact directory path."""
+
+    directory: str
+    items: Sequence[ReviewItem] = field(default_factory=tuple)
+    folder_count: int = 0
+    image_count: int = 0
+    code_count: int = 0
+    open_threads: int = 0
+    total_threads: int = 0
 
 
 # ── schema ────────────────────────────────────────────────────────────
@@ -227,6 +256,21 @@ CREATE TABLE IF NOT EXISTS artifact_index (
 );
 CREATE INDEX IF NOT EXISTS idx_index_artifact
     ON artifact_index(artifact_id);
+
+CREATE TABLE IF NOT EXISTS artifact_round (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    artifact_id  TEXT NOT NULL,
+    round_number INTEGER NOT NULL,
+    project      TEXT,
+    subdir       TEXT,
+    src_path     TEXT,
+    created_at   INTEGER NOT NULL,
+    inferred     INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (artifact_id, round_number),
+    CHECK (inferred IN (0, 1))
+);
+CREATE INDEX IF NOT EXISTS idx_artifact_round_artifact
+    ON artifact_round(artifact_id, round_number);
 
 CREATE TABLE IF NOT EXISTS comment (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -254,11 +298,13 @@ CREATE TABLE IF NOT EXISTS thread (
     author      TEXT,
     created_at  INTEGER NOT NULL,
     bd_ticket   TEXT,
+    round_id    INTEGER,
     CHECK (anchor_kind IN ('page', 'image_region', 'code_line')),
     CHECK (resolved IN (0, 1))
 );
 CREATE INDEX IF NOT EXISTS idx_thread_artifact_path
     ON thread(artifact_id, sub_path);
+CREATE INDEX IF NOT EXISTS idx_thread_round ON thread(round_id);
 
 CREATE TABLE IF NOT EXISTS reply (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -297,6 +343,7 @@ def db_connect() -> sqlite3.Connection:
 
     ddl = SCHEMA_DDL
     upload_cols = {row[1] for row in conn.execute("PRAGMA table_info(upload)")}
+    thread_cols = {row[1] for row in conn.execute("PRAGMA table_info(thread)")}
     if upload_cols and "reply_id" not in upload_cols:
         # ponytail: a real legacy DB's `upload` table predates the reply_id
         # column, and CREATE TABLE IF NOT EXISTS is a no-op against it, so
@@ -306,6 +353,11 @@ def db_connect() -> sqlite3.Connection:
         # recreates both upload indexes once the table has the new shape.
         ddl = ddl.replace(
             "CREATE INDEX IF NOT EXISTS idx_upload_reply ON upload(reply_id);",
+            "",
+        )
+    if thread_cols and "round_id" not in thread_cols:
+        ddl = ddl.replace(
+            "CREATE INDEX IF NOT EXISTS idx_thread_round ON thread(round_id);",
             "",
         )
     conn.executescript(ddl)
@@ -318,7 +370,7 @@ def _rebuild_upload_table_if_legacy(conn: sqlite3.Connection) -> None:
     """Rebuild `upload` once so comment_id is nullable and reply_id exists.
 
     No-op if the table already has the new shape (fresh DB, or an already
-    migrated one) — sqlite cannot drop a NOT NULL constraint in place, so a
+    migrated one)  -  sqlite cannot drop a NOT NULL constraint in place, so a
     one-time table rebuild is the standard move (DESIGN.md section 7 step 2).
     """
     cols = {row[1] for row in conn.execute("PRAGMA table_info(upload)")}
@@ -374,18 +426,143 @@ def _backfill_legacy_comments(conn: sqlite3.Connection) -> None:
         )
 
 
-def migrate_schema(conn: sqlite3.Connection) -> None:
-    """Run the one-time idempotent v1->v2 backfill if not already applied.
+def _ensure_round_table_if_legacy(conn: sqlite3.Connection) -> None:
+    """Add thread.round_id in place for pre-round databases."""
+    thread_cols = {row[1] for row in conn.execute("PRAGMA table_info(thread)")}
+    if "round_id" not in thread_cols:
+        conn.execute("ALTER TABLE thread ADD COLUMN round_id INTEGER")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_thread_round ON thread(round_id)")
 
-    Gated by setting['schema_version'] < SCHEMA_VERSION. All steps run in one
-    transaction (see DESIGN.md section 7):
-      1. CREATE IF NOT EXISTS the new tables (already done by SCHEMA_DDL).
-      2. Rebuild `upload` once so comment_id is nullable and reply_id exists.
-      3. Copy each legacy `comment` row into one page-level thread + one reply,
-         remap that comment's uploads onto the new reply.
-      4. Set setting['schema_version'] = str(SCHEMA_VERSION); commit.
-    Idempotent: a second call is a no-op once the version gate is stamped.
+
+def _next_round_number(conn: sqlite3.Connection, artifact_id: str) -> int:
+    """Return the next ordered round number for one artifact_id."""
+    row = conn.execute(
+        "SELECT COALESCE(MAX(round_number), 0) FROM artifact_round WHERE artifact_id=?",
+        (artifact_id,),
+    ).fetchone()
+    return int(row[0]) + 1
+
+
+def _insert_round_row(
+    conn: sqlite3.Connection,
+    artifact_id: str,
+    round_number: int,
+    created_at: int,
+    *,
+    project: str | None,
+    subdir: str | None,
+    src_path: str | None,
+    inferred: bool,
+) -> int:
+    """Insert one artifact_round row and return its id."""
+    cur = conn.execute(
+        "INSERT INTO artifact_round "
+        "(artifact_id, round_number, project, subdir, src_path, created_at, inferred) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (artifact_id, round_number, project, subdir, src_path, created_at, 1 if inferred else 0),
+    )
+    if cur.lastrowid is None:
+        raise sqlite3.Error("no rowid from artifact_round insert")
+    return int(cur.lastrowid)
+
+
+def _latest_index_row(
+    conn: sqlite3.Connection, artifact_id: str
+) -> tuple[str, str, str, int] | None:
+    """Return the latest artifact_index row for one artifact_id."""
+    row = conn.execute(
+        "SELECT project, subdir, src_path, last_pushed FROM artifact_index "
+        "WHERE artifact_id=? ORDER BY last_pushed DESC, rowid DESC LIMIT 1",
+        (artifact_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return (str(row[0]), str(row[1]), str(row[2]), int(row[3]))
+
+
+def _assign_threads_to_round(
+    conn: sqlite3.Connection, thread_ids: Sequence[int], round_id: int
+) -> None:
+    """Stamp one round_id onto a set of legacy thread rows."""
+    for thread_id in thread_ids:
+        conn.execute("UPDATE thread SET round_id=? WHERE id=?", (round_id, thread_id))
+
+
+def _backfill_legacy_rounds(conn: sqlite3.Connection) -> None:
+    """Infer ordered rounds for legacy feedback using timestamp clues.
+
+    Heuristic: if legacy thread timestamps exist on both sides of the latest
+    artifact_index.last_pushed for an artifact, split them into one inferred
+    pre-push round and one inferred current round. Otherwise collapse all
+    legacy feedback for that artifact into a single inferred round.
     """
+    artifact_rows = conn.execute(
+        "SELECT DISTINCT artifact_id FROM artifact_index UNION SELECT DISTINCT artifact_id FROM thread"
+    ).fetchall()
+    for (artifact_id,) in artifact_rows:
+        count_row = conn.execute(
+            "SELECT COUNT(*) FROM artifact_round WHERE artifact_id=?",
+            (artifact_id,),
+        ).fetchone()
+        round_count = int(count_row[0]) if count_row else 0
+        unassigned = conn.execute(
+            "SELECT id, created_at FROM thread WHERE artifact_id=? AND round_id IS NULL "
+            "ORDER BY created_at ASC, id ASC",
+            (artifact_id,),
+        ).fetchall()
+        latest = _latest_index_row(conn, artifact_id)
+        if round_count:
+            if unassigned:
+                current_row = conn.execute(
+                    "SELECT id FROM artifact_round WHERE artifact_id=? "
+                    "ORDER BY round_number DESC, id DESC LIMIT 1",
+                    (artifact_id,),
+                ).fetchone()
+                if current_row is not None:
+                    _assign_threads_to_round(
+                        conn, [int(thread_id) for thread_id, _ in unassigned], int(current_row[0])
+                    )
+            continue
+
+        if latest is None:
+            if not unassigned:
+                continue
+            first_ts = int(unassigned[0][1])
+            round_id = _insert_round_row(
+                conn, artifact_id, 1, first_ts, project=None, subdir=None, src_path=None, inferred=True
+            )
+            _assign_threads_to_round(conn, [int(thread_id) for thread_id, _ in unassigned], round_id)
+            continue
+
+        project, subdir, src_path, last_pushed = latest
+        if not unassigned:
+            _insert_round_row(
+                conn, artifact_id, 1, last_pushed, project=project, subdir=subdir, src_path=src_path, inferred=True
+            )
+            continue
+
+        old_ids = [int(thread_id) for thread_id, created_at in unassigned if int(created_at) < last_pushed]
+        current_ids = [int(thread_id) for thread_id, created_at in unassigned if int(created_at) >= last_pushed]
+        if old_ids:
+            first_old_ts = min(int(created_at) for _, created_at in unassigned if int(created_at) < last_pushed)
+            old_round_id = _insert_round_row(
+                conn, artifact_id, 1, first_old_ts, project=project, subdir=subdir, src_path=src_path, inferred=True
+            )
+            current_round_id = _insert_round_row(
+                conn, artifact_id, 2, last_pushed, project=project, subdir=subdir, src_path=src_path, inferred=True
+            )
+            _assign_threads_to_round(conn, old_ids, old_round_id)
+            _assign_threads_to_round(conn, current_ids, current_round_id)
+            continue
+
+        round_id = _insert_round_row(
+            conn, artifact_id, 1, last_pushed, project=project, subdir=subdir, src_path=src_path, inferred=True
+        )
+        _assign_threads_to_round(conn, [int(thread_id) for thread_id, _ in unassigned], round_id)
+
+
+def migrate_schema(conn: sqlite3.Connection) -> None:
+    """Run idempotent schema backfills up to the current version."""
     row = conn.execute(
         "SELECT value FROM setting WHERE key='schema_version'"
     ).fetchone()
@@ -395,8 +572,12 @@ def migrate_schema(conn: sqlite3.Connection) -> None:
 
     conn.execute("BEGIN IMMEDIATE")
     try:
-        _rebuild_upload_table_if_legacy(conn)
-        _backfill_legacy_comments(conn)
+        if current < 2:
+            _rebuild_upload_table_if_legacy(conn)
+            _backfill_legacy_comments(conn)
+        if current < 3:
+            _ensure_round_table_if_legacy(conn)
+            _backfill_legacy_rounds(conn)
         conn.execute(
             "INSERT INTO setting (key, value) VALUES ('schema_version', ?) "
             "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -449,6 +630,69 @@ def setting_delete(key: str) -> None:
         conn.commit()
     finally:
         conn.close()
+
+
+def record_push_round(
+    artifact_id: str,
+    project: str,
+    subdir: str,
+    src_path: str,
+    *,
+    created_at: int | None = None,
+    inferred: bool = False,
+) -> int:
+    """Append one ordered review round for a pushed artifact_id."""
+    conn = db_connect()
+    try:
+        round_id = _insert_round_row(
+            conn,
+            artifact_id,
+            _next_round_number(conn, artifact_id),
+            int(time.time()) if created_at is None else int(created_at),
+            project=project,
+            subdir=subdir,
+            src_path=src_path,
+            inferred=inferred,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return round_id
+
+
+def round_history(artifact_id: str) -> list[dict[str, object]]:
+    """Return ordered round metadata for one artifact_id."""
+    conn = db_connect()
+    try:
+        rows = conn.execute(
+            "SELECT id, round_number, project, subdir, src_path, created_at, inferred "
+            "FROM artifact_round WHERE artifact_id=? ORDER BY round_number ASC, id ASC",
+            (artifact_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+    current_id = int(rows[-1][0]) if rows else None
+    return [
+        {
+            "id": int(row[0]),
+            "round_number": int(row[1]),
+            "label": f"Round {int(row[1])}",
+            "project": row[2],
+            "subdir": row[3],
+            "src_path": row[4],
+            "created_at": int(row[5]),
+            "created_at_iso": iso_utc(int(row[5])),
+            "inferred": bool(row[6]),
+            "current": int(row[0]) == current_id,
+        }
+        for row in rows
+    ]
+
+
+def current_round(artifact_id: str) -> dict[str, object] | None:
+    """Return the current round metadata for one artifact_id."""
+    rounds = round_history(artifact_id)
+    return rounds[-1] if rounds else None
 
 
 # ── artifact resolution + fs helpers (preserved from legacy) ──────────
@@ -866,11 +1110,13 @@ def create_thread(
     anchor_data = serialize_anchor(anchor)
     conn = db_connect()
     try:
+        round_meta = current_round(artifact_id)
+        round_id = int(round_meta["id"]) if round_meta is not None else None
         cur = conn.execute(
             "INSERT INTO thread "
             "(artifact_id, sub_path, anchor_kind, anchor_data, resolved, "
-            " author, created_at) VALUES (?, ?, ?, ?, 0, ?, ?)",
-            (artifact_id, sub_path, anchor.kind, anchor_data, author, now),
+            " author, created_at, round_id) VALUES (?, ?, ?, ?, 0, ?, ?, ?)",
+            (artifact_id, sub_path, anchor.kind, anchor_data, author, now, round_id),
         )
         thread_id = cur.lastrowid
         if thread_id is None:
@@ -988,14 +1234,17 @@ def list_threads(artifact_id: str, sub_path: str) -> list[Thread]:
     conn = db_connect()
     try:
         thread_rows = conn.execute(
-            "SELECT id, artifact_id, sub_path, anchor_kind, anchor_data, "
-            "resolved, author, created_at, bd_ticket FROM thread "
-            "WHERE artifact_id=? AND sub_path=? ORDER BY created_at ASC",
+            "SELECT t.id, t.artifact_id, t.sub_path, t.anchor_kind, t.anchor_data, "
+            "t.resolved, t.author, t.created_at, t.bd_ticket, t.round_id, "
+            "ar.round_number, COALESCE(ar.inferred, 0) "
+            "FROM thread t LEFT JOIN artifact_round ar ON ar.id=t.round_id "
+            "WHERE t.artifact_id=? AND t.sub_path=? "
+            "ORDER BY COALESCE(ar.round_number, 0) ASC, t.created_at ASC, t.id ASC",
             (artifact_id, sub_path),
         ).fetchall()
         threads: list[Thread] = []
         for (tid, aid, sp, kind, adata, resolved, author, created_at,
-             bd_ticket) in thread_rows:
+             bd_ticket, round_id, round_number, round_inferred) in thread_rows:
             anchor = Anchor(kind=kind, data=json.loads(adata) if adata else None)
             reply_rows = conn.execute(
                 "SELECT id, body, author, created_at FROM reply "
@@ -1024,7 +1273,8 @@ def list_threads(artifact_id: str, sub_path: str) -> list[Thread]:
                 Thread(id=tid, artifact_id=aid, sub_path=sp, anchor=anchor,
                        resolved=bool(resolved), author=author,
                        created_at=created_at, bd_ticket=bd_ticket,
-                       replies=tuple(replies))
+                       round_id=round_id, round_number=round_number,
+                       round_inferred=bool(round_inferred), replies=tuple(replies))
             )
     finally:
         conn.close()
@@ -1068,6 +1318,10 @@ def _thread_json(t: Thread) -> dict[str, object]:
         "created_at": t.created_at,
         "created_at_iso": iso_utc(t.created_at),
         "bd_ticket": t.bd_ticket,
+        "round_id": t.round_id,
+        "round_number": t.round_number,
+        "round_inferred": t.round_inferred,
+        "round_label": (f"Round {t.round_number}" if t.round_number else None),
         "replies": [_reply_json(r) for r in t.replies],
     }
 
@@ -1095,10 +1349,13 @@ def feedback_dump(artifact_id: str) -> dict[str, object]:
     finally:
         conn.close()
 
+    rounds = round_history(artifact_id)
+    current = rounds[-1] if rounds else None
+
     threads: list[Thread] = []
     for (sub_path,) in sub_path_rows:
         threads.extend(list_threads(artifact_id, sub_path))
-    threads.sort(key=lambda t: (t.sub_path, t.created_at))
+    threads.sort(key=lambda t: (t.round_number or 0, t.sub_path, t.created_at))
 
     comments_json: list[dict[str, object]] = []
     for t in threads:
@@ -1115,12 +1372,17 @@ def feedback_dump(artifact_id: str) -> dict[str, object]:
                     "created_at": r.created_at,
                     "created_at_iso": iso_utc(r.created_at),
                     "resolved": t.resolved,
+                    "round_id": t.round_id,
+                    "round_number": t.round_number,
+                    "round_inferred": t.round_inferred,
                     "uploads": [_upload_json(u) for u in r.uploads],
                 }
             )
 
     return {
         "artifact_id": artifact_id,
+        "current_round": current,
+        "rounds": rounds,
         "pushes": [
             {
                 "project": r[0], "subdir": r[1], "src_path": r[2],
@@ -1424,13 +1686,13 @@ ANNOTORIOUS_SCRIPT_URL = "/_/assets/annotorious/annotorious-openseadragon.min.js
 ANNOTORIOUS_CSS_URL = "/_/assets/annotorious/annotorious.min.css"
 THEME_CSS_URL = "/_/assets/css/theme.css"
 
-# Linear-theme design tokens (colors, type, spacing, radius). Page-owning
+# Lodestar-derived design tokens (colors, type, spacing, radius). Page-owning
 # templates load them via assets/css/theme.css, linked into <head> by
 # render_page() below. The page-comment widget injected into arbitrary
 # pushed HTML can't rely on that external stylesheet being present on a page
 # it doesn't own, so it keeps its own scoped copy, baked at module load time
 # via search-replace on the __THEME_TOGGLE_CSS__ etc. tokens (same mechanism
-# the legacy widget used for __CSS__/__JS__ — avoids a .format() call
+# the legacy widget used for __CSS__/__JS__  -  avoids a .format() call
 # colliding with the CSS/JS braces).
 #
 # Three modes, same custom-property names in every scope so every existing
@@ -1443,101 +1705,107 @@ THEME_CSS_URL = "/_/assets/css/theme.css"
 #     order (see _THEME_TOGGLE_JS + _THEME_PREPAINT_SCRIPT below).
 
 # Color tokens only (not font/space/radius, which never change with theme).
-# Byte-identical to the pre-theming values; already WCAG-checked.
+# Mapped from the Lodestar dark-graphite default and light alternate.
 _COLOR_TOKENS_DARK = r"""
-  --bg-base: #0d0e10;
-  --bg-elevated: #18191a;
-  --bg-overlay: #232428;
-  --text-primary: #f2f3f3;
-  --text-secondary: #d0d6e0;
-  --text-muted: #8a8f98;
-  --border: #23252a;
-  --border-strong: #34343a;
-  --accent: #5e6ad2;
-  --accent-hover: #828fff;
-  --status-resolved: #27a644;
-  --status-unresolved: #d29922;
-  --status-danger: #f85149;
+  --bg-base: #191b1e;
+  --bg-elevated: #212429;
+  --bg-overlay: #131518;
+  --text-primary: #c4c7ca;
+  --text-secondary: #9aa0a7;
+  --text-muted: #767c84;
+  --border: #2c3137;
+  --border-strong: #3b4148;
+  --accent: #5a9bc9;
+  --accent-hover: #78b1d8;
+  --on-accent: #12161b;
+  --status-resolved: #6e8a70;
+  --status-unresolved: #b07a3d;
+  --status-danger: #be6b5b;
+  --shadow-overlay: 0 18px 48px rgba(0, 0, 0, 0.24);
 """
 
-# Linear-light-matched: near-white surface ladder, same purple accent family,
-# dark text, GitHub-convention status hues darkened just enough to clear
-# AA (>=4.5:1 normal text, >=3:1 the border-strong UI control) against both
-# --bg-base and --bg-elevated. Full contrast table in the PR description.
 _COLOR_TOKENS_LIGHT = r"""
-  --bg-base: #ffffff;
-  --bg-elevated: #f7f8fa;
-  --bg-overlay: #eceef2;
-  --text-primary: #1a1a1f;
-  --text-secondary: #4a4f5a;
-  --text-muted: #666c7a;
-  --border: #e4e5e9;
-  --border-strong: #84899a;
-  --accent: #5c68d2;
-  --accent-hover: #4550b8;
-  --status-resolved: #1f8336;
-  --status-unresolved: #946b18;
-  --status-danger: #e31309;
+  --bg-base: #f7f6f3;
+  --bg-elevated: #ffffff;
+  --bg-overlay: #f0efeb;
+  --text-primary: #1c1b18;
+  --text-secondary: #55524a;
+  --text-muted: #8a857a;
+  --border: #ddd9d0;
+  --border-strong: #c4bfb2;
+  --accent: #86603c;
+  --accent-hover: #6b4c30;
+  --on-accent: #fbf8f3;
+  --status-resolved: #4f6951;
+  --status-unresolved: #8f622d;
+  --status-danger: #a45344;
+  --shadow-overlay: 0 18px 48px rgba(28, 27, 24, 0.12);
 """
 
 # Theme toggle: one fixed-position control, present on every page type
 # (gallery, viewer, code view, project index, and the widget injected into
 # arbitrary pushed pages) so switching modes anywhere is visible everywhere.
-# Cycles Light -> Dark -> Auto; state lives in localStorage under
-# _THEME_STORAGE_KEY, shared across every page since they're all same-origin.
-_THEME_STORAGE_KEY = "review-serve-theme"
+# Default is dark-graphite; the toggle flips dark-graphite <-> light and keeps
+# the shared choice in localStorage under _THEME_STORAGE_KEY.
+_THEME_STORAGE_KEY = "lodestar-theme"
 
 _THEME_TOGGLE_CSS = r"""
 .theme-toggle {
   position: fixed; top: var(--space-3); right: var(--space-3); z-index: 1000;
   background: var(--bg-elevated); color: var(--text-secondary);
-  border: 1px solid var(--border); border-radius: var(--radius-pill);
-  padding: 4px 12px; font-size: 12px; font-family: var(--font-ui);
-  cursor: pointer; line-height: 1.5;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 6px 10px; font-size: 12px; font-family: var(--font-ui);
+  cursor: pointer; line-height: 1.4;
 }
 .theme-toggle:hover { border-color: var(--border-strong); color: var(--text-primary); }
 """
 
 _THEME_TOGGLE_HTML = (
     # No static aria-label: the button's own textContent (set by render() in
-    # _THEME_TOGGLE_JS, e.g. "Theme: Dark") already doubles as its accessible
-    # name and updates on every click, so screen readers hear the current
-    # mode too instead of a fixed label that would go stale after a click.
+    # _THEME_TOGGLE_JS) already doubles as its accessible name and updates on
+    # every click, so screen readers hear the current mode too.
     '<button type="button" class="theme-toggle" '
     'id="review-serve-theme-toggle"></button>'
 )
 
-# Pre-paint: a tiny inline script, first thing in <head>, so a stored
-# explicit choice is applied before the browser paints anything (no flash
-# of the auto/OS-default theme first). Auto has no stored value, so it's a
-# no-op here and the :root/@media cascade above just takes over.
+# Pre-paint: apply a stored explicit theme before first paint. With no saved
+# value, the stylesheet's dark-graphite :root tokens already match the
+# approved default.
 _THEME_PREPAINT_SCRIPT = (
     "<script>try{var t=localStorage.getItem(" + json.dumps(_THEME_STORAGE_KEY)
-    + ");if(t==='light'||t==='dark')"
+    + ");if(t==='light'||t==='dark-graphite')"
     "document.documentElement.setAttribute('data-theme',t);}catch(e){}</script>"
 )
 
-# Cycle + persist, shared verbatim by every page type. __STORAGE_KEY__ is
+# Toggle + persist, shared verbatim by every page type. __STORAGE_KEY__ is
 # substituted at module load (same search-replace idiom used by the widget's
 # own CSS/JS below).
 _THEME_TOGGLE_JS_RAW = r"""
 (function(){
   var KEY = '__STORAGE_KEY__';
-  var MODES = ['auto', 'light', 'dark'];
-  var LABELS = { auto: 'Theme: Auto', light: 'Theme: Light', dark: 'Theme: Dark' };
+  var THEMES = ['dark-graphite', 'light'];
+  var LABELS = {
+    'dark-graphite': 'Theme: Dark graphite',
+    light: 'Theme: Light',
+  };
   function current(){
-    try { return localStorage.getItem(KEY) || 'auto'; } catch (e) { return 'auto'; }
+    try {
+      var saved = localStorage.getItem(KEY);
+      return THEMES.indexOf(saved) >= 0 ? saved : 'dark-graphite';
+    } catch (e) {
+      return 'dark-graphite';
+    }
   }
   function apply(mode){
-    if (mode === 'auto') document.documentElement.removeAttribute('data-theme');
-    else document.documentElement.setAttribute('data-theme', mode);
+    document.documentElement.setAttribute('data-theme', mode);
   }
   function render(btn, mode){ btn.textContent = LABELS[mode] || mode; }
   var btn = document.getElementById('review-serve-theme-toggle');
   if (!btn) return;
+  apply(current());
   render(btn, current());
   btn.addEventListener('click', function(){
-    var next = MODES[(MODES.indexOf(current()) + 1) % MODES.length];
+    var next = current() === 'dark-graphite' ? 'light' : 'dark-graphite';
     apply(next);
     try { localStorage.setItem(KEY, next); } catch (e) {}
     render(btn, next);
@@ -1595,50 +1863,395 @@ def render_page_header(title_html: str, subline_html: str = "") -> str:
     return f'<header class="page-header"><h1>{title_html}</h1>{subline_html}</header>'
 
 
-def render_gallery_page(artifact_id: str, sub_path: str) -> bytes:
-    """Render the image gallery HTML for a staged artifact path.
 
-    Lists IMAGE_EXT files under the staged root; each links to the viewer
-    route. Any file/author string html.escape'd. Returns UTF-8 bytes.
-    """
-    loc = _artifact_location(artifact_id)
-    tiles: list[str] = []
-    if loc is not None:
-        root, project, subdir = loc
-        listing_dir = (root / sub_path).resolve()
-        if listing_dir.is_relative_to(root) and listing_dir.is_dir():
-            images = sorted(
-                p for p in listing_dir.iterdir()
-                if p.is_file() and p.suffix.lower() in IMAGE_EXT
-            )
-            for img in images:
-                rel = img.relative_to(root).as_posix()
-                view_href = (
-                    f"/_/review?artifact={urllib.parse.quote(artifact_id)}"
-                    f"&src={urllib.parse.quote(rel)}&view=image"
-                )
-                img_src = (
-                    f"/{urllib.parse.quote(project)}/{urllib.parse.quote(subdir)}"
-                    f"/{urllib.parse.quote(rel)}"
-                )
-                tiles.append(
-                    f'<a class="card gallery-tile" href="{view_href}">'
-                    f'<img src="{img_src}" loading="lazy" '
-                    f'alt="{html.escape(img.name)}">'
-                    f'<div class="gallery-caption">{html.escape(img.name)}'
-                    f'</div></a>'
-                )
 
-    grid = "".join(tiles) if tiles else '<p class="empty">no images found</p>'
-    title = f"{artifact_id} / {sub_path or '.'}"
-    body_html = (
-        render_page_header(
-            "Gallery",
-            f'<div class="thread-meta mono">{html.escape(artifact_id)}</div>',
-        )
-        + f'<div class="gallery-grid">{grid}</div>'
+def _plural(count: int, noun: str) -> str:
+    """Return a simple count label, e.g. 1 image / 2 images."""
+    suffix = "" if count == 1 else "s"
+    return f"{count} {noun}{suffix}"
+
+
+def _raw_artifact_href(project: str, subdir: str, rel_path: str) -> str:
+    """Return the raw staged-file URL for one artifact-relative path."""
+    return (
+        f"/{urllib.parse.quote(project)}/{urllib.parse.quote(subdir)}"
+        f"/{urllib.parse.quote(rel_path)}"
     )
-    return render_page(title=title, body_html=body_html).encode("utf-8")
+
+
+def _review_href(artifact_id: str, rel_path: str, *, is_dir: bool = False) -> str:
+    """Return the owned review route for a file or child directory."""
+    if is_dir:
+        return (
+            f"/_/review?artifact={urllib.parse.quote(artifact_id)}"
+            f"&path={urllib.parse.quote(rel_path)}"
+        )
+    ext = Path(rel_path).suffix.lower()
+    view = "image" if ext in IMAGE_EXT else "code" if ext in CODE_EXT else ""
+    if not view:
+        return ""
+    return (
+        f"/_/review?artifact={urllib.parse.quote(artifact_id)}"
+        f"&src={urllib.parse.quote(rel_path)}&view={view}"
+    )
+
+
+def _thread_counts(artifact_id: str, sub_path: str) -> tuple[int, int]:
+    """Return (open_threads, total_threads) for one exact review target."""
+    threads = list_threads(artifact_id, sub_path)
+    total_threads = len(threads)
+    open_threads = sum(1 for thread in threads if not thread.resolved)
+    return open_threads, total_threads
+
+
+def _subtree_thread_counts(artifact_id: str, directory: str) -> tuple[int, int]:
+    """Return (open_threads, total_threads) for one review path subtree."""
+    conn = db_connect()
+    try:
+        if directory:
+            prefix = directory.rstrip("/")
+            rows = conn.execute(
+                "SELECT resolved FROM thread WHERE artifact_id=? "
+                "AND (sub_path=? OR sub_path LIKE ?)",
+                (artifact_id, prefix, prefix + "/%"),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT resolved FROM thread WHERE artifact_id=?",
+                (artifact_id,),
+            ).fetchall()
+    finally:
+        conn.close()
+    total_threads = len(rows)
+    open_threads = sum(1 for (resolved,) in rows if not resolved)
+    return open_threads, total_threads
+
+
+def _build_review_listing(artifact_id: str, directory: str = "") -> ReviewListing:
+    """Return the owned review queue data for one artifact directory."""
+    loc = _artifact_location(artifact_id)
+    if loc is None:
+        return ReviewListing(directory=directory)
+    root, project, subdir = loc
+    listing_dir = (root / directory).resolve()
+    if not listing_dir.is_relative_to(root) or not listing_dir.is_dir():
+        return ReviewListing(directory=directory)
+
+    items: list[ReviewItem] = []
+    folder_count = 0
+    image_count = 0
+    code_count = 0
+    for entry in sorted(
+        listing_dir.iterdir(), key=lambda path: (not path.is_dir(), path.name.lower())
+    ):
+        if entry.name.startswith("."):
+            continue
+        rel_path = entry.relative_to(root).as_posix()
+        if entry.is_dir():
+            folder_count += 1
+            items.append(
+                ReviewItem(
+                    name=entry.name,
+                    rel_path=rel_path,
+                    kind="folder",
+                    href=_review_href(artifact_id, rel_path, is_dir=True),
+                    preview_src=None,
+                    open_threads=0,
+                    total_threads=0,
+                )
+            )
+            continue
+        ext = entry.suffix.lower()
+        if ext not in IMAGE_EXT and ext not in CODE_EXT:
+            continue
+        open_threads, total_threads = _thread_counts(artifact_id, rel_path)
+        kind = "image" if ext in IMAGE_EXT else "code"
+        if kind == "image":
+            image_count += 1
+        else:
+            code_count += 1
+        items.append(
+            ReviewItem(
+                name=entry.name,
+                rel_path=rel_path,
+                kind=kind,
+                href=_review_href(artifact_id, rel_path),
+                preview_src=(
+                    _raw_artifact_href(project, subdir, rel_path)
+                    if kind == "image"
+                    else None
+                ),
+                open_threads=open_threads,
+                total_threads=total_threads,
+            )
+        )
+
+    open_threads, total_threads = _subtree_thread_counts(artifact_id, directory)
+    return ReviewListing(
+        directory=directory,
+        items=tuple(items),
+        folder_count=folder_count,
+        image_count=image_count,
+        code_count=code_count,
+        open_threads=open_threads,
+        total_threads=total_threads,
+    )
+
+
+def _render_review_queue(
+    listing: ReviewListing, *, active_rel: str = "", active_href: str = ""
+) -> str:
+    """Render the shared owned-page review queue."""
+    cards: list[str] = []
+    for item in listing.items:
+        active = item.rel_path == active_rel or (
+            not active_rel and active_href and item.href == active_href
+        )
+        item_class = "qitem active" if active else "qitem"
+        kind_label = {"folder": "DIR", "image": "IMG", "code": "CODE"}[item.kind]
+        if item.kind == "folder":
+            state_html = '<span class="state review">browse</span>'
+            count_html = '<div class="count">dir<small>open</small></div>'
+        elif item.open_threads:
+            state_html = (
+                f'<span class="state open">{_plural(item.open_threads, "open thread")}</span>'
+            )
+            count_html = (
+                f'<div class="count">{item.total_threads}<small>threads</small></div>'
+            )
+        elif item.total_threads:
+            state_html = '<span class="state resolved">resolved</span>'
+            count_html = (
+                f'<div class="count">{item.total_threads}<small>threads</small></div>'
+            )
+        else:
+            state_html = f'<span class="state review">{item.kind}</span>'
+            count_html = '<div class="count">0<small>threads</small></div>'
+        cards.append(
+            f'<a class="{item_class}" href="{item.href}">'
+            f'<span class="typebox">{kind_label}</span>'
+            f'<div><div class="qname">{html.escape(item.name)}</div>'
+            f'<div class="qmeta">{state_html}'
+            f'<span class="mono">{html.escape(item.rel_path or ".")}</span></div></div>'
+            f'{count_html}</a>'
+        )
+    if not cards:
+        cards.append('<p class="empty">no reviewable items in this path</p>')
+
+    detail_bits = [
+        _plural(listing.image_count, "image"),
+        _plural(listing.code_count, "code file"),
+    ]
+    if listing.folder_count:
+        detail_bits.append(_plural(listing.folder_count, "folder"))
+    path_label = html.escape(listing.directory or ".")
+    return (
+        '<aside class="queue" aria-label="Review queue">'
+        '<div class="queue-head"><span class="title">Work queue</span>'
+        f'<span class="progress">{_plural(listing.open_threads, "open thread")}</span></div>'
+        '<div class="queue-tools">'
+        f'<span>path {path_label}</span>'
+        f'<span>{html.escape(" · ".join(detail_bits))}</span></div>'
+        f'<div class="queue-list">{"".join(cards)}</div></aside>'
+    )
+
+
+def _render_round_history_section(artifact_id: str) -> str:
+    """Render one shared round-history block for owned review pages."""
+    rounds = round_history(artifact_id)
+    if not rounds:
+        return (
+            '<section class="review-rail-section"><h2>Round history</h2>'
+            '<p class="empty">no review rounds recorded yet</p></section>'
+        )
+    items: list[str] = []
+    for round_meta in reversed(rounds):
+        state = "unresolved" if round_meta["current"] else "resolved"
+        state_text = "current" if round_meta["current"] else "history"
+        inferred = " · inferred" if round_meta["inferred"] else ""
+        items.append(
+            '<div class="review-list-item">'
+            f'<span>{html.escape(str(round_meta["label"]))}{inferred}</span>'
+            f'<span class="thread-badge {state}">{state_text}</span></div>'
+        )
+    current = rounds[-1]
+    return (
+        '<section class="review-rail-section"><h2>Round history</h2>'
+        f'<p>Current review uses {html.escape(str(current["label"]))}. '
+        'Re-pushing the same artifact_id opens the next round.</p>'
+        f'<div class="review-list">{"".join(items)}</div></section>'
+    )
+
+
+def _render_owned_review_shell(
+    *,
+    title: str,
+    subtitle_html: str,
+    quiet_html: str,
+    queue_html: str,
+    main_html: str,
+    rail_html: str,
+    head_extra: str = "",
+    shell_class: str = "inspector",
+) -> bytes:
+    """Wrap one owned /_/review page in the approved Lodestar shell."""
+    body_html = (
+        '<div class="review-shell">'
+        '<header class="topbar">'
+        f'<div class="caption"><b>Artifact review</b><span>{subtitle_html}</span></div>'
+        '<div class="top-actions">'
+        f'<span class="quiet">{quiet_html}</span>{_THEME_TOGGLE_BLOCK}</div>'
+        '</header>'
+        f'<div class="app {shell_class}">'
+        + queue_html
+        + main_html
+        + rail_html
+        + '</div></div>'
+    )
+    return render_page(
+        title=title,
+        head_extra=head_extra,
+        body_html=body_html,
+        include_theme_toggle=False,
+    ).encode("utf-8")
+
+
+def render_gallery_page(artifact_id: str, sub_path: str) -> bytes:
+    """Render the owned review landing page for one staged artifact path."""
+    listing = _build_review_listing(artifact_id, sub_path)
+    title = f"{artifact_id} / {sub_path or '.'}"
+    subtitle_html = html.escape(f"{artifact_id}, gallery, {sub_path or '.'}")
+    quiet_html = html.escape(
+        f"{_plural(listing.open_threads, 'open thread')} · "
+        f"{_plural(listing.total_threads, 'thread')} in path"
+    )
+    queue_html = _render_review_queue(listing)
+
+    folders = [item for item in listing.items if item.kind == "folder"]
+    images = [item for item in listing.items if item.kind == "image"]
+    code_files = [item for item in listing.items if item.kind == "code"]
+
+    def render_card(item: ReviewItem) -> str:
+        if item.preview_src:
+            thumb = (
+                f'<div class="review-thumb"><img src="{item.preview_src}" '
+                f'loading="lazy" alt="{html.escape(item.name)}"></div>'
+            )
+        else:
+            label = "folder" if item.kind == "folder" else "code"
+            thumb = f'<div class="review-thumb review-thumb-label">{label}</div>'
+        if item.kind == "folder":
+            meta = '<span class="state review">browse</span><span class="mono">open path</span>'
+            note = "Drill into a child path without leaving the owned review shell."
+        elif item.open_threads:
+            meta = (
+                f'<span class="state open">{_plural(item.open_threads, "open thread")}</span>'
+                f'<span class="mono">{_plural(item.total_threads, "thread")}</span>'
+            )
+            note = "Continue review where unresolved feedback already exists."
+        elif item.total_threads:
+            meta = (
+                f'<span class="state resolved">resolved</span>'
+                f'<span class="mono">{_plural(item.total_threads, "thread")}</span>'
+            )
+            note = "Review history stays attached even after the thread closes."
+        else:
+            meta = f'<span class="state review">{item.kind}</span><span class="mono">new review</span>'
+            note = "Open the owned viewer and start the first thread from there."
+        return (
+            f'<a class="review-card" href="{item.href}">{thumb}'
+            '<div class="review-card-copy">'
+            f'<div class="review-card-title">{html.escape(item.name)}</div>'
+            f'<div class="review-card-meta">{meta}</div>'
+            f'<div class="review-card-note">{note}</div>'
+            '</div></a>'
+        )
+
+    sections: list[str] = []
+    if folders:
+        sections.append(
+            '<section class="review-section">'
+            '<div class="review-section-head"><div><h2>Browse deeper</h2>'
+            '<p>Child paths stay on the owned review route instead of falling back to the raw server.</p>'
+            '</div></div>'
+            f'<div class="review-card-grid">{"".join(render_card(item) for item in folders)}</div>'
+            '</section>'
+        )
+    if images:
+        sections.append(
+            '<section class="review-section">'
+            '<div class="review-section-head"><div><h2>Image review</h2>'
+            '<p>Launch the Inspector viewer with real region threads and zoomable source pixels.</p>'
+            '</div></div>'
+            f'<div class="review-card-grid">{"".join(render_card(item) for item in images)}</div>'
+            '</section>'
+        )
+    if code_files:
+        sections.append(
+            '<section class="review-section">'
+            '<div class="review-section-head"><div><h2>Code review</h2>'
+            '<p>Open per-line review without leaving the shared queue and thread shell.</p>'
+            '</div></div>'
+            f'<div class="review-card-grid">{"".join(render_card(item) for item in code_files)}</div>'
+            '</section>'
+        )
+    if not sections:
+        sections.append(
+            '<section class="review-section"><p class="empty">no reviewable images or code files in this path</p></section>'
+        )
+
+    visible_items = listing.image_count + listing.code_count + listing.folder_count
+    summary_html = (
+        '<section class="summary">'
+        '<div><h3>Owned review landing</h3>'
+        '<div class="summary-line">Use the app shell to browse images, code, and open feedback from one queue.</div>'
+        '</div>'
+        '<div class="facts">'
+        f'<div class="fact"><span>Artifact</span>{html.escape(artifact_id)}</div>'
+        f'<div class="fact"><span>Path</span>{html.escape(sub_path or ".")}</div>'
+        f'<div class="fact"><span>Visible items</span>{visible_items}</div>'
+        f'<div class="fact"><span>Open threads</span>{listing.open_threads}</div>'
+        '</div></section>'
+    )
+    main_html = (
+        '<main class="hero review-gallery-main" aria-label="Owned review landing">'
+        + summary_html
+        + '<div class="review-sections">'
+        + ''.join(sections)
+        + '</div></main>'
+    )
+
+    open_items = [item for item in listing.items if item.open_threads]
+    open_list = ''.join(
+        f'<a class="review-list-item" href="{item.href}"><span>{html.escape(item.name)}</span>'
+        f'<span class="thread-badge unresolved">{_plural(item.open_threads, "open thread")}</span></a>'
+        for item in open_items
+    )
+    if not open_list:
+        open_list = '<p class="empty">no open threads in this path</p>'
+    rail_html = (
+        '<aside class="rail" aria-label="Path review summary">'
+        f'<div class="rail-head"><span class="title">Path summary</span><span class="progress">{html.escape(sub_path or ".")}</span></div>'
+        '<div class="threads">'
+        '<section class="review-rail-section">'
+        '<h2>What lives here</h2>'
+        f'<p>{_plural(listing.image_count, "image")}, {_plural(listing.code_count, "code file")}, and {_plural(listing.folder_count, "folder")} stay inside the same owned review shell.</p>'
+        '</section>'
+        '<section class="review-rail-section">'
+        '<h2>Open items</h2>'
+        f'<div class="review-list">{open_list}</div>'
+        '</section>'
+        + _render_round_history_section(artifact_id) +
+        '</div></aside>'
+    )
+    return _render_owned_review_shell(
+        title=title,
+        subtitle_html=subtitle_html,
+        quiet_html=quiet_html,
+        queue_html=queue_html,
+        main_html=main_html,
+        rail_html=rail_html,
+    )
 
 
 def _browse_tile(name: str, href: str, thumb_src: str | None) -> str:
@@ -1727,7 +2340,7 @@ def render_directory_gallery(url_path: str, fs_dir: Path) -> bytes:
 #
 # ponytail: pins use Annotorious's own rectangle shapes (recolored per
 # resolved state via its formatter API) rather than custom circular numbered
-# SVG badges hand-synced to OSD viewport transforms on every pan/zoom — that
+# SVG badges hand-synced to OSD viewport transforms on every pan/zoom  -  that
 # is a lot of hand-rolled canvas math for a stdlib-only, no-bundler skeleton
 # fill. The ordinal number instead appears in the sidebar thread list, which
 # also supports click-to-select-annotation. Resolved/unresolved recoloring
@@ -1735,20 +2348,15 @@ def render_directory_gallery(url_path: str, fs_dir: Path) -> bytes:
 # marker" shape itself is a lighter-weight stand-in.
 # Viewer-only head CSS (no theme tokens/reset -- those live in
 # assets/css/theme.css, linked separately by render_page()). Layout for the
-# split OSD canvas + comment sidebar, plus the Annotorious pin recolor rules.
+# OpenSeadragon canvas inside the owned Inspector shell, plus the Annotorious
+# pin recolor rules.
 _VIEWER_HEAD_CSS = r"""
-html, body { height: 100%; }
-body { display: flex; }
-#osd-viewer { flex: 1 1 auto; height: 100vh; background: var(--bg-base); }
-#thread-panel-wrap {
-  flex: 0 0 340px; height: 100vh; overflow-y: auto; background: var(--bg-elevated);
-  border-left: 1px solid var(--border); padding: 48px var(--space-4) var(--space-4);
-  box-sizing: border-box;
-}
+#osd-viewer { width: 100%; height: 100%; min-height: 70vh; background: var(--bg-overlay); }
+.review-viewer-main .stage { min-height: calc(100vh - 240px); }
+#thread-panel { display: flex; flex-direction: column; gap: var(--space-3); }
+#thread-panel .thread-card { margin-bottom: 0; }
 /* Outer ring stays a fixed dark halo (Annotorious's own default) so a pin
-   reads against ANY image backdrop, light or dark -- that axis is the image
-   content, independent of the app's own light/dark theme below. Inner ring
-   carries the themed accent/status color. */
+   reads against any image backdrop. Inner ring carries the themed status color. */
 .a9s-annotation.a9s-unresolved .a9s-outer { stroke: rgba(0, 0, 0, .7); stroke-width: 3px; }
 .a9s-annotation.a9s-unresolved .a9s-inner { stroke: var(--accent); }
 .a9s-annotation.a9s-unresolved:hover .a9s-inner { stroke: var(--accent-hover); }
@@ -1757,13 +2365,22 @@ body { display: flex; }
 .a9s-annotation.selected .a9s-inner { stroke: var(--accent-hover); stroke-width: 2px; }
 """
 
-# Viewer body: full-bleed OSD canvas + comment sidebar, no page-header (see
-# render_viewer_page -- this page is intentionally headerless).
-_VIEWER_BODY_RAW = r"""<div id="osd-viewer"></div>
-<div id="thread-panel-wrap">
-  <h2>Comments</h2>
-  <div id="thread-panel"><p class="empty">loading...</p></div>
-</div>
+_VIEWER_BODY_RAW = r"""<main class="hero review-viewer-main" aria-label="Inspector artifact viewer">
+  <div class="toolbar">
+    <span class="review-chip">image</span>
+    <span class="mono">__SRC_REL__</span>
+    <span class="quiet">__THREAD_SUMMARY__</span>
+  </div>
+  <div class="viewer"><div class="stage"><div id="osd-viewer"></div></div></div>
+</main>
+<aside class="rail" aria-label="Region thread rail">
+  <div class="rail-head"><span class="title">Threads</span><span class="progress" id="thread-panel-progress">loading...</span></div>
+  <div class="threads">
+    <div class="review-rail-note">Draw a region to start a thread. Click a thread card to focus its annotation.</div>
+    __ROUND_HISTORY__
+    <div id="thread-panel"><p class="empty">loading...</p></div>
+  </div>
+</aside>
 <script src="__OSD_URL__"></script>
 <script src="__ANNO_JS_URL__"></script>
 <script>
@@ -1785,14 +2402,22 @@ _VIEWER_BODY_RAW = r"""<div id="osd-viewer"></div>
     return { className: (t && t.resolved) ? 'a9s-resolved' : 'a9s-unresolved' };
   };
 
+  function fmtTime(ts){
+    return new Date(ts * 1000).toISOString().replace('T',' ').slice(0,16) + ' UTC';
+  }
+
   function renderSidebar(threads){
     const panel = document.getElementById('thread-panel');
+    const progress = document.getElementById('thread-panel-progress');
     panel.innerHTML = '';
+    const openCount = threads.filter(function(thread){ return !thread.resolved; }).length;
+    if (progress) progress.textContent = openCount ? (openCount + ' open') : (threads.length + ' reviewed');
     if (!threads.length){
       const p = document.createElement('p');
       p.className = 'empty';
       p.textContent = 'no region comments yet';
       panel.appendChild(p);
+      if (progress) progress.textContent = '0 open';
       return;
     }
     threads.forEach(function(t, i){
@@ -1808,11 +2433,23 @@ _VIEWER_BODY_RAW = r"""<div id="osd-viewer"></div>
       badge.className = 'thread-badge ' + (t.resolved ? 'resolved' : 'unresolved');
       badge.textContent = t.resolved ? 'Resolved' : 'Open';
       header.appendChild(badge);
+      if (t.round_label){
+        const roundBadge = document.createElement('span');
+        roundBadge.className = 'thread-badge resolved';
+        roundBadge.textContent = t.round_label;
+        header.appendChild(roundBadge);
+      }
       card.appendChild(header);
       for (const r of t.replies){
         const body = document.createElement('div');
         body.className = 'thread-body';
-        body.textContent = r.body;
+        const meta = document.createElement('div');
+        meta.className = 'thread-meta';
+        meta.textContent = (r.author || 'anonymous') + ' · ' + fmtTime(r.created_at);
+        body.appendChild(meta);
+        const text = document.createElement('div');
+        text.textContent = r.body;
+        body.appendChild(text);
         card.appendChild(body);
       }
       const toggle = document.createElement('button');
@@ -1874,20 +2511,17 @@ _VIEWER_BODY_RAW = r"""<div id="osd-viewer"></div>
 
 
 def render_viewer_page(artifact_id: str, src_rel: str) -> bytes:
-    """Render the OpenSeadragon deep-zoom viewer HTML for one image.
-
-    Declares the OSD tile source as a single full-res image (simple-image
-    mode, no DZI build step; see DESIGN.md section 4.4). Loads Annotorious OSD
-    plugin for pins. Thread data is fetched client-side and rendered via
-    textContent. Returns UTF-8 bytes.
-    """
+    """Render the OpenSeadragon deep-zoom viewer HTML for one image."""
     loc = _artifact_location(artifact_id)
     project, subdir = (loc[1], loc[2]) if loc else ("", "")
-    image_url = (
-        f"/{urllib.parse.quote(project)}/{urllib.parse.quote(subdir)}"
-        f"/{urllib.parse.quote(src_rel)}"
-    )
+    image_url = _raw_artifact_href(project, subdir, src_rel)
     title = f"{artifact_id} / {src_rel}"
+    parent_dir = Path(src_rel).parent.as_posix()
+    listing = _build_review_listing(artifact_id, "" if parent_dir == "." else parent_dir)
+    open_threads, total_threads = _thread_counts(artifact_id, src_rel)
+    thread_summary = (
+        f"{_plural(open_threads, 'open thread')} · {_plural(total_threads, 'thread')} on image"
+    )
     body_html = (
         _VIEWER_BODY_RAW
         .replace("__IMAGE_URL__", json.dumps(image_url))
@@ -1895,41 +2529,75 @@ def render_viewer_page(artifact_id: str, src_rel: str) -> bytes:
         .replace("__SUB_PATH__", json.dumps(src_rel))
         .replace("__OSD_URL__", OSD_SCRIPT_URL)
         .replace("__ANNO_JS_URL__", ANNOTORIOUS_SCRIPT_URL)
+        .replace("__SRC_REL__", html.escape(src_rel))
+        .replace("__THREAD_SUMMARY__", html.escape(thread_summary))
+        .replace("__ROUND_HISTORY__", _render_round_history_section(artifact_id))
     )
     head_extra = (
         f'<link rel="stylesheet" href="{ANNOTORIOUS_CSS_URL}">'
         f"<style>{_VIEWER_HEAD_CSS}</style>"
     )
-    page = render_page(title=title, head_extra=head_extra, body_html=body_html)
-    return page.encode("utf-8")
+    return _render_owned_review_shell(
+        title=title,
+        subtitle_html=html.escape(f"{artifact_id}, image, {src_rel}"),
+        quiet_html=html.escape(thread_summary),
+        queue_html=_render_review_queue(listing, active_rel=src_rel),
+        main_html=body_html,
+        rail_html='',
+        head_extra=head_extra,
+    )
 
 
 # Code-page-only head CSS (no theme tokens/reset -- those live in
 # assets/css/theme.css, linked separately by render_page()).
 _CODE_PAGE_CSS = r"""
-.code-view { font-family: var(--font-mono); font-size: 13px; line-height: 1.5; padding: var(--space-4) 0; }
+.review-code-main .stage { min-height: calc(100vh - 240px); padding: 0; }
+.code-view { height: 100%; overflow: auto; font-family: var(--font-mono); font-size: 13px; line-height: 1.55; }
 .code-line { display: flex; padding: 0 var(--space-4); cursor: pointer; border-left: 3px solid transparent; }
 .code-line:hover { background: var(--bg-elevated); border-left-color: var(--accent); }
 .code-line.has-thread { border-left-color: var(--status-unresolved); }
+.code-line.selected { background: color-mix(in srgb, var(--bg-elevated) 76%, var(--accent) 24%); border-left-color: var(--accent-hover); }
 .code-gutter { width: 3.5em; text-align: right; color: var(--text-muted); user-select: none; margin-right: var(--space-3); }
 .code-src { white-space: pre; color: var(--text-secondary); }
-#code-thread-panel { padding: var(--space-4); max-width: 920px; }
-#code-thread-panel textarea { min-height: 4rem; margin: var(--space-2) 0; }
+#code-thread-panel { display: flex; flex-direction: column; gap: var(--space-3); }
+#code-thread-panel .thread-card { margin-bottom: 0; }
+#code-thread-panel form { padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-base); }
+#code-thread-panel textarea { min-height: 5rem; margin: var(--space-3) 0; }
 """
 
-# Code-page body: the per-line source view + thread panel. The page header
-# (title) is built by render_page_header() at the call site instead of being
-# baked in here.
-_CODE_PAGE_BODY_RAW = r"""<div class="code-view">__CODE__</div>
-<div id="code-thread-panel"></div>
+_CODE_PAGE_BODY_RAW = r"""<main class="hero review-code-main" aria-label="Code review">
+  <div class="toolbar">
+    <span class="review-chip">code</span>
+    <span class="mono">__SRC_REL__</span>
+    <span class="quiet">__CODE_SUMMARY__</span>
+  </div>
+  <div class="viewer"><div class="stage"><div class="code-view">__CODE__</div></div></div>
+</main>
+<aside class="rail" aria-label="Line thread rail">
+  <div class="rail-head"><span class="title">Line review</span><span class="progress" id="code-thread-status">loading...</span></div>
+  <div class="threads">
+    <div class="review-rail-note">Select a line to open or add a thread. Existing replies stay pinned to the source line.</div>
+    __ROUND_HISTORY__
+    <div id="code-thread-panel"><p class="empty">select a line to inspect its thread history</p></div>
+  </div>
+</aside>
 <script>
 (function(){
   const ARTIFACT_ID = __ARTIFACT_ID__;
   const SUB_PATH = __SUB_PATH__;
+  const status = document.getElementById('code-thread-status');
   let byLine = {};
+  let activeLine = null;
 
   function fmtTime(ts){
     return new Date(ts * 1000).toISOString().replace('T',' ').slice(0,16) + ' UTC';
+  }
+
+  function setSelectedLine(line){
+    activeLine = line;
+    document.querySelectorAll('.code-line').forEach(function(node){
+      node.classList.toggle('selected', parseInt(node.dataset.line, 10) === line);
+    });
   }
 
   function renderThreadCard(t){
@@ -1941,6 +2609,12 @@ _CODE_PAGE_BODY_RAW = r"""<div class="code-view">__CODE__</div>
     badge.className = 'thread-badge ' + (t.resolved ? 'resolved' : 'unresolved');
     badge.textContent = t.resolved ? 'Resolved' : 'Open';
     header.appendChild(badge);
+    if (t.round_label){
+      const roundBadge = document.createElement('span');
+      roundBadge.className = 'thread-badge resolved';
+      roundBadge.textContent = t.round_label;
+      header.appendChild(roundBadge);
+    }
     card.appendChild(header);
     for (const r of t.replies){
       const body = document.createElement('div');
@@ -1970,9 +2644,16 @@ _CODE_PAGE_BODY_RAW = r"""<div class="code-view">__CODE__</div>
   function openPanel(line, threads){
     const panel = document.getElementById('code-thread-panel');
     panel.innerHTML = '';
+    setSelectedLine(line);
     const h = document.createElement('h2');
     h.textContent = 'Line ' + line;
     panel.appendChild(h);
+    if (!threads.length){
+      const empty = document.createElement('p');
+      empty.className = 'empty';
+      empty.textContent = 'no line comments yet';
+      panel.appendChild(empty);
+    }
     for (const t of threads) panel.appendChild(renderThreadCard(t));
 
     const form = document.createElement('form');
@@ -2005,6 +2686,7 @@ _CODE_PAGE_BODY_RAW = r"""<div class="code-view">__CODE__</div>
     if (!r.ok) return;
     const data = await r.json();
     byLine = {};
+    let openCount = 0;
     document.querySelectorAll('.code-line').forEach(function(el){
       el.classList.remove('has-thread');
     });
@@ -2013,9 +2695,12 @@ _CODE_PAGE_BODY_RAW = r"""<div class="code-view">__CODE__</div>
       const line = t.anchor.line;
       if (!byLine[line]) byLine[line] = [];
       byLine[line].push(t);
+      if (!t.resolved) openCount += 1;
       const el = document.getElementById('L' + line);
       if (el) el.classList.add('has-thread');
     }
+    if (status) status.textContent = openCount ? (openCount + ' open') : (data.threads.length + ' reviewed');
+    if (activeLine !== null) openPanel(activeLine, byLine[activeLine] || []);
   }
 
   document.querySelectorAll('.code-line').forEach(function(el){
@@ -2032,12 +2717,7 @@ _CODE_PAGE_BODY_RAW = r"""<div class="code-view">__CODE__</div>
 
 
 def render_code_page(artifact_id: str, src_rel: str) -> bytes:
-    """Render the per-line code view HTML for one served text file.
-
-    Each line gets an anchor; clicking a line opens a code_line thread. Line
-    contents html.escape'd. Threads fetched client-side, rendered via
-    textContent. Returns UTF-8 bytes.
-    """
+    """Render the per-line code view HTML for one served text file."""
     path = staged_source_path(artifact_id, src_rel)
     try:
         text = path.read_text(encoding="utf-8", errors="replace") if path else ""
@@ -2054,35 +2734,58 @@ def render_code_page(artifact_id: str, src_rel: str) -> bytes:
     code_html = "\n".join(rows) if rows else '<p class="empty">(empty file)</p>'
 
     title = f"{artifact_id} / {src_rel}"
+    parent_dir = Path(src_rel).parent.as_posix()
+    listing = _build_review_listing(artifact_id, "" if parent_dir == "." else parent_dir)
+    open_threads, total_threads = _thread_counts(artifact_id, src_rel)
+    code_summary = (
+        f"{len(lines)} lines · {_plural(open_threads, 'open thread')} · {_plural(total_threads, 'thread')} on file"
+    )
     body_html = (
         _CODE_PAGE_BODY_RAW
         .replace("__CODE__", code_html)
         .replace("__ARTIFACT_ID__", json.dumps(artifact_id))
         .replace("__SUB_PATH__", json.dumps(src_rel))
+        .replace("__SRC_REL__", html.escape(src_rel))
+        .replace("__CODE_SUMMARY__", html.escape(code_summary))
+        .replace("__ROUND_HISTORY__", _render_round_history_section(artifact_id))
     )
-    body_html = render_page_header(html.escape(title)) + body_html
-    page = render_page(
+    return _render_owned_review_shell(
         title=title,
+        subtitle_html=html.escape(f"{artifact_id}, code, {src_rel}"),
+        quiet_html=html.escape(code_summary),
+        queue_html=_render_review_queue(listing, active_rel=src_rel),
+        main_html=body_html,
+        rail_html='',
         head_extra=f"<style>{_CODE_PAGE_CSS}</style>",
-        body_html=body_html,
     )
-    return page.encode("utf-8")
 
 
 # Page-level comment widget, injected before </body> of any served HTML page
-# (send_head splices this in — see _make_handler). Upgraded from the legacy
+# (send_head splices this in  -  see _make_handler). Upgraded from the legacy
 # flat-comment widget to the thread model: shows only anchor_kind='page'
 # threads (image/code threads belong to their own /_/review viewer pages),
 # supports resolve/reopen. Every user string goes through textContent.
 _PAGE_WIDGET_JS_RAW = r"""
 (function(){
   const path = window.location.pathname;
-  const root = document.getElementById('review-serve-widget');
-  if (!root) return;
+  const root = document.getElementById('review-serve-dock');
+  const toggle = document.getElementById('review-serve-dock-toggle');
+  if (!root || !toggle) return;
+  const closeButton = root.querySelector('.rs-close');
+  const list = root.querySelector('.rs-list');
+  const status = root.querySelector('.rs-status');
+  const form = root.querySelector('form');
   const headers = {'Accept': 'application/json'};
 
   function fmtTime(ts){
     return new Date(ts * 1000).toISOString().replace('T',' ').slice(0,16) + ' UTC';
+  }
+
+  function setOpen(open){
+    document.documentElement.classList.toggle('review-serve-dock-open', open);
+    toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (open) root.removeAttribute('hidden');
+    else root.setAttribute('hidden', 'hidden');
   }
 
   async function loadSettings(){
@@ -2106,10 +2809,13 @@ _PAGE_WIDGET_JS_RAW = r"""
     badge.className = 'thread-badge ' + (t.resolved ? 'resolved' : 'unresolved');
     badge.textContent = t.resolved ? 'Resolved' : 'Open';
     header.appendChild(badge);
-    header.appendChild(document.createTextNode(' '));
-    const authorSpan = document.createElement('span');
-    authorSpan.textContent = t.author || 'anonymous';
-    header.appendChild(authorSpan);
+    if (t.round_label){
+      const roundBadge = document.createElement('span');
+      roundBadge.className = 'thread-badge resolved';
+      roundBadge.textContent = t.round_label;
+      header.appendChild(roundBadge);
+    }
+    header.appendChild(document.createTextNode(' ' + (t.author || 'anonymous')));
     card.appendChild(header);
 
     for (const r of t.replies){
@@ -2138,44 +2844,44 @@ _PAGE_WIDGET_JS_RAW = r"""
       card.appendChild(reply);
     }
 
-    const toggle = document.createElement('button');
-    toggle.type = 'button';
-    toggle.textContent = t.resolved ? 'reopen' : 'resolve';
-    toggle.addEventListener('click', async () => {
+    const actions = document.createElement('div');
+    actions.className = 'rs-actions';
+    const resolve = document.createElement('button');
+    resolve.type = 'button';
+    resolve.textContent = t.resolved ? 'reopen' : 'resolve';
+    resolve.addEventListener('click', async function(){
       await fetch('/_/api/threads/' + t.id + '/resolve', {
         method: 'POST', body: JSON.stringify({resolved: !t.resolved}),
       });
       load();
     });
-    card.appendChild(toggle);
+    actions.appendChild(resolve);
+    card.appendChild(actions);
     return card;
   }
 
   async function load(){
     const r = await fetch('/_/api/threads?url=' + encodeURIComponent(path), {headers});
     if (!r.ok){
-      root.querySelector('.rs-list').textContent = 'failed to load: ' + r.status;
+      list.textContent = 'failed to load: ' + r.status;
       return;
     }
     const data = await r.json();
     root.querySelector('.rs-aid').textContent = data.artifact_id || '';
-    const list = root.querySelector('.rs-list');
     list.innerHTML = '';
-    const pageThreads = data.threads.filter(t => t.anchor_kind === 'page');
+    const pageThreads = data.threads.filter(function(t){ return t.anchor_kind === 'page'; });
     if (!pageThreads.length){
       const p = document.createElement('p');
       p.className = 'empty';
-      p.textContent = 'no comments yet';
+      p.textContent = 'no page discussion yet';
       list.appendChild(p);
       return;
     }
-    for (const t of pageThreads) list.appendChild(renderThread(t));
+    pageThreads.forEach(function(t){ list.appendChild(renderThread(t)); });
   }
 
-  const form = root.querySelector('form');
-  form.addEventListener('submit', async (e) => {
+  form.addEventListener('submit', async function(e){
     e.preventDefault();
-    const status = root.querySelector('.rs-status');
     status.textContent = 'posting...';
     const fd = new FormData(form);
     fd.append('url', path);
@@ -2189,9 +2895,20 @@ _PAGE_WIDGET_JS_RAW = r"""
       }
       status.textContent = 'posted.';
       form.reset();
-      load();
+      await loadSettings();
+      await load();
+      setOpen(true);
     } catch (err){
       status.textContent = 'network error: ' + err;
+    }
+  });
+
+  toggle.addEventListener('click', function(){ setOpen(!document.documentElement.classList.contains('review-serve-dock-open')); });
+  closeButton.addEventListener('click', function(){ setOpen(false); toggle.focus(); });
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'Escape' && document.documentElement.classList.contains('review-serve-dock-open')) {
+      setOpen(false);
+      toggle.focus();
     }
   });
 
@@ -2201,99 +2918,138 @@ _PAGE_WIDGET_JS_RAW = r"""
 """
 
 _PAGE_WIDGET_CSS_RAW = r"""
-#review-serve-widget {
-  /* Theme tokens scoped to this widget, not :root — the widget is injected
-     into arbitrary pushed HTML that never loads assets/css/theme.css, so it
-     must carry its own copy of the custom properties it uses. AUTO default
-     here is dark; @media/data-theme blocks below layer light + explicit
-     choice on top, same 3-mode structure as theme.css. */
+#review-serve-dock {
+  /* Theme tokens scoped to this dock, not :root. It lands inside arbitrary
+     pushed HTML that never loads assets/css/theme.css, so it carries its own
+     copy of the same review-app custom properties. */
 __DARK_TOKENS__
   --font-ui: -apple-system, "Segoe UI", Roboto, system-ui, sans-serif;
+  --font-reading: "Iowan Old Style", "Palatino Linotype", Georgia, ui-serif, serif;
   --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "Consolas", monospace;
   --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
   --space-5: 24px; --space-6: 32px; --space-7: 48px;
-  --radius-sm: 4px; --radius-md: 8px; --radius-lg: 12px; --radius-pill: 9999px;
+  --radius-sm: 3px; --radius-md: 6px; --radius-lg: 10px; --radius-pill: 9999px;
 
-  font-family: var(--font-ui); background: var(--bg-base); color: var(--text-primary);
-  padding: var(--space-6); border-top: 4px solid var(--border-strong);
-  margin-top: var(--space-6);
+  position: fixed; top: 0; right: 0; z-index: 998;
+  width: min(380px, calc(100vw - 24px)); height: 100vh;
+  display: flex; flex-direction: column; min-height: 0;
+  border-left: 1px solid var(--border); background: var(--bg-base);
+  color: var(--text-primary); font-family: var(--font-ui);
+  box-shadow: var(--shadow-overlay);
+  transform: translateX(100%); transition: transform .18s ease;
 }
-@media (prefers-color-scheme: light) {
-  #review-serve-widget {
-__LIGHT_TOKENS__
-  }
+#review-serve-dock[hidden] { display: none; }
+html.review-serve-dock-open #review-serve-dock {
+  transform: translateX(0); display: flex;
 }
-html[data-theme="dark"] #review-serve-widget {
+html[data-theme="dark-graphite"] #review-serve-dock {
 __DARK_TOKENS__
 }
-html[data-theme="light"] #review-serve-widget {
+html[data-theme="light"] #review-serve-dock {
 __LIGHT_TOKENS__
 }
 __THEME_TOGGLE_CSS__
-#review-serve-widget .thread-card {
+#review-serve-dock-toggle {
+  position: fixed; right: var(--space-3); bottom: var(--space-3); z-index: 999;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--bg-elevated); color: var(--text-primary);
+  padding: 9px 12px; font: 500 13px/1.2 var(--font-ui); cursor: pointer;
+  box-shadow: var(--shadow-overlay);
+}
+html.review-serve-dock-open #review-serve-dock-toggle { opacity: 0; pointer-events: none; }
+#review-serve-dock .rs-head {
+  display: flex; align-items: flex-start; gap: var(--space-3);
+  padding: calc(var(--space-6) + 4px) var(--space-4) var(--space-4);
+  border-bottom: 1px solid var(--border); background: var(--bg-elevated);
+}
+#review-serve-dock .rs-kicker {
+  margin: 0 0 4px; color: var(--text-muted); font-size: 11px;
+  font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+}
+#review-serve-dock h2 { margin: 0 0 4px; font-size: 18px; }
+#review-serve-dock .rs-aid { font-family: var(--font-mono); color: var(--text-muted); font-size: 12px; }
+#review-serve-dock .rs-scroll {
+  display: flex; flex-direction: column; gap: var(--space-4);
+  min-height: 0; overflow: auto; padding: var(--space-4);
+}
+#review-serve-dock .thread-card {
   background: var(--bg-elevated); border: 1px solid var(--border);
   border-radius: var(--radius-md); padding: var(--space-4);
   margin-bottom: var(--space-3); border-left: 3px solid var(--status-unresolved);
 }
-#review-serve-widget .thread-card.resolved {
-  border-left-color: var(--status-resolved); opacity: 0.70;
+#review-serve-dock .thread-card.resolved {
+  border-left-color: var(--status-resolved); opacity: .78;
 }
-#review-serve-widget .thread-badge {
+#review-serve-dock .thread-badge {
   display: inline-block; font-size: 12px; padding: 2px 8px;
   border-radius: var(--radius-pill); font-weight: 500;
 }
-#review-serve-widget .thread-badge.unresolved { color: var(--status-unresolved); background: #d2992222; }
-#review-serve-widget .thread-badge.resolved { color: var(--status-resolved); background: #27a64422; }
-#review-serve-widget .thread-body { color: var(--text-primary); white-space: pre-wrap; word-break: break-word; }
-#review-serve-widget .thread-meta { color: var(--text-muted); font-size: 14px; margin-bottom: var(--space-2); }
-#review-serve-widget .empty { color: var(--text-muted); font-style: italic; }
-#review-serve-widget button {
-  background: var(--accent); color: #ffffff; border: none;
+#review-serve-dock .thread-badge.unresolved {
+  color: var(--status-unresolved);
+  background: color-mix(in srgb, var(--status-unresolved) 16%, transparent);
+}
+#review-serve-dock .thread-badge.resolved {
+  color: var(--status-resolved);
+  background: color-mix(in srgb, var(--status-resolved) 16%, transparent);
+}
+#review-serve-dock .thread-body {
+  color: var(--text-primary); white-space: pre-wrap; word-break: break-word;
+  line-height: 1.55;
+}
+#review-serve-dock .thread-meta { color: var(--text-muted); font-size: 13px; margin-bottom: var(--space-2); }
+#review-serve-dock .empty { color: var(--text-muted); font-style: italic; }
+#review-serve-dock button {
+  background: var(--accent); color: var(--on-accent); border: 1px solid var(--accent);
   border-radius: var(--radius-sm); padding: var(--space-2) var(--space-4);
   font-family: var(--font-ui); font-size: 14px; cursor: pointer;
 }
-#review-serve-widget button:hover { background: var(--accent-hover); }
-#review-serve-widget textarea, #review-serve-widget input[type=text] {
+#review-serve-dock button:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+#review-serve-dock textarea, #review-serve-dock input[type=text] {
   background: var(--bg-overlay); color: var(--text-primary);
   border: 1px solid var(--border); border-radius: var(--radius-sm);
-  padding: var(--space-2); font-family: inherit; font-size: 14px; width: 100%;
+  padding: var(--space-2) var(--space-3); font-family: inherit; font-size: 14px; width: 100%;
   box-sizing: border-box;
 }
-#review-serve-widget textarea:focus, #review-serve-widget input:focus {
-  border-color: var(--border-strong); outline: none;
-}
-#review-serve-widget h2 { margin: 0 0 4px; }
-#review-serve-widget .rs-aid { font-family: var(--font-mono); color: var(--text-muted); font-size: 13px; }
-#review-serve-widget .rs-list { margin: var(--space-4) 0; max-width: 920px; }
-#review-serve-widget form {
+#review-serve-dock textarea:focus, #review-serve-dock input:focus { border-color: var(--border-strong); outline: none; }
+#review-serve-dock form {
   background: var(--bg-elevated); border: 1px solid var(--border);
-  border-radius: var(--radius-md); padding: var(--space-4); max-width: 920px;
+  border-radius: var(--radius-md); padding: var(--space-4);
 }
-#review-serve-widget label { display: block; font-size: 13px; color: var(--text-muted); margin-bottom: 4px; }
-#review-serve-widget textarea { min-height: 5rem; margin-bottom: var(--space-3); }
-#review-serve-widget input[type=file] { color: var(--text-muted); font-size: 13px; }
-#review-serve-widget .rs-status { margin-top: var(--space-2); font-size: 13px; color: var(--text-muted); }
+#review-serve-dock label { display: block; font-size: 13px; color: var(--text-muted); margin-bottom: 4px; }
+#review-serve-dock textarea { min-height: 5rem; margin-bottom: var(--space-3); }
+#review-serve-dock input[type=file] { color: var(--text-muted); font-size: 13px; }
+#review-serve-dock .rs-status { color: var(--text-muted); font-size: 13px; }
+#review-serve-dock .rs-actions { margin-top: var(--space-3); }
+#review-serve-dock .rs-close { margin-left: auto; white-space: nowrap; }
 """
 
 _PAGE_WIDGET_BLOCK_RAW = """
 <style>__CSS__</style>
 __THEME_TOGGLE_HTML__
-<section id="review-serve-widget">
-  <h2>Feedback</h2>
-  <div>artifact: <span class="rs-aid">(loading)</span></div>
-  <div class="rs-list"><p class="empty">loading...</p></div>
-  <form enctype="multipart/form-data">
-    <label>name (optional)</label>
-    <input type="text" name="author" maxlength="80" placeholder="anonymous">
-    <label>comment</label>
-    <textarea name="body" required maxlength="20000"
-              placeholder="your feedback..."></textarea>
-    <label>attachments (optional, multiple)</label>
-    <input type="file" name="files" multiple>
-    <button type="submit">post comment</button>
-    <div class="rs-status"></div>
-  </form>
-</section>
+<button type="button" id="review-serve-dock-toggle" aria-controls="review-serve-dock" aria-expanded="false">Discussion</button>
+<aside id="review-serve-dock" aria-label="Page discussion" hidden>
+  <div class="rs-head">
+    <div>
+      <p class="rs-kicker">Page discussion</p>
+      <h2>Discussion</h2>
+      <div class="rs-aid">(loading)</div>
+    </div>
+    <button type="button" class="rs-close">Close</button>
+  </div>
+  <div class="rs-scroll">
+    <div class="rs-list"><p class="empty">loading...</p></div>
+    <form enctype="multipart/form-data">
+      <label>name (optional)</label>
+      <input type="text" name="author" maxlength="80" placeholder="anonymous">
+      <label>comment</label>
+      <textarea name="body" required maxlength="20000" placeholder="start a page thread..."></textarea>
+      <label>attachments (optional, multiple)</label>
+      <input type="file" name="files" multiple>
+      <div class="rs-actions"><button type="submit">post comment</button></div>
+      <div class="rs-status"></div>
+    </form>
+  </div>
+</aside>
 <script>__THEME_JS__</script>
 <script>__JS__</script>
 """
@@ -2535,16 +3291,24 @@ def _make_handler() -> type[http.server.SimpleHTTPRequestHandler]:
                 self._send_json(404, {"error": "could not resolve artifact"})
                 return
             try:
-                threads = list_threads(artifact_id, sub_path)
+                rounds = round_history(artifact_id)
+                current = rounds[-1] if rounds else None
+                all_threads = list_threads(artifact_id, sub_path)
             except sqlite3.Error as exc:
                 self._send_json(500, {"error": f"db: {exc}"})
                 return
+            current_round_id = int(current["id"]) if current is not None else None
+            threads = list(all_threads)
+            history_threads = []
             self._send_json(
                 200,
                 {
                     "artifact_id": artifact_id,
                     "sub_path": sub_path,
+                    "current_round": current,
+                    "rounds": rounds,
                     "threads": [_thread_json(t) for t in threads],
+                    "history_threads": [_thread_json(t) for t in history_threads],
                 },
             )
 
@@ -3105,6 +3869,7 @@ def cmd_push(args: argparse.Namespace) -> int:
     # Record this push in the durable artifact index for feedback resolution.
     artifact_id = (args.artifact_id or "").strip() or f"{args.project}/{subdir}"
     try:
+        pushed_at = int(time.time())
         conn = db_connect()
         try:
             conn.execute(
@@ -3115,12 +3880,14 @@ def cmd_push(args: argparse.Namespace) -> int:
                 "  artifact_id = excluded.artifact_id, "
                 "  src_path    = excluded.src_path, "
                 "  last_pushed = excluded.last_pushed",
-                (args.project, subdir, artifact_id, str(src), int(time.time())),
+                (args.project, subdir, artifact_id, str(src), pushed_at),
             )
             conn.commit()
         finally:
             conn.close()
+        round_id = record_push_round(artifact_id, args.project, subdir, str(src), created_at=pushed_at)
         print(f"artifact_id: {artifact_id}")
+        print(f"round_id: {round_id}")
     except sqlite3.Error as exc:
         log.warning("artifact_index update failed: %s", exc)
 

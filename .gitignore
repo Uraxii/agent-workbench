@@ -4,3 +4,5 @@ __pycache__/
 *.pyd
 /scripts/bdui-container/node_modules/
 .claudex-worktrees/
+.claude/worktrees/
+spikes/frontend-directions/.render-unified/

@@ -15,33 +15,498 @@
 @font-face{font-family:"Source Serif Local";src:url("assets/fonts/source-serif-4-latin-500-normal.woff2") format("woff2");font-weight:500;font-style:normal;font-display:swap}
 @font-face{font-family:"Source Serif Local";src:url("assets/fonts/source-serif-4-latin-600-normal.woff2") format("woff2");font-weight:600;font-style:normal;font-display:swap}
 :root{
-  --paper-0:oklch(98% .012 78); --paper-1:oklch(95% .014 78); --paper-2:oklch(91% .018 78); --paper-3:oklch(86% .020 78); --paper-4:oklch(76% .024 78);
-  --ink-0:oklch(17% .028 64); --ink-1:oklch(27% .026 64); --ink-2:oklch(39% .024 64); --ink-3:oklch(52% .021 64);
-  --accent:oklch(43% .078 34); --accent-soft:oklch(93% .035 34); --accent-rule:oklch(56% .065 34);
-  --open:oklch(39% .090 38); --open-soft:oklch(94% .032 38);
-  --resolved:oklch(36% .060 145); --resolved-soft:oklch(94% .030 145);
-  --draft:oklch(42% .052 88); --draft-soft:oklch(95% .028 88);
-  --focus:oklch(45% .090 42);
-  --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:24px; --s6:32px; --r1:2px; --r2:4px; --r3:7px;
-  --section-height:900px; --viewer-height:calc(var(--section-height) - 132px);
-  --sans:"Plex Local"; --mono:"JetBrains Local"; --serif:"Source Serif Local";
+  --lodestar-canvas:#191b1e;
+  --lodestar-surface:#212429;
+  --lodestar-surface-sunken:#131518;
+  --lodestar-ink:#c4c7ca;
+  --lodestar-ink-soft:#9aa0a7;
+  --lodestar-ink-faint:#767c84;
+  --lodestar-line:#2c3137;
+  --lodestar-line-strong:#3b4148;
+  --lodestar-accent:#5a9bc9;
+  --lodestar-accent-strong:#78b1d8;
+  --lodestar-on-accent:#12161b;
+  --paper-0:var(--lodestar-surface);
+  --paper-1:var(--lodestar-canvas);
+  --paper-2:var(--lodestar-surface-sunken);
+  --paper-3:var(--lodestar-line);
+  --paper-4:var(--lodestar-line-strong);
+  --ink-0:var(--lodestar-ink);
+  --ink-1:var(--lodestar-ink-soft);
+  --ink-2:var(--lodestar-ink-faint);
+  --ink-3:var(--lodestar-ink-faint);
+  --accent:var(--lodestar-accent);
+  --accent-soft:color-mix(in srgb,var(--lodestar-accent) 18%,var(--lodestar-canvas));
+  --accent-rule:var(--lodestar-accent-strong);
+  --open:var(--lodestar-accent-strong);
+  --open-soft:color-mix(in srgb,var(--lodestar-accent) 14%,var(--lodestar-surface));
+  --resolved:#8fbf9f;
+  --resolved-soft:color-mix(in srgb,#8fbf9f 16%,var(--lodestar-surface));
+  --draft:#d4b06a;
+  --draft-soft:color-mix(in srgb,#d4b06a 14%,var(--lodestar-surface));
+  --focus:var(--lodestar-accent-strong);
+  --s1:4px;
+  --s2:8px;
+  --s3:12px;
+  --s4:16px;
+  --s5:24px;
+  --s6:32px;
+  --r1:2px;
+  --r2:4px;
+  --r3:7px;
+  --section-height:900px;
+  --viewer-height:calc(var(--section-height) - 132px);
+  --sans:"Plex Local";
+  --mono:"JetBrains Local";
+  --serif:"Source Serif Local";
+  --motion-factor:1;
 }
-[data-theme="dark"]{
-  --paper-0:oklch(27% .006 60); --paper-1:oklch(23% .005 60); --paper-2:oklch(19% .004 60); --paper-3:oklch(36% .008 60); --paper-4:oklch(46% .010 60);
-  --ink-0:oklch(94% .004 60); --ink-1:oklch(84% .005 60); --ink-2:oklch(70% .006 60); --ink-3:oklch(58% .007 60);
-  --accent:oklch(72% .13 32); --accent-soft:oklch(34% .07 32); --accent-rule:oklch(66% .13 32);
-  --open:oklch(75% .13 36); --open-soft:oklch(33% .07 36);
-  --resolved:oklch(80% .13 152); --resolved-soft:oklch(33% .06 152);
-  --draft:oklch(82% .11 92); --draft-soft:oklch(34% .06 92);
-  --focus:oklch(80% .13 50);
+[data-theme="light"]{
+  --lodestar-canvas:#f7f6f3;
+  --lodestar-surface:#ffffff;
+  --lodestar-surface-sunken:#f0efeb;
+  --lodestar-ink:#1c1b18;
+  --lodestar-ink-soft:#55524a;
+  --lodestar-ink-faint:#8a857a;
+  --lodestar-line:#ddd9d0;
+  --lodestar-line-strong:#c4bfb2;
+  --lodestar-accent:#86603c;
+  --lodestar-accent-strong:#6b4c30;
+  --lodestar-on-accent:#fbf8f3;
+  --resolved:#5d7e67;
+  --resolved-soft:color-mix(in srgb,#5d7e67 14%,var(--lodestar-surface));
+  --draft:#8d673f;
+  --draft-soft:color-mix(in srgb,#8d673f 10%,var(--lodestar-surface));
 }
-*{box-sizing:border-box}html{background:var(--paper-2);color:var(--ink-0);scroll-behavior:smooth}body{margin:0;min-width:1440px;background:var(--paper-2);color:var(--ink-0);font:400 13px/1.4 var(--sans)}svg{fill:currentColor}button,select,textarea,input{font:inherit;color:inherit}button,select,textarea{background:var(--paper-0);border:1px solid var(--paper-4);border-radius:var(--r2)}button{min-height:30px;display:inline-flex;gap:6px;align-items:center;justify-content:center;padding:0 var(--s2);font-weight:500}button:hover{border-color:var(--accent-rule);background:var(--accent-soft)}button:focus-visible,select:focus-visible,textarea:focus-visible,input:focus-visible,.focus{outline:2px solid var(--focus);outline-offset:2px;border-color:var(--focus)}input{accent-color:var(--accent)}kbd,.key{font:500 11px/1 var(--mono);border:1px solid var(--paper-4);border-bottom-width:2px;border-radius:var(--r1);padding:2px 5px;color:var(--ink-1);background:var(--paper-1)}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.icon{width:16px;height:16px;display:inline-block;vertical-align:-3px;flex:0 0 16px}.icon-lg{width:20px;height:20px}.grow{flex:1}.mono{font-family:var(--mono)}
-.mode-panel{width:1440px;height:var(--section-height);margin:0 auto var(--s6);background:var(--paper-0);border-bottom:1px solid var(--paper-4);display:grid;grid-template-rows:38px 1fr;overflow:hidden}.mode-label{display:flex;align-items:center;padding:0 var(--s4);gap:var(--s3);background:var(--paper-1);border-bottom:1px solid var(--paper-4);font-weight:600}.mode-label span{font-weight:400;color:var(--ink-2)}.app{min-height:0;display:grid;grid-template-columns:292px minmax(0,1fr) 336px;grid-template-rows:48px minmax(0,1fr);background:var(--paper-0)}.app.compare{grid-template-columns:292px 164px minmax(0,1fr) 316px}.app.ledger{grid-template-columns:292px minmax(0,1fr) 420px}.topbar{grid-column:1/-1;display:grid;grid-template-columns:292px 1fr auto;align-items:center;border-bottom:1px solid var(--paper-3);background:var(--paper-0)}.caption{height:100%;display:flex;flex-direction:column;justify-content:center;gap:2px;padding:0 var(--s3);border-right:1px solid var(--paper-3)}.caption b{font-size:13px}.caption span{font-size:12px;color:var(--ink-2)}.mode-switcher{display:flex;align-items:center;gap:var(--s2);padding:0 var(--s3)}.mode-button[aria-pressed="true"]{background:var(--accent-soft);border-color:var(--accent-rule);color:var(--accent);outline:2px solid var(--focus);outline-offset:-2px}.top-actions{display:flex;align-items:center;gap:var(--s2);padding:0 var(--s3)}.theme-toggle{background:var(--paper-1)}
-.queue{grid-row:2;border-right:1px solid var(--paper-4);background:var(--paper-1);overflow:hidden}.queue-head,.rail-head,.main-head{height:40px;display:flex;align-items:center;gap:var(--s2);padding:0 var(--s3);border-bottom:1px solid var(--paper-3);background:var(--paper-0)}.title{font-weight:600}.progress,.quiet{color:var(--ink-2);font-size:12px}.queue-tools{display:grid;grid-template-columns:1fr 1fr;gap:var(--s2);padding:var(--s3);border-bottom:1px solid var(--paper-3)}.queue-tools label{display:flex;align-items:center;gap:6px;color:var(--ink-1);border:1px solid var(--paper-4);border-radius:var(--r2);padding:4px 6px;background:var(--paper-0)}.queue-list{height:calc(var(--section-height) - 166px);overflow:hidden}.qitem{display:grid;grid-template-columns:32px 1fr 44px;gap:var(--s2);padding:10px var(--s3);border-bottom:1px solid var(--paper-3)}.qitem.active{background:var(--accent-soft);border-left:4px solid var(--accent-rule);padding-left:8px}.typebox{width:28px;height:24px;border:1px solid var(--paper-4);display:grid;place-items:center;background:var(--paper-0);border-radius:var(--r1)}.qname{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.qmeta{display:flex;gap:6px;align-items:center;color:var(--ink-2);font-size:12px;margin-top:2px}.count{text-align:right;color:var(--ink-0);font-family:var(--mono)}.count small{display:block;color:var(--ink-2);font-family:var(--sans)}.state{display:inline-flex;align-items:center;gap:5px;border-left:3px solid currentColor;padding-left:4px;font-weight:500}.state.open{color:var(--open);border-left-style:dotted}.state.review,.state.draft,.state.need{color:var(--draft);border-left-style:double}.state.resolved,.state.approved,.state.done{color:var(--resolved);border-left-style:solid}
-.hero,.rail,.spine,.ledger-main,.context{min-width:0;min-height:0;overflow:hidden}.hero{grid-row:2;background:var(--paper-0);display:grid;grid-template-rows:40px minmax(0,1fr)}.rail,.context{grid-row:2;border-left:1px solid var(--paper-4);background:var(--paper-1);display:grid;grid-template-rows:40px minmax(0,1fr)}.toolbar{display:flex;align-items:center;gap:var(--s2);padding:0 var(--s3);border-bottom:1px solid var(--paper-3);color:var(--ink-1)}.viewer{min-height:0;position:relative;padding:var(--s4);overflow:hidden}.stage{height:100%;display:grid;place-items:center;background:var(--paper-1);border:1px solid var(--paper-4);border-radius:var(--r1);overflow:hidden}.image-wrap{position:relative;width:504px;height:700px;border:1px solid var(--paper-4);background:var(--paper-0);overflow:hidden}.image-wrap img,.art-img{width:100%;height:100%;object-fit:cover}.pin{position:absolute;min-width:28px;height:28px;border:2px solid var(--accent);background:var(--paper-0);color:var(--ink-0);display:grid;place-items:center;font:700 12px/1 var(--mono);border-radius:50%}.pin:before{content:"";position:absolute;inset:-7px;border:1px dotted currentColor;border-radius:50%}.pin:after{content:attr(data-label);position:absolute;left:34px;top:2px;white-space:nowrap;color:var(--ink-0);background:var(--paper-0);border:1px solid var(--paper-4);padding:2px 6px;font:600 11px var(--sans);border-radius:var(--r1)}.pin.open{border-color:var(--open);color:var(--open)}.pin.done{border-color:var(--resolved);color:var(--resolved);background:var(--resolved-soft)}.artifact-tabs{margin-left:auto;display:flex;gap:var(--s1)}.artifact-tabs button[aria-pressed="true"]{border-color:var(--accent-rule);background:var(--accent-soft);color:var(--accent)}.artifact-kind{display:none}.artifact-kind.active{display:block;width:100%;height:100%}.report{height:100%;overflow:hidden;background:var(--paper-0);border:1px solid var(--paper-4);padding:var(--s5) 70px;font:15px/1.55 var(--serif)}.report h3{font:600 18px/1.25 var(--sans);margin:0 0 var(--s2)}.block-anchor{border-left:3px dotted var(--open);background:var(--open-soft);padding:var(--s2) var(--s3);margin:var(--s3) 0}.codebox{height:100%;background:var(--paper-1);border:1px solid var(--paper-4);font:12px/1.5 var(--mono);padding:var(--s3) 0;overflow:hidden}.line{display:grid;grid-template-columns:46px 24px 1fr 88px;align-items:center;min-height:25px}.ln{color:var(--ink-3);text-align:right;padding-right:10px}.line.open{background:var(--open-soft);border-left:3px dotted var(--open)}.line.done{background:var(--resolved-soft);border-left:3px solid var(--resolved)}
-.threads{padding:var(--s3);display:flex;flex-direction:column;gap:var(--s3);overflow:hidden}.thread{border:1px solid var(--paper-4);background:var(--paper-0);border-radius:var(--r2)}.thread.open{border-left:4px dotted var(--open)}.thread.done{border-left:4px solid var(--resolved);background:var(--resolved-soft)}.thread-head{display:flex;align-items:center;gap:var(--s2);padding:var(--s2);border-bottom:1px solid var(--paper-3)}.anchor-label{font:500 11px var(--mono);border:1px solid var(--paper-4);background:var(--paper-1);padding:2px 5px;border-radius:var(--r1)}.thread-title{font-weight:600}.thread-body{padding:var(--s2);color:var(--ink-1);font:14px/1.5 var(--serif)}.reply{margin-top:var(--s2);padding-left:var(--s2);border-left:2px solid var(--accent-rule)}.reply b{font-family:var(--sans)}.collapsed{padding:var(--s2);display:flex;gap:var(--s2);align-items:center;color:var(--ink-1)}.composer{border:1px solid var(--accent-rule);background:var(--paper-0);border-radius:var(--r3);padding:var(--s2)}textarea{width:100%;height:72px;resize:none;padding:var(--s2);background:var(--paper-1);border:1px solid var(--paper-4);border-radius:var(--r2);font:14px/1.45 var(--serif)}.actions{display:flex;gap:var(--s2);align-items:center;margin-top:var(--s2)}.primary{border-color:var(--accent);background:var(--accent);color:var(--paper-0)}
-.spine{grid-row:2;background:var(--paper-1);border-right:1px solid var(--paper-4);padding:var(--s3);overflow:hidden}.spine h3,.ledger-main h3{margin:0 0 var(--s2);font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--ink-2)}.version{display:grid;grid-template-columns:28px 1fr auto;gap:var(--s2);align-items:center;margin-bottom:var(--s2);padding:var(--s2);border:1px solid var(--paper-3);border-radius:var(--r1);background:var(--paper-0)}.version b{display:block;font:600 13px/1.2 var(--mono)}.version small{display:block;color:var(--ink-2);font:11px/1.35 var(--mono)}.mark{display:inline-grid;place-items:center;min-width:22px;height:22px;border:1px solid currentColor;border-radius:var(--r1);font:600 10px/1 var(--mono);background:var(--paper-0)}.pair-ref{border-left:4px solid var(--paper-4)}.pair-cand{border-left:4px solid var(--accent-rule);border-color:var(--accent-rule);background:var(--accent-soft)}.compare-main{grid-row:2;display:grid;grid-template-rows:84px minmax(0,1fr);min-height:0;background:var(--paper-0)}.summary{display:grid;grid-template-columns:1.2fr 1fr;gap:var(--s3);padding:var(--s3);border-bottom:1px solid var(--paper-3)}.summary-line{font-size:18px;line-height:1.25;font-weight:600}.facts{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}.fact{border:1px solid var(--paper-3);border-radius:var(--r1);padding:6px;background:var(--paper-1);font-family:var(--mono);font-size:12px}.fact span{display:block;color:var(--ink-2);font:600 10px/1.3 var(--sans);text-transform:uppercase;letter-spacing:.06em}.pair{display:grid;grid-template-columns:1fr 1fr;gap:var(--s3);padding:var(--s3);min-height:0}.pane{min-width:0;border:1px solid var(--paper-4);background:var(--paper-0);display:grid;grid-template-rows:52px minmax(0,1fr);border-radius:var(--r1)}.pane-head{display:flex;justify-content:space-between;gap:var(--s2);align-items:start;padding:var(--s2) var(--s3);border-bottom:1px solid var(--paper-3);background:var(--paper-1)}.pane-head small{display:block;color:var(--ink-2);font:11px var(--mono)}.pane-view{position:relative;overflow:hidden;padding:var(--s3);background:var(--paper-1)}.region{position:absolute;left:39%;top:29%;width:20%;height:16%;border:2px dotted var(--accent);background:var(--accent-soft)}.tag{display:inline-flex;gap:5px;align-items:center;border:1px solid currentColor;border-left-width:3px;border-radius:var(--r1);padding:3px 6px;font:600 11px/1.1 var(--mono);text-transform:uppercase;background:var(--paper-0)}.compare .rail{grid-column:4}.compare .queue{grid-column:1}.compare .spine{grid-column:2}.compare-main{grid-column:3}.thread-meta{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:0 var(--s2) var(--s2)}.thread-meta span{border:1px solid var(--paper-4);border-radius:var(--r1);padding:5px 6px;background:var(--paper-0);font:11px/1.2 var(--mono);color:var(--ink-2)}
-.ledger-main{grid-row:2;background:var(--paper-1);border-right:1px solid var(--paper-4);overflow:hidden;display:grid;grid-template-rows:40px auto minmax(0,1fr)}.ledger-tools{display:flex;gap:var(--s2);align-items:center;padding:var(--s2) var(--s3);border-bottom:1px solid var(--paper-3);background:var(--paper-0)}.ledger-tools label{display:flex;align-items:center;gap:var(--s1);font-size:12px;color:var(--ink-2)}.bulk{display:flex;gap:var(--s2);align-items:center;margin:var(--s3);padding:var(--s2);border:1px solid var(--accent-rule);border-left:4px double var(--accent-rule);background:var(--accent-soft);font-size:12px}.bulk strong{font-family:var(--mono)}table{width:100%;border-collapse:collapse;font-size:12px;line-height:1.25}th,td{padding:8px 7px;border-bottom:1px solid var(--paper-3);text-align:left;vertical-align:top}th{background:var(--paper-0);color:var(--ink-2);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.04em}tr{background:var(--paper-1)}tr.selected{background:var(--accent-soft);outline:2px solid var(--focus);outline-offset:-2px}tr.checked{background:var(--paper-2)}.artifact,.age,.replies{font-family:var(--mono);white-space:nowrap}.anchor{font-weight:500}.excerpt{color:var(--ink-2);max-width:260px}.context-head{padding:var(--s3);border-bottom:1px solid var(--paper-3);background:var(--paper-0)}.context-head h2{font-size:16px;margin:0 0 2px}.context-view{display:grid;grid-template-columns:1fr 238px;gap:var(--s3);padding:var(--s3);height:calc(var(--section-height) - 178px);min-height:0}.context-stage{border:1px solid var(--paper-4);background:var(--paper-0);border-radius:var(--r1);overflow:hidden;position:relative}.context .image-wrap{width:100%;height:100%;border:0}.side{display:flex;flex-direction:column;gap:var(--s2);overflow:hidden}.side .thread{padding:var(--s2);font-size:12px}.side .thread h3{font-size:12px;margin:0 0 var(--s2);display:flex;justify-content:space-between;gap:var(--s2)}.side .thread p{margin:0 0 var(--s2);font:13px/1.42 var(--serif);color:var(--ink-1)}
+*{box-sizing:border-box}
+html{background:var(--paper-2);color:var(--ink-0);scroll-behavior:smooth}
+body{
+  margin:0;
+  min-width:1440px;
+  background:var(--paper-2);
+  color:var(--ink-0);
+  font:400 13px/1.45 var(--sans);
+  transition:background-color calc(.18s * var(--motion-factor)) ease,color calc(.18s * var(--motion-factor)) ease;
+}
+button,select,textarea,input{font:inherit;color:inherit}
+button,select,textarea,input[type="text"]{
+  border:1px solid var(--paper-4);
+  border-radius:var(--r2);
+  background:var(--paper-0);
+}
+button{
+  min-height:30px;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:6px;
+  padding:0 var(--s3);
+  font-weight:500;
+  letter-spacing:.01em;
+  transition:border-color calc(.16s * var(--motion-factor)) ease,background-color calc(.16s * var(--motion-factor)) ease,color calc(.16s * var(--motion-factor)) ease,transform calc(.16s * var(--motion-factor)) ease;
+}
+button:hover{border-color:var(--accent-rule);background:var(--accent-soft)}
+button:focus-visible,select:focus-visible,textarea:focus-visible,input:focus-visible{
+  outline:2px solid var(--focus);
+  outline-offset:2px;
+  border-color:var(--focus);
+}
+input{accent-color:var(--accent)}
+textarea{width:100%;min-height:86px;resize:none;padding:var(--s3);background:var(--paper-1)}
+select,input[type="text"]{min-height:32px;padding:0 var(--s2);background:var(--paper-1)}
+kbd,.key{
+  display:inline-flex;
+  align-items:center;
+  min-height:18px;
+  padding:2px 6px;
+  border:1px solid var(--paper-4);
+  border-bottom-width:2px;
+  border-radius:var(--r1);
+  background:var(--paper-1);
+  color:var(--ink-1);
+  font:500 11px/1 var(--mono);
+}
+svg{fill:currentColor}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+.icon{width:16px;height:16px;display:inline-block;vertical-align:-3px;flex:0 0 16px}
+.grow{flex:1}
+.mono{font-family:var(--mono)}
+.quiet{color:var(--ink-2)}
+.primary{background:var(--accent);border-color:var(--accent);color:var(--lodestar-on-accent)}
+.primary:hover{background:var(--accent-rule);border-color:var(--accent-rule)}
+.mode-panel{
+  width:1440px;
+  height:var(--section-height);
+  margin:0 auto var(--s6);
+  background:var(--paper-0);
+  border-bottom:1px solid var(--paper-4);
+  display:grid;
+  grid-template-rows:40px 1fr;
+  overflow:hidden;
+}
+.mode-label{
+  display:flex;
+  align-items:center;
+  gap:var(--s3);
+  padding:0 var(--s5);
+  background:var(--paper-1);
+  border-bottom:1px solid var(--paper-3);
+  font-weight:600;
+  letter-spacing:.01em;
+}
+.mode-label span{font-weight:400;color:var(--ink-2)}
+.app{
+  min-height:0;
+  display:grid;
+  grid-template-columns:292px minmax(0,1fr) 336px;
+  grid-template-rows:52px minmax(0,1fr);
+  background:var(--paper-0);
+}
+.app.compare{grid-template-columns:292px 168px minmax(0,1fr) 324px}
+.app.ledger{grid-template-columns:292px minmax(0,1fr) 420px}
+.topbar{
+  grid-column:1/-1;
+  display:grid;
+  grid-template-columns:292px 1fr auto;
+  align-items:center;
+  border-bottom:1px solid var(--paper-3);
+  background:var(--paper-0);
+}
+.caption{
+  height:100%;
+  display:flex;
+  flex-direction:column;
+  justify-content:center;
+  gap:2px;
+  padding:0 var(--s4);
+  border-right:1px solid var(--paper-3);
+}
+.caption b{font-size:13px}
+.caption span{font-size:12px;color:var(--ink-2)}
+.mode-switcher,.top-actions{display:flex;align-items:center;gap:var(--s2);padding:0 var(--s4)}
+.mode-button[aria-pressed="true"],.artifact-tabs button[aria-pressed="true"]{
+  background:var(--accent-soft);
+  border-color:var(--accent-rule);
+  color:var(--accent);
+}
+.theme-toggle{background:var(--paper-1)}
+.queue,.rail,.context,.hero,.spine,.ledger-main{min-width:0;min-height:0;overflow:hidden}
+.queue{
+  grid-row:2;
+  border-right:1px solid var(--paper-4);
+  background:var(--paper-1);
+}
+.queue-head,.rail-head,.main-head{
+  height:40px;
+  display:flex;
+  align-items:center;
+  gap:var(--s2);
+  padding:0 var(--s4);
+  border-bottom:1px solid var(--paper-3);
+  background:var(--paper-0);
+}
+.title{font-weight:600}
+.progress{color:var(--ink-2);font-size:12px}
+.queue-tools{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:var(--s2);
+  padding:var(--s3);
+  border-bottom:1px solid var(--paper-3);
+}
+.queue-tools label{
+  display:flex;
+  align-items:center;
+  gap:6px;
+  padding:6px 8px;
+  border:1px solid var(--paper-4);
+  border-radius:var(--r2);
+  background:var(--paper-0);
+  color:var(--ink-1);
+}
+.queue-list{height:calc(var(--section-height) - 170px);overflow:hidden}
+.qitem{
+  display:grid;
+  grid-template-columns:32px 1fr 44px;
+  gap:var(--s2);
+  padding:12px var(--s4);
+  border-bottom:1px solid var(--paper-3);
+}
+.qitem.active{
+  background:var(--accent-soft);
+  border-left:4px solid var(--accent-rule);
+  padding-left:calc(var(--s4) - 4px);
+}
+.typebox{
+  width:28px;
+  height:24px;
+  display:grid;
+  place-items:center;
+  border:1px solid var(--paper-4);
+  border-radius:var(--r1);
+  background:var(--paper-0);
+}
+.qname{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.qmeta{display:flex;gap:6px;align-items:center;color:var(--ink-2);font-size:12px;margin-top:2px}
+.count{text-align:right;color:var(--ink-0);font-family:var(--mono)}
+.count small{display:block;color:var(--ink-2);font-family:var(--sans)}
+.state{display:inline-flex;align-items:center;gap:5px;border-left:3px solid currentColor;padding-left:5px;font-weight:500}
+.state.open{color:var(--open);border-left-style:dotted}
+.state.review,.state.draft,.state.need{color:var(--draft);border-left-style:double}
+.state.resolved,.state.approved,.state.done{color:var(--resolved);border-left-style:solid}
+.hero{grid-row:2;display:grid;grid-template-rows:44px minmax(0,1fr);background:var(--paper-0)}
+.rail,.context{
+  grid-row:2;
+  display:grid;
+  grid-template-rows:40px minmax(0,1fr);
+  border-left:1px solid var(--paper-4);
+  background:var(--paper-1);
+}
+.toolbar{
+  display:flex;
+  align-items:center;
+  gap:var(--s2);
+  padding:0 var(--s4);
+  border-bottom:1px solid var(--paper-3);
+  color:var(--ink-1);
+}
+.viewer{padding:var(--s5);background:var(--paper-0)}
+.stage,.pane,.context-stage{
+  border:1px solid var(--paper-4);
+  border-radius:var(--r2);
+  background:var(--paper-1);
+  overflow:hidden;
+}
+.stage{height:100%;display:grid;place-items:center}
+.image-wrap{
+  position:relative;
+  width:504px;
+  height:700px;
+  border:1px solid var(--paper-4);
+  background:var(--paper-0);
+  overflow:hidden;
+}
+.image-wrap img,.art-img{width:100%;height:100%;object-fit:cover}
+.pin{
+  position:absolute;
+  min-width:28px;
+  height:28px;
+  display:grid;
+  place-items:center;
+  border:2px solid var(--accent);
+  border-radius:50%;
+  background:var(--paper-0);
+  color:var(--ink-0);
+  font:700 12px/1 var(--mono);
+}
+.pin:before{content:"";position:absolute;inset:-7px;border:1px dotted currentColor;border-radius:50%}
+.pin:after{
+  content:attr(data-label);
+  position:absolute;
+  top:3px;
+  left:34px;
+  white-space:nowrap;
+  padding:2px 6px;
+  border:1px solid var(--paper-4);
+  border-radius:var(--r1);
+  background:var(--paper-0);
+  color:var(--ink-0);
+  font:600 11px/1.2 var(--sans);
+}
+.pin.open{border-color:var(--open);color:var(--open)}
+.pin.done{border-color:var(--resolved);color:var(--resolved);background:var(--resolved-soft)}
+.artifact-tabs{margin-left:auto;display:flex;gap:var(--s1)}
+.artifact-kind{display:none}
+.artifact-kind.active{display:block;width:100%;height:100%}
+.report{
+  height:100%;
+  padding:var(--s6) 72px;
+  border:1px solid var(--paper-4);
+  border-radius:var(--r2);
+  background:var(--paper-0);
+  font:15px/1.62 var(--serif);
+  overflow:hidden;
+}
+.report h3{margin:0 0 var(--s2);font:600 18px/1.25 var(--sans)}
+.block-anchor{
+  margin:var(--s4) 0;
+  padding:var(--s3) var(--s4);
+  border-left:3px dotted var(--open);
+  background:var(--open-soft);
+}
+.codebox{
+  height:100%;
+  padding:var(--s3) 0;
+  border:1px solid var(--paper-4);
+  border-radius:var(--r2);
+  background:var(--paper-1);
+  font:12px/1.5 var(--mono);
+  overflow:hidden;
+}
+.line{display:grid;grid-template-columns:46px 24px 1fr 88px;align-items:center;min-height:25px}
+.ln{color:var(--ink-3);text-align:right;padding-right:10px}
+.line.open{background:var(--open-soft);border-left:3px dotted var(--open)}
+.line.done{background:var(--resolved-soft);border-left:3px solid var(--resolved)}
+.threads{display:flex;flex-direction:column;gap:var(--s3);padding:var(--s4);overflow:hidden}
+.thread{
+  border:1px solid var(--paper-4);
+  border-radius:var(--r2);
+  background:var(--paper-0);
+}
+.thread.open{border-left:4px dotted var(--open)}
+.thread.done{border-left:4px solid var(--resolved);background:var(--resolved-soft)}
+.thread-head{display:flex;align-items:center;gap:var(--s2);padding:var(--s3);border-bottom:1px solid var(--paper-3)}
+.anchor-label{
+  display:inline-flex;
+  align-items:center;
+  min-height:20px;
+  padding:2px 6px;
+  border:1px solid var(--paper-4);
+  border-radius:var(--r1);
+  background:var(--paper-1);
+  font:500 11px/1 var(--mono);
+}
+.thread-title{font-weight:600}
+.thread-body{padding:var(--s3);color:var(--ink-1);font:14px/1.55 var(--serif)}
+.reply{margin-top:var(--s3);padding-left:var(--s3);border-left:2px solid var(--accent-rule)}
+.collapsed{display:flex;align-items:center;gap:var(--s2);padding:var(--s3);color:var(--ink-1)}
+.composer{
+  padding:var(--s3);
+  border:1px solid var(--accent-rule);
+  border-radius:var(--r3);
+  background:var(--paper-0);
+}
+.actions{display:flex;align-items:center;gap:var(--s2);margin-top:var(--s3)}
+.spine{grid-row:2;border-right:1px solid var(--paper-4);background:var(--paper-1);padding:var(--s3)}
+.spine h3,.ledger-main h3{margin:0 0 var(--s2);font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--ink-2)}
+.version{
+  display:grid;
+  grid-template-columns:28px 1fr auto;
+  gap:var(--s2);
+  align-items:center;
+  margin-bottom:var(--s2);
+  padding:var(--s2);
+  border:1px solid var(--paper-3);
+  border-radius:var(--r1);
+  background:var(--paper-0);
+}
+.version b{display:block;font:600 13px/1.2 var(--mono)}
+.version small{display:block;color:var(--ink-2);font:11px/1.35 var(--mono)}
+.mark{
+  display:inline-grid;
+  place-items:center;
+  min-width:22px;
+  height:22px;
+  border:1px solid currentColor;
+  border-radius:var(--r1);
+  background:var(--paper-0);
+  font:600 10px/1 var(--mono);
+}
+.pair-ref{border-left:4px solid var(--paper-4)}
+.pair-cand{border-left:4px solid var(--accent-rule);background:var(--accent-soft)}
+.compare-main{grid-row:2;display:grid;grid-template-rows:88px minmax(0,1fr);min-height:0;background:var(--paper-0)}
+.summary{display:grid;grid-template-columns:1.2fr 1fr;gap:var(--s3);padding:var(--s4);border-bottom:1px solid var(--paper-3)}
+.summary-line{font-size:18px;line-height:1.3;font-weight:600}
+.facts{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.fact{padding:6px;border:1px solid var(--paper-3);border-radius:var(--r1);background:var(--paper-1);font:12px/1.35 var(--mono)}
+.fact span{display:block;color:var(--ink-2);font:600 10px/1.3 var(--sans);text-transform:uppercase;letter-spacing:.06em}
+.pair{display:grid;grid-template-columns:1fr 1fr;gap:var(--s3);padding:var(--s4);min-height:0}
+.pane{display:grid;grid-template-rows:54px minmax(0,1fr)}
+.pane-head{display:flex;justify-content:space-between;gap:var(--s2);align-items:flex-start;padding:var(--s3);border-bottom:1px solid var(--paper-3);background:var(--paper-1)}
+.pane-head small{display:block;color:var(--ink-2);font:11px/1.35 var(--mono)}
+.pane-view{position:relative;padding:var(--s3);background:var(--paper-1);overflow:hidden}
+.region{position:absolute;left:39%;top:29%;width:20%;height:16%;border:2px dotted var(--accent);background:var(--accent-soft)}
+.tag{
+  display:inline-flex;
+  align-items:center;
+  gap:5px;
+  padding:3px 6px;
+  border:1px solid currentColor;
+  border-left-width:3px;
+  border-radius:var(--r1);
+  background:var(--paper-0);
+  font:600 11px/1.1 var(--mono);
+  text-transform:uppercase;
+}
+.compare .rail{grid-column:4}
+.compare .queue{grid-column:1}
+.compare .spine{grid-column:2}
+.compare-main{grid-column:3}
+.thread-meta{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:0 var(--s3) var(--s3)}
+.thread-meta span{padding:5px 6px;border:1px solid var(--paper-4);border-radius:var(--r1);background:var(--paper-0);font:11px/1.2 var(--mono);color:var(--ink-2)}
+.ledger-main{grid-row:2;display:grid;grid-template-rows:40px auto minmax(0,1fr);border-right:1px solid var(--paper-4);background:var(--paper-1);overflow:hidden}
+.ledger-tools{display:flex;align-items:center;gap:var(--s2);padding:var(--s2) var(--s4);border-bottom:1px solid var(--paper-3);background:var(--paper-0)}
+.ledger-tools label{display:flex;align-items:center;gap:var(--s1);font-size:12px;color:var(--ink-2)}
+.bulk{
+  display:flex;
+  align-items:center;
+  gap:var(--s2);
+  margin:var(--s3);
+  padding:var(--s3);
+  border:1px solid var(--accent-rule);
+  border-left:4px double var(--accent-rule);
+  background:var(--accent-soft);
+  font-size:12px;
+}
+.bulk strong{font-family:var(--mono)}
+table{width:100%;border-collapse:collapse;font-size:12px;line-height:1.3}
+th,td{padding:8px 7px;border-bottom:1px solid var(--paper-3);text-align:left;vertical-align:top}
+th{background:var(--paper-0);color:var(--ink-2);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.04em}
+tr{background:var(--paper-1)}
+tr.selected{background:var(--accent-soft);outline:2px solid var(--focus);outline-offset:-2px}
+tr.checked{background:var(--paper-2)}
+.artifact,.age,.replies{font-family:var(--mono);white-space:nowrap}
+.anchor{font-weight:500}
+.excerpt{max-width:260px;color:var(--ink-2)}
+.context-head{padding:var(--s4);border-bottom:1px solid var(--paper-3);background:var(--paper-0)}
+.context-head h2{font-size:16px;margin:0 0 2px}
+.context-view{display:grid;grid-template-columns:1fr 238px;gap:var(--s3);padding:var(--s4);height:calc(var(--section-height) - 180px);min-height:0}
+.context-stage{position:relative}
+.context .image-wrap{width:100%;height:100%;border:0}
+.side{display:flex;flex-direction:column;gap:var(--s2);overflow:hidden}
+.side .thread{padding:var(--s2);font-size:12px}
+.side .thread h3{display:flex;justify-content:space-between;gap:var(--s2);margin:0 0 var(--s2);font-size:12px}
+.side .thread p{margin:0 0 var(--s2);font:13px/1.5 var(--serif);color:var(--ink-1)}
+.lab-toggle{
+  position:fixed;
+  right:24px;
+  bottom:24px;
+  z-index:14;
+  background:var(--paper-0);
+}
+.theme-lab{
+  position:fixed;
+  top:0;
+  right:0;
+  width:360px;
+  height:100vh;
+  z-index:15;
+  padding:var(--s4);
+  border-left:1px solid var(--paper-4);
+  background:var(--paper-0);
+  transform:translateX(100%);
+  transition:transform calc(.22s * var(--motion-factor)) ease;
+  overflow:auto;
+}
+body.lab-open .theme-lab{transform:translateX(0)}
+body.lab-open .lab-toggle{right:384px}
+.lab-head{display:flex;align-items:flex-start;gap:var(--s2);margin-bottom:var(--s4)}
+.lab-head h2{margin:0;font-size:18px}
+.lab-head p,.lab-note{margin:0;color:var(--ink-2);font-size:12px;line-height:1.5}
+.lab-grid{display:grid;gap:var(--s3)}
+.lab-field{display:grid;gap:6px;padding:var(--s3);border:1px solid var(--paper-3);border-radius:var(--r2);background:var(--paper-1)}
+.lab-field label{display:flex;justify-content:space-between;gap:var(--s2);font-weight:500}
+.lab-field output{font-family:var(--mono);color:var(--ink-2)}
+.lab-field input[type="range"]{width:100%}
+.lab-actions{display:grid;grid-template-columns:1fr 1fr;gap:var(--s2)}
+.lab-json{min-height:170px;font:12px/1.5 var(--mono)}
+.theme-lab .close-lab{margin-left:auto}
+.theme-choice{justify-content:flex-start;width:100%}
+.theme-choice[aria-pressed="true"]{background:var(--accent-soft);border-color:var(--accent-rule);color:var(--accent)}
+.token-list{display:grid;gap:6px}
+.token-row{display:grid;grid-template-columns:1fr auto auto;align-items:center;gap:10px;font:12px/1.35 var(--mono)}
+.token-name{font-family:var(--sans);font-weight:500;color:var(--ink-1)}
+.swatch{width:14px;height:14px;border:1px solid var(--paper-4);border-radius:999px;background:var(--token-color)}
 </style>
 </head>
 <body>
@@ -64,52 +529,215 @@
 <section class="mode-panel" id="mode-inspector">
   <div class="mode-label">Mode: Inspector <span>Centered artifact viewer, right thread rail, shared queue.</span></div>
   <div class="app inspector" data-mode="inspector">
-    <header class="topbar"><div class="caption"><b>Artifact review</b><span>portrait-render-final, image, v4, produced 09:42</span></div><nav class="mode-switcher" aria-label="Mode switcher"><button class="mode-button" data-target="inspector" aria-pressed="true">Inspector <kbd>1</kbd></button><button class="mode-button" data-target="compare" aria-pressed="false">Compare <kbd>2</kbd></button><button class="mode-button" data-target="ledger" aria-pressed="false">Ledger <kbd>3</kbd></button></nav><div class="top-actions"><span class="quiet">12 of 40 reviewed</span><button class="theme-toggle" aria-label="Toggle light and dark theme" title="Toggle theme"><svg class="icon"><use href="#i-sun"></use></svg><kbd>T</kbd></button></div></header>
-    <aside class="queue" aria-label="Persistent work queue"><div class="queue-head"><span class="title">Work queue</span><span class="progress">12 of 40 reviewed</span></div><div class="queue-tools"><label><input type="checkbox" checked> Unreviewed only <span class="key">F</span></label><select aria-label="Sort work queue"><option>Sort: oldest first</option></select></div><div class="queue-list">
-      <div class="qitem active"><span class="typebox"><svg class="icon"><use href="#i-image"/></svg></span><div><div class="qname">portrait-render-final</div><div class="qmeta"><span class="state open"><svg class="icon"><use href="#i-warning-circle"/></svg>Needs review</span><span class="mono">v4</span><span>18m</span></div></div><div class="count">3<small>open</small></div></div>
-      <div class="qitem"><span class="typebox"><svg class="icon"><use href="#i-images-square"/></svg></span><div><div class="qname">contact-sheet-batch-12</div><div class="qmeta"><span class="state open"><svg class="icon"><use href="#i-warning-circle"/></svg>Needs review</span><span class="mono">v2</span><span>31m</span></div></div><div class="count">9<small>open</small></div></div>
-      <div class="qitem"><span class="typebox"><svg class="icon"><use href="#i-article"/></svg></span><div><div class="qname">agent-run-summary</div><div class="qmeta"><span class="state review"><svg class="icon"><use href="#i-circle"/></svg>In review</span><span class="mono">v7</span><span>44m</span></div></div><div class="count">2<small>open</small></div></div>
-      <div class="qitem"><span class="typebox"><svg class="icon"><use href="#i-file-code"/></svg></span><div><div class="qname">theme-switcher.sh</div><div class="qmeta"><span class="state review"><svg class="icon"><use href="#i-circle"/></svg>In review</span><span class="mono">v3</span><span>2h</span></div></div><div class="count">4<small>open</small></div></div>
-      <div class="qitem"><span class="typebox"><svg class="icon"><use href="#i-image"/></svg></span><div><div class="qname">wallpaper-crop</div><div class="qmeta"><span class="state approved"><svg class="icon"><use href="#i-seal-check"/></svg>Approved</span><span class="mono">v6</span><span>3h</span></div></div><div class="count">0<small>open</small></div></div>
-      <div class="qitem"><span class="typebox"><svg class="icon"><use href="#i-article"/></svg></span><div><div class="qname">migration-risk-report</div><div class="qmeta"><span class="state open"><svg class="icon"><use href="#i-warning-circle"/></svg>Needs review</span><span class="mono">v1</span><span>4h</span></div></div><div class="count">6<small>open</small></div></div>
-    </div></aside>
-    <main class="hero" aria-label="Inspector artifact viewer"><div class="toolbar"><button aria-label="Add comment"><svg class="icon"><use href="#i-chat-circle"/></svg>Comment <span class="key">C</span></button><span class="key">J</span> Next <span class="key">K</span> Previous <span class="key">R</span> Resolve <span class="key">Z</span> Fit <div class="artifact-tabs" aria-label="Artifact type switcher"><button data-artifact="image" aria-pressed="true">Image</button><button data-artifact="report" aria-pressed="false">Report</button><button data-artifact="code" aria-pressed="false">Code</button></div></div><div class="viewer"><div class="artifact-kind active" data-kind="image"><div class="stage"><div class="image-wrap"><img src="assets/sample-artifact.png" alt="Portrait render artifact"><span class="pin" style="left:56%;top:34%" data-label="selected region A1">1</span><span class="pin open" style="left:31%;top:58%" data-label="open region B4">2</span><span class="pin done" style="left:68%;top:73%" data-label="resolved region C2">3</span></div></div></div><div class="artifact-kind" data-kind="report"><article class="report"><h3>Automated desktop review</h3><p>The artifact is a generated report with comments anchored to blocks. The reviewer needs command output for any safety claim.</p><section class="block-anchor"><h3>Risk finding</h3><p>The sway reload claim needs the exact command and output before approval.</p></section></article></div><div class="artifact-kind" data-kind="code"><div class="codebox"><div class="line"><span class="ln">42</span><span></span><span>theme_name=&quot;${1:-ember}&quot;</span><span></span></div><div class="line open"><span class="ln">43</span><span>A</span><span>theme_dir=&quot;$config_root/themes/$theme_name&quot;</span><span>open</span></div><div class="line done"><span class="ln">50</span><span>B</span><span>install -Dm644 &quot;$theme_dir/data/waybar-colors.css&quot; &quot;$waybar_target&quot;</span><span>resolved</span></div></div></div></div></main>
-    <aside class="rail" aria-label="Thread rail"><div class="rail-head"><span class="title">Threads</span><span class="progress">3 open</span></div><div class="threads"><div class="thread open"><div class="thread-head"><span class="anchor-label">region A1</span><span class="thread-title">Edge detail needs a decision</span><span class="grow"></span><span class="state open"><svg class="icon"><use href="#i-warning-circle"/></svg>Open</span></div><div class="thread-body">The cheek highlight reads sharper than the rest of the render. Please soften this area or confirm it is intentional.<div class="reply"><b>Agent run 28</b><br>Softened by 12 percent, but the temple edge may still catch too much contrast.</div></div></div><div class="thread done"><div class="collapsed"><span class="anchor-label">region C2</span><span class="state resolved"><svg class="icon"><use href="#i-check-circle"/></svg>Resolved</span><span>Background seam accepted after crop check.</span></div></div><div class="composer"><div class="thread-head"><span class="anchor-label">region B4</span><span class="thread-title">Draft comment</span></div><label class="sr-only" for="inspector-draft">Draft comment for region B4</label><textarea id="inspector-draft">The lower fabric fold is fine, but the shade under it needs to match the left side before approval.</textarea><div class="actions"><button class="primary">Post <span class="key">C</span></button><button>Resolve <span class="key">R</span></button></div></div></div></aside>
+    <header class="topbar">
+      <div class="caption"><b>Artifact review</b><span>portrait-render-final, image, v4, produced 09:42</span></div>
+      <nav class="mode-switcher" aria-label="Mode switcher">
+        <button class="mode-button" data-target="inspector" aria-pressed="true">Inspector <kbd>1</kbd></button>
+        <button class="mode-button" data-target="compare" aria-pressed="false">Compare <kbd>2</kbd></button>
+        <button class="mode-button" data-target="ledger" aria-pressed="false">Ledger <kbd>3</kbd></button>
+      </nav>
+      <div class="top-actions"><span class="quiet">12 of 40 reviewed</span><button class="theme-toggle" aria-label="Toggle light and dark theme" title="Toggle theme"><svg class="icon"><use href="#i-sun"></use></svg><kbd>T</kbd></button></div>
+    </header>
+    <aside class="queue" aria-label="Persistent work queue">
+      <div class="queue-head"><span class="title">Work queue</span><span class="progress">12 of 40 reviewed</span></div>
+      <div class="queue-tools"><label><input type="checkbox" checked> Unreviewed only <span class="key">F</span></label><select aria-label="Sort work queue"><option>Sort: oldest first</option></select></div>
+      <div class="queue-list">
+        <div class="qitem active"><span class="typebox"><svg class="icon"><use href="#i-image"></use></svg></span><div><div class="qname">portrait-render-final</div><div class="qmeta"><span class="state open"><svg class="icon"><use href="#i-warning-circle"></use></svg>Needs review</span><span class="mono">v4</span><span>18m</span></div></div><div class="count">3<small>open</small></div></div>
+        <div class="qitem"><span class="typebox"><svg class="icon"><use href="#i-images-square"></use></svg></span><div><div class="qname">contact-sheet-batch-12</div><div class="qmeta"><span class="state open"><svg class="icon"><use href="#i-warning-circle"></use></svg>Needs review</span><span class="mono">v2</span><span>31m</span></div></div><div class="count">9<small>open</small></div></div>
+        <div class="qitem"><span class="typebox"><svg class="icon"><use href="#i-article"></use></svg></span><div><div class="qname">agent-run-summary</div><div class="qmeta"><span class="state review"><svg class="icon"><use href="#i-circle"></use></svg>In review</span><span class="mono">v7</span><span>44m</span></div></div><div class="count">2<small>open</small></div></div>
+        <div class="qitem"><span class="typebox"><svg class="icon"><use href="#i-file-code"></use></svg></span><div><div class="qname">theme-switcher.sh</div><div class="qmeta"><span class="state review"><svg class="icon"><use href="#i-circle"></use></svg>In review</span><span class="mono">v3</span><span>2h</span></div></div><div class="count">4<small>open</small></div></div>
+        <div class="qitem"><span class="typebox"><svg class="icon"><use href="#i-image"></use></svg></span><div><div class="qname">wallpaper-crop</div><div class="qmeta"><span class="state approved"><svg class="icon"><use href="#i-seal-check"></use></svg>Approved</span><span class="mono">v6</span><span>3h</span></div></div><div class="count">0<small>open</small></div></div>
+        <div class="qitem"><span class="typebox"><svg class="icon"><use href="#i-article"></use></svg></span><div><div class="qname">migration-risk-report</div><div class="qmeta"><span class="state open"><svg class="icon"><use href="#i-warning-circle"></use></svg>Needs review</span><span class="mono">v1</span><span>4h</span></div></div><div class="count">6<small>open</small></div></div>
+      </div>
+    </aside>
+    <main class="hero" aria-label="Inspector artifact viewer">
+      <div class="toolbar"><button aria-label="Add comment"><svg class="icon"><use href="#i-chat-circle"></use></svg>Comment <span class="key">C</span></button><span class="key">J</span> Next <span class="key">K</span> Previous <span class="key">R</span> Resolve <span class="key">Z</span> Fit <div class="artifact-tabs" aria-label="Artifact type switcher"><button data-artifact="image" aria-pressed="true">Image</button><button data-artifact="report" aria-pressed="false">Report</button><button data-artifact="code" aria-pressed="false">Code</button></div></div>
+      <div class="viewer">
+        <div class="artifact-kind active" data-kind="image"><div class="stage"><div class="image-wrap"><img src="assets/sample-artifact.png" alt="Portrait render artifact"><span class="pin" style="left:56%;top:34%" data-label="selected region A1">1</span><span class="pin open" style="left:31%;top:58%" data-label="open region B4">2</span><span class="pin done" style="left:68%;top:73%" data-label="resolved region C2">3</span></div></div></div>
+        <div class="artifact-kind" data-kind="report"><article class="report"><h3>Automated desktop review</h3><p>The artifact is a generated report with comments anchored to blocks. The reviewer needs command output for any safety claim.</p><section class="block-anchor"><h3>Risk finding</h3><p>The sway reload claim needs the exact command and output before approval.</p></section></article></div>
+        <div class="artifact-kind" data-kind="code"><div class="codebox"><div class="line"><span class="ln">42</span><span></span><span>theme_name=&quot;${1:-ember}&quot;</span><span></span></div><div class="line open"><span class="ln">43</span><span>A</span><span>theme_dir=&quot;$config_root/themes/$theme_name&quot;</span><span>open</span></div><div class="line done"><span class="ln">50</span><span>B</span><span>install -Dm644 &quot;$theme_dir/data/waybar-colors.css&quot; &quot;$waybar_target&quot;</span><span>resolved</span></div></div></div>
+      </div>
+    </main>
+    <aside class="rail" aria-label="Thread rail">
+      <div class="rail-head"><span class="title">Threads</span><span class="progress">3 open</span></div>
+      <div class="threads">
+        <div class="thread open"><div class="thread-head"><span class="anchor-label">region A1</span><span class="thread-title">Edge detail needs a decision</span><span class="grow"></span><span class="state open"><svg class="icon"><use href="#i-warning-circle"></use></svg>Open</span></div><div class="thread-body">The cheek highlight reads sharper than the rest of the render. Please soften this area or confirm it is intentional.<div class="reply"><b>Agent run 28</b><br>Softened by 12 percent, but the temple edge may still catch too much contrast.</div></div></div>
+        <div class="thread done"><div class="collapsed"><span class="anchor-label">region C2</span><span class="state resolved"><svg class="icon"><use href="#i-check-circle"></use></svg>Resolved</span><span>Background seam accepted after crop check.</span></div></div>
+        <div class="composer"><div class="thread-head"><span class="anchor-label">region B4</span><span class="thread-title">Draft comment</span></div><label class="sr-only" for="inspector-draft">Draft comment for region B4</label><textarea id="inspector-draft">The lower fabric fold is fine, but the shade under it needs to match the left side before approval.</textarea><div class="actions"><button class="primary">Post <span class="key">C</span></button><button>Resolve <span class="key">R</span></button></div></div>
+      </div>
+    </aside>
   </div>
 </section>
 
 <section class="mode-panel" id="mode-compare">
   <div class="mode-label">Mode: Compare <span>Two artifact panes, version spine, candidate status on each thread.</span></div>
   <div class="app compare" data-mode="compare">
-    <header class="topbar"><div class="caption"><b>Artifact review</b><span>market-hero, image, v021 to v022, produced 14:32</span></div><nav class="mode-switcher" aria-label="Mode switcher"><button class="mode-button" data-target="inspector" aria-pressed="false">Inspector <kbd>1</kbd></button><button class="mode-button" data-target="compare" aria-pressed="true">Compare <kbd>2</kbd></button><button class="mode-button" data-target="ledger" aria-pressed="false">Ledger <kbd>3</kbd></button></nav><div class="top-actions"><span class="quiet">1 still open, 2 addressed</span><button class="theme-toggle" aria-label="Toggle light and dark theme" title="Toggle theme"><svg class="icon"><use href="#i-sun"></use></svg><kbd>T</kbd></button></div></header>
-    <aside class="queue" aria-label="Persistent work queue"><div class="queue-head"><span class="title">Work queue</span><span class="progress">12 of 40 reviewed</span></div><div class="queue-tools"><label><input type="checkbox" checked> Unreviewed only <span class="key">F</span></label><select aria-label="Sort work queue"><option>Sort: oldest first</option></select></div><div class="queue-list"><div class="qitem active"><span class="typebox"><svg class="icon"><use href="#i-image"/></svg></span><div><div class="qname">portrait-render-final</div><div class="qmeta"><span class="state open"><svg class="icon"><use href="#i-warning-circle"/></svg>Needs review</span><span class="mono">v4</span><span>18m</span></div></div><div class="count">3<small>open</small></div></div><div class="qitem"><span class="typebox"><svg class="icon"><use href="#i-images-square"/></svg></span><div><div class="qname">contact-sheet-batch-12</div><div class="qmeta"><span class="state open"><svg class="icon"><use href="#i-warning-circle"/></svg>Needs review</span><span class="mono">v2</span><span>31m</span></div></div><div class="count">9<small>open</small></div></div><div class="qitem"><span class="typebox"><svg class="icon"><use href="#i-article"/></svg></span><div><div class="qname">agent-run-summary</div><div class="qmeta"><span class="state review"><svg class="icon"><use href="#i-circle"/></svg>In review</span><span class="mono">v7</span><span>44m</span></div></div><div class="count">2<small>open</small></div></div><div class="qitem"><span class="typebox"><svg class="icon"><use href="#i-file-code"/></svg></span><div><div class="qname">theme-switcher.sh</div><div class="qmeta"><span class="state review"><svg class="icon"><use href="#i-circle"/></svg>In review</span><span class="mono">v3</span><span>2h</span></div></div><div class="count">4<small>open</small></div></div></div></aside>
-    <aside class="spine" aria-label="Version spine"><h3>Version spine</h3><div class="version"><span class="mark resolved"><svg class="icon"><use href="#i-check-circle"/></svg></span><div><b>v017</b><small>accepted baseline</small></div><small>0 open</small></div><div class="version"><span class="mark draft"><svg class="icon"><use href="#i-warning-circle"/></svg></span><div><b>v019</b><small>addressed crop note</small></div><small>1 open</small></div><div class="version"><span class="mark open"><svg class="icon"><use href="#i-circle"/></svg></span><div><b>v020</b><small>new reflection issue</small></div><small>2 open</small></div><div class="version pair-ref"><span class="mark">L</span><div><b>v021</b><small>paired reference</small></div><small>2 open</small></div><div class="version pair-cand"><span class="mark">R</span><div><b>v022</b><small>paired candidate</small></div><small>1 open</small></div></aside>
+    <header class="topbar">
+      <div class="caption"><b>Artifact review</b><span>market-hero, image, v021 to v022, produced 14:32</span></div>
+      <nav class="mode-switcher" aria-label="Mode switcher">
+        <button class="mode-button" data-target="inspector" aria-pressed="false">Inspector <kbd>1</kbd></button>
+        <button class="mode-button" data-target="compare" aria-pressed="true">Compare <kbd>2</kbd></button>
+        <button class="mode-button" data-target="ledger" aria-pressed="false">Ledger <kbd>3</kbd></button>
+      </nav>
+      <div class="top-actions"><span class="quiet">1 still open, 2 addressed</span><button class="theme-toggle" aria-label="Toggle light and dark theme" title="Toggle theme"><svg class="icon"><use href="#i-sun"></use></svg><kbd>T</kbd></button></div>
+    </header>
+    <aside class="queue" aria-label="Persistent work queue">
+      <div class="queue-head"><span class="title">Work queue</span><span class="progress">12 of 40 reviewed</span></div>
+      <div class="queue-tools"><label><input type="checkbox" checked> Unreviewed only <span class="key">F</span></label><select aria-label="Sort work queue"><option>Sort: oldest first</option></select></div>
+      <div class="queue-list">
+        <div class="qitem active"><span class="typebox"><svg class="icon"><use href="#i-image"></use></svg></span><div><div class="qname">portrait-render-final</div><div class="qmeta"><span class="state open"><svg class="icon"><use href="#i-warning-circle"></use></svg>Needs review</span><span class="mono">v4</span><span>18m</span></div></div><div class="count">3<small>open</small></div></div>
+        <div class="qitem"><span class="typebox"><svg class="icon"><use href="#i-images-square"></use></svg></span><div><div class="qname">contact-sheet-batch-12</div><div class="qmeta"><span class="state open"><svg class="icon"><use href="#i-warning-circle"></use></svg>Needs review</span><span class="mono">v2</span><span>31m</span></div></div><div class="count">9<small>open</small></div></div>
+        <div class="qitem"><span class="typebox"><svg class="icon"><use href="#i-article"></use></svg></span><div><div class="qname">agent-run-summary</div><div class="qmeta"><span class="state review"><svg class="icon"><use href="#i-circle"></use></svg>In review</span><span class="mono">v7</span><span>44m</span></div></div><div class="count">2<small>open</small></div></div>
+        <div class="qitem"><span class="typebox"><svg class="icon"><use href="#i-file-code"></use></svg></span><div><div class="qname">theme-switcher.sh</div><div class="qmeta"><span class="state review"><svg class="icon"><use href="#i-circle"></use></svg>In review</span><span class="mono">v3</span><span>2h</span></div></div><div class="count">4<small>open</small></div></div>
+      </div>
+    </aside>
+    <aside class="spine" aria-label="Version spine"><h3>Version spine</h3><div class="version"><span class="mark resolved"><svg class="icon"><use href="#i-check-circle"></use></svg></span><div><b>v017</b><small>accepted baseline</small></div><small>0 open</small></div><div class="version"><span class="mark draft"><svg class="icon"><use href="#i-warning-circle"></use></svg></span><div><b>v019</b><small>addressed crop note</small></div><small>1 open</small></div><div class="version"><span class="mark open"><svg class="icon"><use href="#i-circle"></use></svg></span><div><b>v020</b><small>new reflection issue</small></div><small>2 open</small></div><div class="version pair-ref"><span class="mark">L</span><div><b>v021</b><small>paired reference</small></div><small>2 open</small></div><div class="version pair-cand"><span class="mark">R</span><div><b>v022</b><small>paired candidate</small></div><small>1 open</small></div></aside>
     <main class="compare-main" aria-label="Compared artifact versions"><section class="summary"><div><h3>Current pair summary</h3><div class="summary-line">1 region changed, 1 note still open, 2 addressed since v021</div></div><div class="facts"><div class="fact"><span>Identifier</span>market-hero</div><div class="fact"><span>Type</span>image</div><div class="fact"><span>Version</span>v021 to v022</div><div class="fact"><span>Produced</span>14:32</div></div></section><section class="pair"><article class="pane"><div class="pane-head"><div><b>Reference, v021</b><small>artifact image, 2.3 MB, produced 14:11</small></div><span class="tag open">L reference</span></div><div class="pane-view"><img class="art-img" src="assets/sample-artifact.png" alt="Reference artifact image"><div class="region"></div><button class="pin" style="left:46%;top:34%" aria-label="Thread T1 awning reflection" data-label="raised v021">T1</button></div></article><article class="pane"><div class="pane-head"><div><b>Candidate, v022</b><small>artifact image, 2.4 MB, produced 14:32</small></div><span class="tag draft">R candidate</span></div><div class="pane-view"><img class="art-img" src="assets/sample-artifact.png" alt="Candidate artifact image"><div class="region"></div><button class="pin open" style="left:47%;top:35%" aria-label="Thread T1 still open in candidate" data-label="still open">T1</button></div></article></section></main>
-    <aside class="rail" aria-label="Compare thread rail"><div class="rail-head"><span class="title">Threads for pair</span><span class="progress">1 open</span></div><div class="threads"><div class="thread open"><div class="thread-head"><span class="anchor-label">T1</span><span class="thread-title">Awning reflection</span><span class="grow"></span><span class="state open"><svg class="icon"><use href="#i-circle"/></svg>Open</span></div><div class="thread-meta"><span>Raised v021</span><span>Candidate: still open</span></div><div class="thread-body">The bright reflection remains a hard stripe. It should break up near the wet curb.<div class="reply"><b>Agent reply</b><br>Reduced edge contrast, but the stripe still reproduces in the candidate.</div></div></div><div class="thread done"><div class="collapsed"><span class="anchor-label">T2</span><span class="state resolved"><svg class="icon"><use href="#i-check-circle"/></svg>Resolved</span><span>Crop gutter closed on v022.</span></div><div class="thread-meta"><span>Raised v020</span><span>Candidate: resolved</span></div></div><div class="composer"><label class="sr-only" for="compare-draft">Draft comment for thread T1</label><textarea id="compare-draft">Candidate still has a one pixel bright seam along the awning support.</textarea><div class="actions"><button class="primary">Save comment</button><button>Resolve</button></div></div></div></aside>
+    <aside class="rail" aria-label="Compare thread rail"><div class="rail-head"><span class="title">Threads for pair</span><span class="progress">1 open</span></div><div class="threads"><div class="thread open"><div class="thread-head"><span class="anchor-label">T1</span><span class="thread-title">Awning reflection</span><span class="grow"></span><span class="state open"><svg class="icon"><use href="#i-circle"></use></svg>Open</span></div><div class="thread-meta"><span>Raised v021</span><span>Candidate: still open</span></div><div class="thread-body">The bright reflection remains a hard stripe. It should break up near the wet curb.<div class="reply"><b>Agent reply</b><br>Reduced edge contrast, but the stripe still reproduces in the candidate.</div></div></div><div class="thread done"><div class="collapsed"><span class="anchor-label">T2</span><span class="state resolved"><svg class="icon"><use href="#i-check-circle"></use></svg>Resolved</span><span>Crop gutter closed on v022.</span></div><div class="thread-meta"><span>Raised v020</span><span>Candidate: resolved</span></div></div><div class="composer"><label class="sr-only" for="compare-draft">Draft comment for thread T1</label><textarea id="compare-draft">Candidate still has a one pixel bright seam along the awning support.</textarea><div class="actions"><button class="primary">Save comment</button><button>Resolve</button></div></div></div></aside>
   </div>
 </section>
 
 <section class="mode-panel" id="mode-ledger">
   <div class="mode-label">Mode: Ledger <span>Cross artifact feedback ledger first, artifact context beside it.</span></div>
   <div class="app ledger" data-mode="ledger">
-    <header class="topbar"><div class="caption"><b>Artifact review</b><span>14 open threads across 6 artifacts, oldest first</span></div><nav class="mode-switcher" aria-label="Mode switcher"><button class="mode-button" data-target="inspector" aria-pressed="false">Inspector <kbd>1</kbd></button><button class="mode-button" data-target="compare" aria-pressed="false">Compare <kbd>2</kbd></button><button class="mode-button" data-target="ledger" aria-pressed="true">Ledger <kbd>3</kbd></button></nav><div class="top-actions"><span class="quiet">3 selected</span><button class="theme-toggle" aria-label="Toggle light and dark theme" title="Toggle theme"><svg class="icon"><use href="#i-sun"></use></svg><kbd>T</kbd></button></div></header>
-    <aside class="queue" aria-label="Persistent work queue"><div class="queue-head"><span class="title">Work queue</span><span class="progress">12 of 40 reviewed</span></div><div class="queue-tools"><label><input type="checkbox" checked> Unreviewed only <span class="key">F</span></label><select aria-label="Sort work queue"><option>Sort: oldest first</option></select></div><div class="queue-list"><div class="qitem active"><span class="typebox"><svg class="icon"><use href="#i-image"/></svg></span><div><div class="qname">portrait-render-final</div><div class="qmeta"><span class="state open"><svg class="icon"><use href="#i-warning-circle"/></svg>Needs review</span><span class="mono">v4</span><span>18m</span></div></div><div class="count">3<small>open</small></div></div><div class="qitem"><span class="typebox"><svg class="icon"><use href="#i-images-square"/></svg></span><div><div class="qname">contact-sheet-batch-12</div><div class="qmeta"><span class="state open"><svg class="icon"><use href="#i-warning-circle"/></svg>Needs review</span><span class="mono">v2</span><span>31m</span></div></div><div class="count">9<small>open</small></div></div><div class="qitem"><span class="typebox"><svg class="icon"><use href="#i-article"/></svg></span><div><div class="qname">agent-run-summary</div><div class="qmeta"><span class="state review"><svg class="icon"><use href="#i-circle"/></svg>In review</span><span class="mono">v7</span><span>44m</span></div></div><div class="count">2<small>open</small></div></div><div class="qitem"><span class="typebox"><svg class="icon"><use href="#i-file-code"/></svg></span><div><div class="qname">theme-switcher.sh</div><div class="qmeta"><span class="state review"><svg class="icon"><use href="#i-circle"/></svg>In review</span><span class="mono">v3</span><span>2h</span></div></div><div class="count">4<small>open</small></div></div></div></aside>
-    <main class="ledger-main" aria-label="Cross artifact feedback ledger"><div class="main-head"><span class="title">Open findings ledger</span><span class="progress">Hero work object</span></div><div><div class="ledger-tools"><label><input type="checkbox" checked> Unresolved only</label><label>Type <select aria-label="Filter artifact type"><option>All artifact types</option></select></label><button><svg class="icon"><use href="#i-filter"/></svg>Filter set</button><span class="grow"></span><span><span class="key">J</span> next</span><span><span class="key">K</span> previous</span><span><span class="key">R</span> resolve</span></div><div class="bulk"><strong>3 rows selected</strong><button>Resolve selected</button><button>Reassign to agent</button><button>Hold until next pass</button><span>Bulk actions preserve each row anchor.</span></div></div><table><thead><tr><th></th><th>Artifact</th><th>Type</th><th>Anchor</th><th>State</th><th>Replies</th><th>Age</th><th>Latest comment</th></tr></thead><tbody><tr class="checked"><td><input type="checkbox" checked aria-label="Select IMG-2048-v7"></td><td class="artifact">IMG-2048-v7</td><td><span class="state open"><svg class="icon"><use href="#i-image"/></svg>Image</span></td><td class="anchor">Region pin A</td><td><span class="state open"><svg class="icon"><use href="#i-circle"/></svg>Open</span></td><td class="replies">3</td><td class="age">2d</td><td class="excerpt">Right cheek contour breaks at the shade boundary.</td></tr><tr class="selected checked"><td><input type="checkbox" checked aria-label="Select GAL-113-check"></td><td class="artifact">GAL-113-check</td><td><span class="state need"><svg class="icon"><use href="#i-images-square"/></svg>Gallery</span></td><td class="anchor">Item 04</td><td><span class="state need"><svg class="icon"><use href="#i-warning-circle"/></svg>Needs reply</span></td><td class="replies">5</td><td class="age">19h</td><td class="excerpt">Fixed framing but lost the fabric detail from pass two.</td></tr><tr class="checked"><td><input type="checkbox" checked aria-label="Select REP-77-summary"></td><td class="artifact">REP-77-summary</td><td><span class="state open"><svg class="icon"><use href="#i-article"/></svg>Report</span></td><td class="anchor">Risk table row 6</td><td><span class="state open"><svg class="icon"><use href="#i-circle"/></svg>Open</span></td><td class="replies">1</td><td class="age">17h</td><td class="excerpt">Mitigation names a tool but not the human owner.</td></tr><tr><td><input type="checkbox" aria-label="Select SRC-router.ts"></td><td class="artifact">SRC-router.ts</td><td><span class="state need"><svg class="icon"><use href="#i-file-code"/></svg>Code</span></td><td class="anchor">Line 118</td><td><span class="state need"><svg class="icon"><use href="#i-warning-circle"/></svg>Held</span></td><td class="replies">2</td><td class="age">11h</td><td class="excerpt">Keep this branch until the fixture covers a missing artifact type.</td></tr><tr><td><input type="checkbox" aria-label="Select REP-80-audit"></td><td class="artifact">REP-80-audit</td><td><span class="state open"><svg class="icon"><use href="#i-article"/></svg>Report</span></td><td class="anchor">Finding block 3</td><td><span class="state open"><svg class="icon"><use href="#i-circle"/></svg>Open</span></td><td class="replies">2</td><td class="age">6h</td><td class="excerpt">Evidence says verified, but no command output is attached.</td></tr><tr><td><input type="checkbox" aria-label="Select GAL-120-grid"></td><td class="artifact">GAL-120-grid</td><td><span class="state open"><svg class="icon"><use href="#i-images-square"/></svg>Gallery</span></td><td class="anchor">Item 09</td><td><span class="state open"><svg class="icon"><use href="#i-circle"/></svg>Open</span></td><td class="replies">6</td><td class="age">3h</td><td class="excerpt">The item reads like a style exploration, not a utility mock.</td></tr></tbody></table></main>
+    <header class="topbar">
+      <div class="caption"><b>Artifact review</b><span>14 open threads across 6 artifacts, oldest first</span></div>
+      <nav class="mode-switcher" aria-label="Mode switcher">
+        <button class="mode-button" data-target="inspector" aria-pressed="false">Inspector <kbd>1</kbd></button>
+        <button class="mode-button" data-target="compare" aria-pressed="false">Compare <kbd>2</kbd></button>
+        <button class="mode-button" data-target="ledger" aria-pressed="true">Ledger <kbd>3</kbd></button>
+      </nav>
+      <div class="top-actions"><span class="quiet">3 selected</span><button class="theme-toggle" aria-label="Toggle light and dark theme" title="Toggle theme"><svg class="icon"><use href="#i-sun"></use></svg><kbd>T</kbd></button></div>
+    </header>
+    <aside class="queue" aria-label="Persistent work queue">
+      <div class="queue-head"><span class="title">Work queue</span><span class="progress">12 of 40 reviewed</span></div>
+      <div class="queue-tools"><label><input type="checkbox" checked> Unreviewed only <span class="key">F</span></label><select aria-label="Sort work queue"><option>Sort: oldest first</option></select></div>
+      <div class="queue-list"><div class="qitem active"><span class="typebox"><svg class="icon"><use href="#i-image"></use></svg></span><div><div class="qname">portrait-render-final</div><div class="qmeta"><span class="state open"><svg class="icon"><use href="#i-warning-circle"></use></svg>Needs review</span><span class="mono">v4</span><span>18m</span></div></div><div class="count">3<small>open</small></div></div><div class="qitem"><span class="typebox"><svg class="icon"><use href="#i-images-square"></use></svg></span><div><div class="qname">contact-sheet-batch-12</div><div class="qmeta"><span class="state open"><svg class="icon"><use href="#i-warning-circle"></use></svg>Needs review</span><span class="mono">v2</span><span>31m</span></div></div><div class="count">9<small>open</small></div></div><div class="qitem"><span class="typebox"><svg class="icon"><use href="#i-article"></use></svg></span><div><div class="qname">agent-run-summary</div><div class="qmeta"><span class="state review"><svg class="icon"><use href="#i-circle"></use></svg>In review</span><span class="mono">v7</span><span>44m</span></div></div><div class="count">2<small>open</small></div></div><div class="qitem"><span class="typebox"><svg class="icon"><use href="#i-file-code"></use></svg></span><div><div class="qname">theme-switcher.sh</div><div class="qmeta"><span class="state review"><svg class="icon"><use href="#i-circle"></use></svg>In review</span><span class="mono">v3</span><span>2h</span></div></div><div class="count">4<small>open</small></div></div></div>
+    </aside>
+    <main class="ledger-main" aria-label="Cross artifact feedback ledger"><div class="main-head"><span class="title">Open findings ledger</span><span class="progress">Hero work object</span></div><div><div class="ledger-tools"><label><input type="checkbox" checked> Unresolved only</label><label>Type <select aria-label="Filter artifact type"><option>All artifact types</option></select></label><button><svg class="icon"><use href="#i-filter"></use></svg>Filter set</button><span class="grow"></span><span><span class="key">J</span> next</span><span><span class="key">K</span> previous</span><span><span class="key">R</span> resolve</span></div><div class="bulk"><strong>3 rows selected</strong><button>Resolve selected</button><button>Reassign to agent</button><button>Hold until next pass</button><span>Bulk actions preserve each row anchor.</span></div></div><table><thead><tr><th></th><th>Artifact</th><th>Type</th><th>Anchor</th><th>State</th><th>Replies</th><th>Age</th><th>Latest comment</th></tr></thead><tbody><tr class="checked"><td><input type="checkbox" checked aria-label="Select IMG-2048-v7"></td><td class="artifact">IMG-2048-v7</td><td><span class="state open"><svg class="icon"><use href="#i-image"></use></svg>Image</span></td><td class="anchor">Region pin A</td><td><span class="state open"><svg class="icon"><use href="#i-circle"></use></svg>Open</span></td><td class="replies">3</td><td class="age">2d</td><td class="excerpt">Right cheek contour breaks at the shade boundary.</td></tr><tr class="selected checked"><td><input type="checkbox" checked aria-label="Select GAL-113-check"></td><td class="artifact">GAL-113-check</td><td><span class="state need"><svg class="icon"><use href="#i-images-square"></use></svg>Gallery</span></td><td class="anchor">Item 04</td><td><span class="state need"><svg class="icon"><use href="#i-warning-circle"></use></svg>Needs reply</span></td><td class="replies">5</td><td class="age">19h</td><td class="excerpt">Fixed framing but lost the fabric detail from pass two.</td></tr><tr class="checked"><td><input type="checkbox" checked aria-label="Select REP-77-summary"></td><td class="artifact">REP-77-summary</td><td><span class="state open"><svg class="icon"><use href="#i-article"></use></svg>Report</span></td><td class="anchor">Risk table row 6</td><td><span class="state open"><svg class="icon"><use href="#i-circle"></use></svg>Open</span></td><td class="replies">1</td><td class="age">17h</td><td class="excerpt">Mitigation names a tool but not the human owner.</td></tr><tr><td><input type="checkbox" aria-label="Select SRC-router.ts"></td><td class="artifact">SRC-router.ts</td><td><span class="state need"><svg class="icon"><use href="#i-file-code"></use></svg>Code</span></td><td class="anchor">Line 118</td><td><span class="state need"><svg class="icon"><use href="#i-warning-circle"></use></svg>Held</span></td><td class="replies">2</td><td class="age">11h</td><td class="excerpt">Keep this branch until the fixture covers a missing artifact type.</td></tr><tr><td><input type="checkbox" aria-label="Select REP-80-audit"></td><td class="artifact">REP-80-audit</td><td><span class="state open"><svg class="icon"><use href="#i-article"></use></svg>Report</span></td><td class="anchor">Finding block 3</td><td><span class="state open"><svg class="icon"><use href="#i-circle"></use></svg>Open</span></td><td class="replies">2</td><td class="age">6h</td><td class="excerpt">Evidence says verified, but no command output is attached.</td></tr><tr><td><input type="checkbox" aria-label="Select GAL-120-grid"></td><td class="artifact">GAL-120-grid</td><td><span class="state open"><svg class="icon"><use href="#i-images-square"></use></svg>Gallery</span></td><td class="anchor">Item 09</td><td><span class="state open"><svg class="icon"><use href="#i-circle"></use></svg>Open</span></td><td class="replies">6</td><td class="age">3h</td><td class="excerpt">The item reads like a style exploration, not a utility mock.</td></tr></tbody></table></main>
     <aside class="context" aria-label="Artifact context"><div class="context-head"><h2>GAL-113-check context: Item 04</h2><div class="quiet">Selected ledger row opens the gallery and highlights its source item.</div><div class="facts"><div class="fact"><span>Identifier</span>GAL-113-check</div><div class="fact"><span>Type</span>Gallery</div><div class="fact"><span>Version</span>v3</div><div class="fact"><span>Length</span>12 items</div></div></div><div class="context-view"><div class="context-stage"><div class="image-wrap"><img src="assets/sample-artifact.png" alt="Selected gallery artifact"><span class="pin open" style="left:58%;top:48%" data-label="item 04 selected">4</span></div></div><div class="side"><div class="thread"><h3><span>Needs reply thread</span><span class="mono">5 replies</span></h3><p>Reviewer: This variant fixed framing but lost the fabric detail called out in pass two.</p><p class="reply">Agent: I can restore the detail from item 02 while keeping this crop.</p></div><div class="thread collapsed"><h3><span>Resolved thread</span><span>collapsed</span></h3><p>Item 01 pose mismatch closed after replacement.</p></div><div class="thread composer"><h3><span>Reply composer</span><span>draft</span></h3><label class="sr-only" for="ledger-draft">Reply draft for gallery item 04</label><textarea id="ledger-draft">Use item 04 composition, but carry over the sleeve texture from item 02.</textarea><div class="actions"><button class="primary">Save reply</button><button>Resolve after send</button></div></div></div></div></aside>
   </div>
 </section>
 
+<button class="lab-toggle" id="lab-toggle" type="button" aria-controls="theme-lab" aria-expanded="false">Lodestar themes</button>
+<aside class="theme-lab" id="theme-lab" aria-label="Lodestar theme reference">
+  <div class="lab-head"><div><h2>Lodestar themes</h2><p>Authored baseline is dark-graphite. Toggle flips to light.</p></div><button class="close-lab" id="close-lab" type="button">Close</button></div>
+  <div class="lab-grid">
+    <div class="lab-field"><label><span>Theme mode</span><output id="theme-mode-output">dark-graphite</output></label><div class="lab-actions"><button id="theme-dark-graphite" class="theme-choice primary" type="button" data-theme-choice="dark-graphite" aria-pressed="true">dark-graphite</button><button id="theme-light" class="theme-choice" type="button" data-theme-choice="light" aria-pressed="false">light</button></div></div>
+    <div class="lab-field"><label><span>Storage key</span><output class="mono">lodestar-theme</output></label><p class="lab-note">Mock reads localStorage["lodestar-theme"] and falls back to dark-graphite.</p></div>
+    <div class="lab-field"><label><span>dark-graphite tokens</span><output>authored default</output></label><div class="token-list" id="tokens-dark-graphite"></div></div>
+    <div class="lab-field"><label><span>light tokens</span><output>alternate</output></label><div class="token-list" id="tokens-light"></div></div>
+  </div>
+</aside>
+
 <script>
 (function(){
   var root=document.documentElement;
-  function apply(t){root.setAttribute('data-theme',t);document.querySelectorAll('.theme-toggle use').forEach(function(u){u.setAttribute('href',t==='dark'?'#i-moon':'#i-sun');});}
-  function toggle(){apply(root.getAttribute('data-theme')==='dark'?'light':'dark');}
-  function go(mode){var panel=document.getElementById('mode-'+mode);if(panel)panel.scrollIntoView({block:'start',behavior:'smooth'});}
-  document.querySelectorAll('.theme-toggle').forEach(function(b){b.addEventListener('click',toggle);});
-  document.querySelectorAll('.mode-button').forEach(function(b){b.addEventListener('click',function(){go(b.dataset.target);});});
-  document.querySelectorAll('.artifact-tabs').forEach(function(group){group.addEventListener('click',function(e){var b=e.target.closest('button[data-artifact]');if(!b)return;var app=b.closest('.app');group.querySelectorAll('button').forEach(function(x){x.setAttribute('aria-pressed',x===b?'true':'false');});app.querySelectorAll('.artifact-kind').forEach(function(k){k.classList.toggle('active',k.dataset.kind===b.dataset.artifact);});});});
-  document.addEventListener('keydown',function(e){if(/input|textarea|select/i.test(e.target.tagName))return;if(e.key==='t'||e.key==='T')toggle();if(e.key==='1')go('inspector');if(e.key==='2')go('compare');if(e.key==='3')go('ledger');});
-  apply('light');
+  var body=document.body;
+  var STORAGE_KEY='lodestar-theme';
+  var DEFAULT_THEME='dark-graphite';
+  var THEMES={
+    'dark-graphite':{
+      icon:'#i-moon',
+      tokens:{
+        canvas:'#191b1e',surface:'#212429',surfaceSunken:'#131518',ink:'#c4c7ca',inkSoft:'#9aa0a7',inkFaint:'#767c84',line:'#2c3137',lineStrong:'#3b4148',accent:'#5a9bc9',accentStrong:'#78b1d8',onAccent:'#12161b'
+      }
+    },
+    light:{
+      icon:'#i-sun',
+      tokens:{
+        canvas:'#f7f6f3',surface:'#ffffff',surfaceSunken:'#f0efeb',ink:'#1c1b18',inkSoft:'#55524a',inkFaint:'#8a857a',line:'#ddd9d0',lineStrong:'#c4bfb2',accent:'#86603c',accentStrong:'#6b4c30',onAccent:'#fbf8f3'
+      }
+    }
+  };
+  var TOKEN_ORDER=[
+    ['canvas','canvas'],['surface','surface'],['surfaceSunken','surface-sunken'],['ink','ink'],['inkSoft','ink-soft'],['inkFaint','ink-faint'],['line','line'],['lineStrong','line-strong'],['accent','accent'],['accentStrong','accent-strong'],['onAccent','on-accent']
+  ];
+  var labToggle=document.getElementById('lab-toggle');
+  var closeLab=document.getElementById('close-lab');
+  var modeOutput=document.getElementById('theme-mode-output');
+
+  function setVar(name,value){root.style.setProperty(name,value);}
+  function saveTheme(themeName){try{localStorage.setItem(STORAGE_KEY,themeName);}catch(err){}}
+  function loadTheme(){
+    try{
+      var saved=localStorage.getItem(STORAGE_KEY);
+      return THEMES[saved]?saved:DEFAULT_THEME;
+    }catch(err){
+      return DEFAULT_THEME;
+    }
+  }
+  function renderTokens(themeName,targetId){
+    var target=document.getElementById(targetId);
+    var tokens=THEMES[themeName].tokens;
+    target.innerHTML=TOKEN_ORDER.map(function(entry){
+      var key=entry[0];
+      var label=entry[1];
+      var value=tokens[key];
+      return '<div class="token-row"><span class="token-name">'+label+'</span><span class="swatch" style="--token-color:'+value+'"></span><span>'+value+'</span></div>';
+    }).join('');
+  }
+  function applyTheme(themeName){
+    var next=THEMES[themeName]?themeName:DEFAULT_THEME;
+    var tokens=THEMES[next].tokens;
+    root.setAttribute('data-theme',next);
+    setVar('--lodestar-canvas',tokens.canvas);
+    setVar('--lodestar-surface',tokens.surface);
+    setVar('--lodestar-surface-sunken',tokens.surfaceSunken);
+    setVar('--lodestar-ink',tokens.ink);
+    setVar('--lodestar-ink-soft',tokens.inkSoft);
+    setVar('--lodestar-ink-faint',tokens.inkFaint);
+    setVar('--lodestar-line',tokens.line);
+    setVar('--lodestar-line-strong',tokens.lineStrong);
+    setVar('--lodestar-accent',tokens.accent);
+    setVar('--lodestar-accent-strong',tokens.accentStrong);
+    setVar('--lodestar-on-accent',tokens.onAccent);
+    modeOutput.textContent=next;
+    document.querySelectorAll('[data-theme-choice]').forEach(function(button){
+      var active=button.dataset.themeChoice===next;
+      button.setAttribute('aria-pressed',active?'true':'false');
+      button.classList.toggle('primary',active);
+    });
+    document.querySelectorAll('.theme-toggle use').forEach(function(node){node.setAttribute('href',THEMES[next].icon);});
+    saveTheme(next);
+  }
+  function toggleTheme(){applyTheme(root.getAttribute('data-theme')==='dark-graphite'?'light':'dark-graphite');}
+  function setLabOpen(open){
+    body.classList.toggle('lab-open',open);
+    labToggle.setAttribute('aria-expanded',open?'true':'false');
+  }
+
+  renderTokens('dark-graphite','tokens-dark-graphite');
+  renderTokens('light','tokens-light');
+  applyTheme(loadTheme());
+
+  document.querySelectorAll('.theme-toggle').forEach(function(button){button.addEventListener('click',toggleTheme);});
+  document.querySelectorAll('[data-theme-choice]').forEach(function(button){button.addEventListener('click',function(){applyTheme(button.dataset.themeChoice);});});
+  document.querySelectorAll('.mode-button').forEach(function(button){
+    button.addEventListener('click',function(){
+      var panel=document.getElementById('mode-'+button.dataset.target);
+      if(panel)panel.scrollIntoView({block:'start',behavior:'smooth'});
+    });
+  });
+  document.querySelectorAll('.artifact-tabs').forEach(function(group){
+    group.addEventListener('click',function(event){
+      var button=event.target.closest('button[data-artifact]');
+      if(!button)return;
+      var app=button.closest('.app');
+      group.querySelectorAll('button').forEach(function(item){item.setAttribute('aria-pressed',item===button?'true':'false');});
+      app.querySelectorAll('.artifact-kind').forEach(function(kind){kind.classList.toggle('active',kind.dataset.kind===button.dataset.artifact);});
+    });
+  });
+  labToggle.addEventListener('click',function(){setLabOpen(!body.classList.contains('lab-open'));});
+  closeLab.addEventListener('click',function(){setLabOpen(false);labToggle.focus();});
+  document.addEventListener('keydown',function(event){
+    if(event.key==='Escape'&&body.classList.contains('lab-open')){setLabOpen(false);labToggle.focus();}
+    if(/input|textarea|select/i.test(event.target.tagName))return;
+    if(event.key==='t'||event.key==='T')toggleTheme();
+    if(event.key==='1')document.getElementById('mode-inspector').scrollIntoView({block:'start',behavior:'smooth'});
+    if(event.key==='2')document.getElementById('mode-compare').scrollIntoView({block:'start',behavior:'smooth'});
+    if(event.key==='3')document.getElementById('mode-ledger').scrollIntoView({block:'start',behavior:'smooth'});
+  });
 })();
 </script>
 </body>
