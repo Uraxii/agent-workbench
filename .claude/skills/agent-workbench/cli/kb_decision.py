@@ -429,12 +429,42 @@ def record(kb_home: Path, args: argparse.Namespace) -> dict[str, str]:
 def audit(decision_dirs: Sequence[Path], topic: str) -> list[Decision]:
     """The topic's full supersession chain, oldest decision first.
 
-    Postcondition: sorted ascending by ``decision_date``; an unknown
-    topic gives ``[]``.
+    Ordering walks the ``supersedes`` links instead of sorting on
+    ``decision_date``: recording a decision and correcting it same-day is
+    normal, so two notes can tie on date, and which one ``Path.glob``
+    happened to return first is unspecified -- a date sort (with or
+    without a filename tiebreak; ``"...-2.md"`` sorts before
+    ``"....md"``) can silently print the chain backwards.
+
+    The walk starts at the one note with an empty ``supersedes`` (the
+    topic's original -- nothing preceded it), then repeatedly follows
+    whichever note points its ``supersedes`` at the current one. Falls
+    back to a stable ``decision_date`` sort when that walk can't fully
+    account for every note found -- no single root, or a broken/dangling
+    link -- which should not happen but must degrade instead of raising.
+
+    Postcondition: an unknown topic gives ``[]``.
     """
-    return sorted(
-        find_notes_for_topic(decision_dirs, topic), key=lambda n: n.decision_date
-    )
+    notes = find_notes_for_topic(decision_dirs, topic)
+    if not notes:
+        return []
+    roots = [note for note in notes if not note.supersedes]
+    if len(roots) != 1:
+        return sorted(notes, key=lambda n: n.decision_date)
+
+    chain = [roots[0]]
+    seen = {str(roots[0].path)}
+    while (
+        next_note := next(
+            (n for n in notes if n.supersedes == str(chain[-1].path)), None
+        )
+    ) is not None and str(next_note.path) not in seen:
+        chain.append(next_note)
+        seen.add(str(next_note.path))
+
+    if len(chain) != len(notes):
+        return sorted(notes, key=lambda n: n.decision_date)
+    return chain
 
 
 # ── command handlers ──────────────────────────────────────────────────
@@ -453,7 +483,7 @@ def cmd_record(args: argparse.Namespace) -> int:
     # path to kb" rule (decision topic
     # agent-workbench-service-layer-boundary). Lifting this to a kb-serve
     # POST /decision endpoint belongs to the service-layer epic
-    # (agent-workbench-qx7), not here.
+    # (agent-workbench-vno), not here.
     """
     kb_home = resolve_kb_home(args.kb_home)
     result = record(kb_home, args)

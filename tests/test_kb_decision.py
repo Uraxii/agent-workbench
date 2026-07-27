@@ -1,0 +1,252 @@
+"""Tests for .claude/skills/agent-workbench/cli/kb_decision.py -- dated,
+auditable decision notes recorded/audited by `kb decision record|audit`.
+
+Mirrors tests/test_kb_serve.py and tests/test_agent_workbench_cli.py's
+own style: everything runs against tmp_path vaults, never the real
+~/.knowledgebase, and the CLI package is loaded the same way
+test_agent_workbench_cli.py loads it (sys.path insert, then a normal
+`from cli import ...` import).
+
+Covers the skeptic-gate fold-in fixes:
+* Bug 2 -- audit() orders a topic's chain by walking the `supersedes`
+  links, not by sorting on `decision_date` (same-day record+supersede
+  is normal and ties under a date-only sort).
+* render_decision/load_decision's LOCKED byte shape.
+* The supersede flip on `record()`.
+* build_note_path's same-day collision suffix.
+* resolve_supersedes_path never crossing project boundaries.
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+
+_AGENT_WORKBENCH_DIR = Path(__file__).resolve().parent.parent / ".claude" / "skills" / "agent-workbench"
+if str(_AGENT_WORKBENCH_DIR) not in sys.path:
+    sys.path.insert(0, str(_AGENT_WORKBENCH_DIR))
+
+from cli import kb_decision  # noqa: E402
+
+
+def _record_args(
+    *,
+    project: str,
+    topic: str,
+    title: str,
+    text: str,
+    rationale: str = "",
+    refs: str = "",
+    tags: str = "",
+    supersedes: str | None = None,
+) -> SimpleNamespace:
+    """A `decision record` args namespace, shaped like argparse's own."""
+    return SimpleNamespace(
+        project=project, topic=topic, title=title, text=text,
+        rationale=rationale, refs=refs, tags=tags, supersedes=supersedes,
+    )
+
+
+# ── render_decision / load_decision: LOCKED byte shape + round trip ──────
+
+
+def test_render_decision_matches_locked_byte_shape() -> None:
+    decision = kb_decision.Decision(
+        path=Path("unused.md"),
+        title="My Title",
+        topic="my-topic",
+        decision_date="2026-07-27",
+        status="active",
+        supersedes="",
+        tags=["a", "b"],
+        body="Body text.",
+    )
+    assert kb_decision.render_decision(decision) == (
+        "---\n"
+        "title: My Title\n"
+        "topic: my-topic\n"
+        "date: 2026-07-27\n"
+        "status: active\n"
+        "supersedes: \n"  # trailing space after an empty supersedes: LOCKED
+        "tags: [a, b]\n"
+        "---\n\n"
+        "Body text.\n"
+    )
+
+
+def test_render_decision_load_decision_round_trip(tmp_path: Path) -> None:
+    decision = kb_decision.Decision(
+        path=tmp_path / "note.md",
+        title="[H3] a title that looks bracketed",
+        topic="my-topic",
+        decision_date="2026-07-27",
+        status="superseded",
+        supersedes=str(tmp_path / "prior.md"),
+        tags=["alpha", "beta"],
+        body="Some body text.\n\n## Rationale\n\nBecause reasons.",
+    )
+    decision.path.write_text(kb_decision.render_decision(decision), encoding="utf-8")
+
+    loaded = kb_decision.load_decision(decision.path)
+
+    assert loaded == decision
+
+
+# ── record(): the supersede flip ─────────────────────────────────────────
+
+
+def test_record_second_decision_supersedes_the_prior_note(tmp_path: Path) -> None:
+    first = kb_decision.record(tmp_path, _record_args(
+        project="proj", topic="my-topic", title="First", text="first text",
+    ))
+    second = kb_decision.record(tmp_path, _record_args(
+        project="proj", topic="my-topic", title="Second", text="second text",
+    ))
+
+    prior_path = Path(first["path"])
+    prior = kb_decision.load_decision(prior_path)
+    assert prior.status == kb_decision.SUPERSEDED
+
+    new_note = kb_decision.load_decision(Path(second["path"]))
+    assert new_note.status == kb_decision.ACTIVE
+    assert new_note.supersedes == str(prior_path)
+    assert second["supersedes"] == str(prior_path)
+
+
+# ── build_note_path: same-day collision suffix ───────────────────────────
+
+
+def test_build_note_path_suffixes_on_same_day_collision(tmp_path: Path) -> None:
+    today = "2026-07-27"
+
+    first = kb_decision.build_note_path(tmp_path, "topic-x", today)
+    assert first == tmp_path / "topic-x__2026-07-27.md"
+    first.write_text("x", encoding="utf-8")
+
+    second = kb_decision.build_note_path(tmp_path, "topic-x", today)
+    assert second == tmp_path / "topic-x__2026-07-27-2.md"
+    second.write_text("x", encoding="utf-8")
+
+    third = kb_decision.build_note_path(tmp_path, "topic-x", today)
+    assert third == tmp_path / "topic-x__2026-07-27-3.md"
+
+
+# ── resolve_supersedes_path: never crosses project boundaries ───────────
+
+
+def test_resolve_supersedes_path_ignores_another_projects_same_named_topic(
+    tmp_path: Path,
+) -> None:
+    dir_a = tmp_path / "proj-a" / "decisions"
+    dir_b = tmp_path / "proj-b" / "decisions"
+    dir_a.mkdir(parents=True)
+    dir_b.mkdir(parents=True)
+
+    kb_decision.record(tmp_path, _record_args(
+        project="proj-a", topic="shared-topic", title="A1", text="a1 text",
+    ))
+
+    # Project B has no note at all for this topic yet; scoping the lookup
+    # to dir_b alone must find nothing, even though project A's note for
+    # the identical topic string exists right next door.
+    supersedes_in_b = kb_decision.resolve_supersedes_path(None, [dir_b], "shared-topic")
+    assert supersedes_in_b is None
+
+    supersedes_in_a = kb_decision.resolve_supersedes_path(None, [dir_a], "shared-topic")
+    assert supersedes_in_a is not None
+    assert supersedes_in_a.parent == dir_a
+
+
+def test_record_in_one_project_never_touches_another_projects_note(
+    tmp_path: Path,
+) -> None:
+    kb_decision.record(tmp_path, _record_args(
+        project="proj-a", topic="shared-topic", title="A1", text="a1 text",
+    ))
+    kb_decision.record(tmp_path, _record_args(
+        project="proj-b", topic="shared-topic", title="B1", text="b1 text",
+    ))
+
+    a_note = kb_decision.load_decision(
+        next(kb_decision.decisions_dir(tmp_path, "proj-a").glob("*.md"))
+    )
+    b_note = kb_decision.load_decision(
+        next(kb_decision.decisions_dir(tmp_path, "proj-b").glob("*.md"))
+    )
+    # Recording project B's decision must not flip project A's note,
+    # despite the identical topic key.
+    assert a_note.status == kb_decision.ACTIVE
+    assert b_note.status == kb_decision.ACTIVE
+
+
+# ── audit(): supersedes-chain ordering fix (Bug 2) ───────────────────────
+
+
+def test_audit_single_note_topic_returns_that_note(tmp_path: Path) -> None:
+    kb_decision.record(tmp_path, _record_args(
+        project="proj", topic="solo-topic", title="Solo", text="solo text",
+    ))
+    decision_dir = kb_decision.decisions_dir(tmp_path, "proj")
+
+    chain = kb_decision.audit([decision_dir], "solo-topic")
+
+    assert [n.title for n in chain] == ["Solo"]
+
+
+def test_audit_orders_same_day_chain_oldest_first_despite_reversed_glob_order(
+    tmp_path: Path,
+) -> None:
+    """Base + same-day supersede is the normal case this fix targets: both
+    notes share a decision_date, so a naive date sort ties and falls back
+    to whatever order Path.glob happens to return -- not guaranteed
+    chronological. Patching find_notes_for_topic to hand audit() the
+    notes in the wrong (newest-first) order proves the ordering comes
+    from walking the supersedes chain, not from the input order or any
+    filename tiebreak."""
+    kb_decision.record(tmp_path, _record_args(
+        project="proj", topic="same-day-topic", title="Base", text="base text",
+    ))
+    kb_decision.record(tmp_path, _record_args(
+        project="proj", topic="same-day-topic", title="Supersede", text="new text",
+    ))
+    decision_dir = kb_decision.decisions_dir(tmp_path, "proj")
+    notes = kb_decision.find_notes_for_topic([decision_dir], "same-day-topic")
+    assert len(notes) == 2
+    assert notes[0].decision_date == notes[1].decision_date  # genuinely same-day
+
+    wrong_order = sorted(notes, key=lambda n: n.status != kb_decision.ACTIVE)  # active/newest first
+
+    with patch.object(kb_decision, "find_notes_for_topic", return_value=wrong_order):
+        chain = kb_decision.audit([decision_dir], "same-day-topic")
+
+    assert [n.title for n in chain] == ["Base", "Supersede"]
+    assert chain[0].status == kb_decision.SUPERSEDED
+    assert chain[1].status == kb_decision.ACTIVE
+
+
+def test_audit_falls_back_to_date_sort_when_no_unreferenced_root(
+    tmp_path: Path,
+) -> None:
+    """Not-yet-possible-but-be-safe case: corrupted data where every note
+    claims to supersede another (no root to start the walk from). Must
+    degrade to a stable decision_date sort, never raise."""
+    decision_dir = tmp_path / "decisions"
+    decision_dir.mkdir()
+    note_a = kb_decision.Decision(
+        path=decision_dir / "a.md", title="A", topic="corrupt-topic",
+        decision_date="2026-07-01", status=kb_decision.SUPERSEDED,
+        supersedes=str(decision_dir / "b.md"), tags=[], body="a",
+    )
+    note_b = kb_decision.Decision(
+        path=decision_dir / "b.md", title="B", topic="corrupt-topic",
+        decision_date="2026-07-02", status=kb_decision.ACTIVE,
+        supersedes=str(decision_dir / "a.md"), tags=[], body="b",
+    )
+    note_a.path.write_text(kb_decision.render_decision(note_a), encoding="utf-8")
+    note_b.path.write_text(kb_decision.render_decision(note_b), encoding="utf-8")
+
+    chain = kb_decision.audit([decision_dir], "corrupt-topic")
+
+    assert [n.title for n in chain] == ["A", "B"]  # ascending decision_date fallback

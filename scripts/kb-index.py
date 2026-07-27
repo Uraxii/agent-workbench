@@ -101,7 +101,7 @@ def parse_frontmatter(text: str) -> tuple[dict[str, str | list[str]], str]:
             continue
         key, _, value = line.partition(":")
         key, value = key.strip(), value.strip()
-        fields[key] = parse_tag_list(value) if value.startswith("[") else unquote(value)
+        fields[key] = parse_tag_list(value) if key == "tags" else unquote(value)
     return fields, body.strip()
 
 
@@ -146,25 +146,39 @@ def find_markdown_files(kb_home: Path) -> list[Path]:
 
 
 def build_index(kb_home: Path, db_path: Path) -> int:
-    """Rebuild kb.db from scratch (drop + recreate is trivially idempotent)."""
-    notes = [load_note(path, kb_home) for path in find_markdown_files(kb_home)]
+    """Rebuild kb.db from scratch (drop + recreate is trivially idempotent).
+
+    One note failing to load or insert is a skip-and-warn, never an
+    abort: DROP/CREATE VIRTUAL TABLE auto-commit ahead of the loop below,
+    so raising mid-rebuild would leave kb.db holding the freshly dropped,
+    now permanently empty table instead of the notes indexed so far.
+    """
+    paths = find_markdown_files(kb_home)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(db_path)
+    indexed = 0
     with con:
         con.execute("DROP TABLE IF EXISTS kb")
         con.execute(
             "CREATE VIRTUAL TABLE kb USING fts5("
             "path, project, type, title, source, date, status, tags, body)"
         )
-        con.executemany(
-            "INSERT INTO kb (path, project, type, title, source, date, "
-            "status, tags, body) VALUES (:path, :project, :type, :title, "
-            ":source, :date, :status, :tags, :body)",
-            [vars(note) for note in notes],
-        )
+        for path in paths:
+            try:
+                note = load_note(path, kb_home)
+                con.execute(
+                    "INSERT INTO kb (path, project, type, title, source, date, "
+                    "status, tags, body) VALUES (:path, :project, :type, :title, "
+                    ":source, :date, :status, :tags, :body)",
+                    vars(note),
+                )
+            except (OSError, UnicodeDecodeError, sqlite3.Error) as exc:
+                print(f"kb-index: skipping unindexable note {path}: {exc}", file=sys.stderr)
+                continue
+            indexed += 1
     con.close()
-    print(json.dumps({"indexed": len(notes), "db": str(db_path)}))
-    return len(notes)
+    print(json.dumps({"indexed": indexed, "db": str(db_path)}))
+    return indexed
 
 
 def day_ordinal(date_str: str) -> int:
