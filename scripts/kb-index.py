@@ -136,12 +136,33 @@ def load_note(path: Path, kb_home: Path) -> NoteRow:
 
 
 def find_markdown_files(kb_home: Path) -> list[Path]:
-    """All notes across every project dir, skipping the vault's own dirs."""
+    """All notes across every project dir, skipping the vault's own dirs.
+
+    Anything that resolves outside KB_HOME is skipped and reported: a
+    symlinked project dir (or a symlinked note inside one) would
+    otherwise pull outside files into the index and into the set of notes
+    the enrichment pass rewrites. This is the one place every vault-wide
+    scan goes through, so the check belongs here rather than at each
+    caller.
+    """
+    root = kb_home.resolve()
+
+    def inside_vault(path: Path) -> bool:
+        if path.resolve().is_relative_to(root):
+            return True
+        print(
+            f"kb-index: skipping {path}, it resolves outside {root}",
+            file=sys.stderr,
+        )
+        return False
+
     files: list[Path] = []
     for project_dir in sorted(kb_home.iterdir()):
         if not project_dir.is_dir() or project_dir.name in {"index", ".obsidian"}:
             continue
-        files.extend(project_dir.rglob("*.md"))
+        if not inside_vault(project_dir):
+            continue
+        files.extend(path for path in project_dir.rglob("*.md") if inside_vault(path))
     return files
 
 
