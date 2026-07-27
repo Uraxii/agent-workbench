@@ -32,6 +32,11 @@ def _load_kb_clip():
     return module
 
 
+# scripts/kb-clip.py imports lxml, which lives in the kb-serve image, not on
+# the host -- the host CLI is stdlib-only by design. Skip rather than fail
+# collection so a fresh clone can run the suite with no pip install.
+pytest.importorskip("lxml", reason="lxml ships in the kb-serve image, not on the host")
+
 kb_clip = _load_kb_clip()
 
 
