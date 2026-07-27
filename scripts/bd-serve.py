@@ -16,6 +16,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 __all__ = [
+    "SECURITY_HEADERS",
     "BdRequestHandler",
     "ValidationError",
     "board_exists",
@@ -37,6 +38,24 @@ MAX_BODY_BYTES = 1_000_000
 # Host header values a legitimate local client sends. Anything else means the
 # request arrived via a hostname that resolved here -- the DNS-rebinding shape.
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+# Every response, including errors. This service returns only JSON, so its
+# CSP can forbid literally every fetch: nothing here is ever a document.
+# These constants are the workbench-wide baseline every non-artifact service
+# sends and enforces; keep them identical across services.
+SECURITY_HEADERS = {
+    "Content-Security-Policy":
+        "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; "
+        "form-action 'none'; sandbox",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Cross-Origin-Resource-Policy": "same-origin",
+    "Cross-Origin-Embedder-Policy": "require-corp",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+    "Cache-Control": "no-store",
+}
 
 AGGREGATOR_NAME = "hub"
 AGGREGATOR_PREFIX = "hub"
@@ -442,10 +461,21 @@ class BdRequestHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args: object) -> None:
         log.info("%s - %s", self.address_string(), fmt % args)
 
+    def end_headers(self) -> None:
+        """Stamp the security baseline onto EVERY response.
+
+        Here rather than in _send_json so that the stdlib's own
+        send_error() replies (405/501 for methods this handler does not
+        implement) carry the headers too.
+        """
+        for name, value in SECURITY_HEADERS.items():
+            self.send_header(name, value)
+        super().end_headers()
+
     def _send_json(self, status: int, payload: dict[str, object]) -> None:
         body = json.dumps(payload).encode("utf-8")
         self.send_response(status)
-        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)

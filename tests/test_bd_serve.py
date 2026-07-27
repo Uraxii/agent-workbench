@@ -294,6 +294,46 @@ def test_live_health_reports_hub_root(live_service: tuple[str, Path, Path]) -> N
     assert body == {"status": "ok", "hub_root": str(hub), "initialized": False}
 
 
+def test_live_every_response_carries_the_security_header_baseline(
+    live_service: tuple[str, Path, Path],
+) -> None:
+    base_url, _hub, _argv_path = live_service
+    with urllib.request.urlopen(f"{base_url}/health", timeout=10) as response:
+        headers = dict(response.headers)
+    for name, value in bd_serve.SECURITY_HEADERS.items():
+        assert headers[name] == value
+    assert headers["Content-Type"] == "application/json; charset=utf-8"
+
+
+def test_live_error_response_also_carries_the_security_headers(
+    live_service: tuple[str, Path, Path],
+) -> None:
+    base_url, _hub, _argv_path = live_service
+    try:
+        urllib.request.urlopen(f"{base_url}/no-such-route", timeout=10)
+        raise AssertionError("expected HTTP 404")
+    except urllib.error.HTTPError as exc:
+        assert exc.code == 404
+        assert exc.headers["X-Content-Type-Options"] == "nosniff"
+
+
+def test_live_unimplemented_method_reply_also_carries_the_security_headers(
+    live_service: tuple[str, Path, Path],
+) -> None:
+    """OPTIONS is answered by the stdlib's own send_error(), not by
+    _send_json, so the headers have to be stamped in end_headers()."""
+    base_url, _hub, _argv_path = live_service
+    request = urllib.request.Request(f"{base_url}/health", method="OPTIONS")
+    try:
+        urllib.request.urlopen(request, timeout=10)
+        raise AssertionError("expected an error status")
+    except urllib.error.HTTPError as exc:
+        assert exc.code == 501
+        assert exc.headers["Content-Security-Policy"] == \
+            bd_serve.SECURITY_HEADERS["Content-Security-Policy"]
+        assert "Access-Control-Allow-Origin" not in exc.headers
+
+
 def test_live_hostile_id_rejected_over_the_wire(
     live_service: tuple[str, Path, Path],
 ) -> None:
