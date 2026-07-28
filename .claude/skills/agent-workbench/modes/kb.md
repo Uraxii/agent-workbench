@@ -30,8 +30,11 @@ $AW scratch kb -- $AW kb status
 ```
 
 Same response shape as a live `kb status`, except `kb_home` points at the
-scratch dir instead of the real vault. See `SKILL.md` for the full
-`scratch` contract (any `kb` verb works the same way inside it).
+scratch dir instead of the real vault. `scratch kb` isolates ONLY kb-svc:
+a `bd`/`artifact` call made inside the wrapped command still fails loudly
+(sentinel `.invalid` host), never reaches the live stack. See `SKILL.md`
+for the full `scratch` contract (any `kb` verb works the same way inside
+it, and nesting `scratch kb -- scratch bd -- ...` covers two services).
 
 When a request makes at least one model call, the response includes a `usage`
 key with `calls` (HTTP calls made), token counts (summed across calls),

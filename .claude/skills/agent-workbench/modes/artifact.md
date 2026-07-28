@@ -41,8 +41,12 @@ $AW scratch artifact -- $AW artifact status
 
 Same response shape as a live `artifact status`, except `artifacts` is
 empty (the scratch store is brand new) and `endpoint` points at the
-scratch port. See `SKILL.md` for the full `scratch` contract (any
-`artifact` verb, including `publish`, works the same way inside it).
+scratch port. `scratch artifact` isolates ONLY artifact-svc: a `kb`/`bd`
+call made inside the wrapped command still fails loudly (sentinel
+`.invalid` host), never reaches the live stack. See `SKILL.md` for the
+full `scratch` contract (any `artifact` verb, including `publish`, works
+the same way inside it, and nesting `scratch kb -- scratch bd -- ...`
+covers two services).
 
 ## Publish
 

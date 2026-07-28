@@ -52,8 +52,20 @@ temp data dir on a random free host port, exports the same
 clients already read so `<command...>` transparently talks to the scratch
 instance, runs it, and tears the container + temp dir down in a `finally`
 -- self-cleaning even on failure or Ctrl-C. Exit code is the command's
-exit code. There is no separate up/down mode: chain multi-step probes
-inside the single wrapped command, e.g. `-- bash -c 'first && second'`.
+exit code. There is no separate up/down mode.
+
+**`scratch` isolates only the ONE service named at invocation.** The
+other two services are pointed at a `.invalid` sentinel host, so a call
+to them fails immediately with a DNS error naming the cause (e.g.
+`bd-svc-not-started-by-this-scratch-run.invalid`) instead of silently
+reaching the live stack. Do NOT chain a call to a different service
+inside the wrapped command (`scratch bd -- ... && $AW kb ...` will fail
+loudly, by design). To verify two services at once, nest `scratch` calls
+-- the outer service stays live inside the inner one:
+
+```bash
+$AW scratch kb -- $AW scratch bd -- $AW kb status
+```
 
 Requires a repo checkout (it reuses `docker-compose.yml` +
 `docker-compose.scratch.yml` at the repo root) and `podman-compose` on

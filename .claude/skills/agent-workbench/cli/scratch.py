@@ -157,6 +157,10 @@ def _wait_healthy(port: int, spec: ServiceSpec) -> None:
 
 
 def _host_port(base: Path, override: Path, project: str, spec: ServiceSpec) -> int:
+    # ponytail: parses the whole captured stdout via rsplit(":", 1) instead
+    # of its last non-empty line; podman-compose chatter on `port` would
+    # break this. Fails loudly (int() raises), no live-data risk -- switch
+    # to last-line parsing if that chatter ever actually appears.
     result = subprocess.run(
         [
             "podman-compose", "-p", project, "-f", str(base), "-f", str(override),
@@ -192,11 +196,35 @@ def _bring_up(
     return port
 
 
-def _scratch_env(spec: ServiceSpec, port: int) -> dict[str, str]:
+ACTIVE_ENV = "AW_SCRATCH_ACTIVE"
+
+
+def _sentinel_host(spec: ServiceSpec) -> str:
+    """RFC-2606 `.invalid` host naming the cause in the DNS error itself."""
+    return f"{spec.compose_name}-not-started-by-this-scratch-run.invalid"
+
+
+def _scratch_env(spec: ServiceSpec, port: int, service: str) -> dict[str, str]:
+    """Env for the wrapped command.
+
+    The target service gets the scratch port. The other two get a
+    `.invalid` sentinel host so a cross-service call fails immediately
+    instead of silently reaching the live stack -- UNLESS an enclosing
+    `scratch` run already redirected them (tracked via ``AW_SCRATCH_ACTIVE``,
+    comma-joined service names), which lets nested
+    ``scratch kb -- scratch bd -- ...`` runs cover two services at once.
+    """
     env = os.environ.copy()
+    active = set(filter(None, env.get(ACTIVE_ENV, "").split(",")))
+    for name, other in SERVICES.items():
+        if name == service or name in active:
+            continue
+        env[other.host_env] = _sentinel_host(other)
     env[spec.host_env] = "127.0.0.1"
     env[spec.port_env] = str(port)
     env.pop("ARTIFACT_SVC_URL", None)  # would otherwise outrank host/port
+    active.add(service)
+    env[ACTIVE_ENV] = ",".join(sorted(active))
     return env
 
 
@@ -225,12 +253,18 @@ def cmd_scratch(args: argparse.Namespace) -> int:
         "podman-compose", "-p", project, "-f", str(base), "-f", str(override),
         "down", "-v", "-t", str(DOWN_TIMEOUT_SEC), spec.compose_name,
     ]
+    # ponytail: only SIGINT unwinds this `finally`; SIGTERM/SIGKILL bypass
+    # it, leaking the container + tmpdir. Add a signal handler if scratch
+    # ever runs somewhere it gets killed rather than Ctrl-C'd.
     try:
         port = _bring_up(base, override, project, spec)
-        env = _scratch_env(spec, port)
+        env = _scratch_env(spec, port, args.service)
         result = subprocess.run(command, env=env, check=False)
         return result.returncode
     finally:
+        # ponytail: check=False swallows a failed `down`, leaking the
+        # container with no signal; upgrade to check the returncode and
+        # warn on stderr if this ever bites in practice.
         # Same stdout=sys.stderr reasoning as `up` in _bring_up above.
         subprocess.run(down_cmd, stdout=sys.stderr, check=False)
         shutil.rmtree(scratch_dir, ignore_errors=True)

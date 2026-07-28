@@ -10,6 +10,10 @@ silently falling back to the live stack, is covered here:
 - a repo root with no docker-compose.yml (e.g. a copy-installed skill)
   raises, naming the missing files, instead of defaulting to live ports
 - a scratch invocation with no wrapped command raises instead of no-op'ing
+- the two non-target services are pointed at a `.invalid` sentinel host,
+  never the live defaults
+- a service already redirected by an enclosing `scratch` run (nesting) is
+  left alone rather than re-sentineled
 """
 from __future__ import annotations
 
@@ -99,3 +103,40 @@ def test_podman_compose_chatter_stays_off_stdout(
     wrapped_cmd, wrapped_kwargs = calls[-2]  # up, port, [wrapped], down
     assert wrapped_cmd == ["echo", "hi"]
     assert "stdout" not in wrapped_kwargs
+
+
+def test_non_target_services_get_sentinel_host(monkeypatch) -> None:
+    """`scratch kb` must not leave BD_SVC_HOST/ARTIFACT_SVC_HOST at their
+    live defaults -- a chained call to either must fail loudly, never
+    silently reach the real service.
+    """
+    monkeypatch.delenv(scratch.ACTIVE_ENV, raising=False)
+    env = scratch._scratch_env(scratch.SERVICES["kb"], 12345, "kb")
+
+    assert env["KB_SVC_HOST"] == "127.0.0.1"
+    assert env["KB_SVC_PORT"] == "12345"
+    assert env["BD_SVC_HOST"] == "bd-svc-not-started-by-this-scratch-run.invalid"
+    assert env["ARTIFACT_SVC_HOST"] == (
+        "artifact-svc-not-started-by-this-scratch-run.invalid"
+    )
+    assert env[scratch.ACTIVE_ENV] == "kb"
+
+
+def test_nested_scratch_leaves_outer_service_alone(monkeypatch) -> None:
+    """`scratch kb -- scratch bd -- ...`: the inner `scratch bd` must not
+    overwrite the outer run's live KB_SVC_HOST/PORT with the sentinel.
+    """
+    monkeypatch.setenv("KB_SVC_HOST", "127.0.0.1")
+    monkeypatch.setenv("KB_SVC_PORT", "55555")
+    monkeypatch.setenv(scratch.ACTIVE_ENV, "kb")
+
+    env = scratch._scratch_env(scratch.SERVICES["bd"], 12345, "bd")
+
+    assert env["KB_SVC_HOST"] == "127.0.0.1"
+    assert env["KB_SVC_PORT"] == "55555"
+    assert env["BD_SVC_HOST"] == "127.0.0.1"
+    assert env["BD_SVC_PORT"] == "12345"
+    assert env["ARTIFACT_SVC_HOST"] == (
+        "artifact-svc-not-started-by-this-scratch-run.invalid"
+    )
+    assert env[scratch.ACTIVE_ENV] == "bd,kb"
