@@ -1,26 +1,22 @@
 """Repo-root, sibling-script and vault path resolution for the CLI.
 
-The skill lives at ``<repo>/.claude/skills/agent-workbench/``. Ported
-subcommands need to locate scripts elsewhere in the repo, e.g. the `kb`
-port's siblings under ``<repo>/scripts/``. Centralizing that math here
-keeps it out of the individual subcommand modules.
+The skill lives at ``<repo>/.claude/skills/agent-workbench/``. Some
+subcommands need to locate files elsewhere in the repo, e.g.
+`init-workspace` runs scripts out of ``<repo>/scripts/``. Centralizing
+that math here keeps it out of the individual subcommand modules.
 
-``resolve_kb_home`` lives here for the same reason: both `cli.kb` and
-`cli.kb_decision` need the vault root, and `cli.kb` already imports
-`cli.kb_decision` to register its `decision` verb, so a shared home here
-is what keeps those two from importing each other in a cycle. `cli.kb`
-re-exports it, so ``kb.resolve_kb_home`` still resolves.
+The vault root deliberately does NOT live here. The knowledgebase
+service resolves ``$KB_HOME`` itself and is the only thing that opens it;
+`cli.kb` is an HTTP client that never needs a vault path.
 """
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 __all__ = [
     "REPO_ROOT",
     "SCRIPTS_DIR",
     "repo_root",
-    "resolve_kb_home",
 ]
 
 # This module sits at <repo>/.claude/skills/agent-workbench/cli/paths.py, so
@@ -35,16 +31,3 @@ def repo_root() -> Path:
     Postcondition: the returned path contains a ``scripts/`` directory.
     """
     return REPO_ROOT
-
-
-def resolve_kb_home(explicit: str | None) -> Path:
-    """Resolve KB_HOME: explicit arg, else $KB_HOME, else ~/.knowledgebase.
-
-    Same precedence kb-index.py and kb-clip.py apply, so the CLI and the
-    scripts it delegates to can never disagree about which vault they are
-    talking about.
-    """
-    if explicit:
-        return Path(explicit)
-    env = os.environ.get("KB_HOME")
-    return Path(env) if env else Path.home() / ".knowledgebase"

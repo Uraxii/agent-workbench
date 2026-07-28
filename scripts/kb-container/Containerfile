@@ -7,6 +7,7 @@ RUN pip install --no-cache-dir lxml readability-lxml
 
 WORKDIR /app
 COPY kb-serve.py kb-atomize.py kb-index.py kb-clip.py ./
+COPY kb_config.py kb_vault.py kb_decision.py kb_embed.py kb_llm.py ./
 
 EXPOSE 9100
 

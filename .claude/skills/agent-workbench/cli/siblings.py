@@ -1,14 +1,14 @@
 """Load hyphenated sibling scripts as importable modules.
 
-The `kb` subcommand is a thin facade over the existing, proven
-``scripts/kb-serve.py`` (which itself facades kb-index.py / kb-clip.py /
-kb-atomize.py). Those files have hyphenated names a normal ``import`` cannot
-address, so this reuses kb-serve.py's own proven load-by-path pattern
-(importlib.util.spec_from_file_location, register in sys.modules BEFORE
-exec so dataclass annotation resolution works). This is deliberate reuse,
-not a rewrite: the deterministic clip/put/query/atomize logic and the
-http/https scheme allowlist (kb-clip.check_url_scheme) are inherited
-verbatim, never reimplemented here.
+Some repo scripts have hyphenated filenames a normal ``import``
+statement cannot address, so this loads them by path
+(importlib.util.spec_from_file_location, registered in sys.modules BEFORE
+exec so dataclass annotation resolution works).
+
+Note what is NOT here: the `kb` subcommand does not load kb-serve.py, and
+the `artifact` subcommand does not load an artifact server. Each service
+owns its own data and the CLI reaches it over HTTP, so an in-process
+loader would be a second way into the same files.
 """
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from pathlib import Path
 
 from cli.paths import SCRIPTS_DIR
 
-__all__ = ["load_script", "load_module_at", "load_kb_serve"]
+__all__ = ["load_script", "load_module_at"]
 
 
 def load_module_at(path: Path, module_name: str) -> types.ModuleType:
@@ -46,29 +46,18 @@ def load_script(name: str) -> types.ModuleType:
     """Import ``<repo>/scripts/<name>.py`` as a module by path.
 
     Args:
-        name: hyphenated script stem, e.g. ``"kb-serve"``.
+        name: hyphenated script stem, e.g. ``"kb-index"``.
 
     Returns:
         The executed module object.
 
     Preconditions: ``<repo>/scripts/<name>.py`` exists.
     """
-    # A handful of siblings (e.g. build-kb-index.py -> kb_embeddings)
-    # import a same-dir module by its plain underscored name, which only
-    # resolves if SCRIPTS_DIR is on sys.path. Adding it once here keeps
-    # that working without every sibling needing its own path shim.
+    # A handful of siblings import a same-dir module by its plain
+    # underscored name, which only resolves if SCRIPTS_DIR is on
+    # sys.path. Adding it once here keeps that working without every
+    # sibling needing its own path shim.
     scripts_dir = str(SCRIPTS_DIR)
     if scripts_dir not in sys.path:
         sys.path.insert(0, scripts_dir)
     return load_module_at(SCRIPTS_DIR / f"{name}.py", name.replace("-", "_"))
-
-
-def load_kb_serve() -> types.ModuleType:
-    """Load ``scripts/kb-serve.py`` (the in-process fallback target).
-
-    Returns:
-        The kb-serve module, exposing kb_put / kb_clip_and_atomize /
-        run_query / resolve_kb_home-backed helpers the `kb` port calls
-        when the HTTP service is down.
-    """
-    return load_script("kb-serve")

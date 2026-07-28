@@ -143,3 +143,26 @@ def test_build_index_full_rebuild_indexes_every_good_note(tmp_path: Path) -> Non
     indexed = kb_index.build_index(tmp_path, tmp_path / "index" / "kb.db")
 
     assert indexed == 2
+
+
+def test_find_markdown_files_skips_anything_resolving_outside_the_vault(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A symlinked project dir (or note) would otherwise pull outside
+    files into the index and into the set of notes /enrich rewrites."""
+    vault = tmp_path / "vault"
+    (vault / "proj" / "notes").mkdir(parents=True)
+    (vault / "proj" / "notes" / "real.md").write_text("real", encoding="utf-8")
+
+    outside = tmp_path / "outside"
+    (outside / "notes").mkdir(parents=True)
+    (outside / "notes" / "secret.md").write_text("secret", encoding="utf-8")
+    (vault / "escaped").symlink_to(outside)
+    (vault / "proj" / "notes" / "link.md").symlink_to(outside / "notes" / "secret.md")
+
+    found = kb_index.find_markdown_files(vault)
+
+    assert found == [vault / "proj" / "notes" / "real.md"]
+    warning = capsys.readouterr().err
+    assert "escaped" in warning
+    assert "link.md" in warning

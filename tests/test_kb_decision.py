@@ -1,11 +1,10 @@
-"""Tests for .claude/skills/agent-workbench/cli/kb_decision.py -- dated,
-auditable decision notes recorded/audited by `kb decision record|audit`.
+"""Tests for scripts/kb_decision.py -- dated, auditable decision notes,
+recorded and audited by the knowledgebase service behind
+`kb decision record|audit`.
 
-Mirrors tests/test_kb_serve.py and tests/test_agent_workbench_cli.py's
-own style: everything runs against tmp_path vaults, never the real
-~/.knowledgebase, and the CLI package is loaded the same way
-test_agent_workbench_cli.py loads it (sys.path insert, then a normal
-`from cli import ...` import).
+Mirrors tests/test_kb_serve.py's own style: everything runs against
+tmp_path vaults, never the real ~/.knowledgebase, and the service
+modules are imported with scripts/ on sys.path.
 
 Covers the skeptic-gate fold-in fixes:
 * Bug 2 -- audit() orders a topic's chain by walking the `supersedes`
@@ -31,11 +30,11 @@ from unittest.mock import patch
 
 import pytest
 
-_AGENT_WORKBENCH_DIR = Path(__file__).resolve().parent.parent / ".claude" / "skills" / "agent-workbench"
-if str(_AGENT_WORKBENCH_DIR) not in sys.path:
-    sys.path.insert(0, str(_AGENT_WORKBENCH_DIR))
+_SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
 
-from cli import kb_decision  # noqa: E402
+import kb_decision  # noqa: E402
 
 
 def _record_args(
@@ -48,12 +47,13 @@ def _record_args(
     refs: str = "",
     tags: str = "",
     supersedes: str | None = None,
-) -> SimpleNamespace:
-    """A `decision record` args namespace, shaped like argparse's own."""
-    return SimpleNamespace(
-        project=project, topic=topic, title=title, text=text,
-        rationale=rationale, refs=refs, tags=tags, supersedes=supersedes,
-    )
+) -> dict[str, object]:
+    """A `POST /decision` payload, shaped like the endpoint's own."""
+    return {
+        "project": project, "topic": topic, "title": title, "text": text,
+        "rationale": rationale, "refs": refs, "tags": tags,
+        "supersedes": supersedes,
+    }
 
 
 # ── render_decision / load_decision: LOCKED byte shape + round trip ──────
@@ -305,12 +305,12 @@ def test_audit_chain_walk_matches_supersedes_through_an_aliased_path(
 
 
 def test_audit_falls_back_and_warns_on_dangling_supersedes_link(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A `supersedes` string that resolves to no real note (corrupt data,
     or a note copied in from elsewhere without its target) must still
     degrade to the date-sort fallback rather than raise -- and, unlike
-    the pre-fix behaviour, must say so on stderr instead of silently
+    the pre-fix behaviour, must say so in the log instead of silently
     handing back an order that might be wrong."""
     decision_dir = tmp_path / "decisions"
     decision_dir.mkdir()
@@ -327,10 +327,11 @@ def test_audit_falls_back_and_warns_on_dangling_supersedes_link(
     note_a.path.write_text(kb_decision.render_decision(note_a), encoding="utf-8")
     note_b.path.write_text(kb_decision.render_decision(note_b), encoding="utf-8")
 
-    chain = kb_decision.audit([decision_dir], "dangling-topic")
+    with caplog.at_level("WARNING"):
+        chain = kb_decision.audit([decision_dir], "dangling-topic")
 
     assert [n.title for n in chain] == ["A", "B"]  # degrades, doesn't raise
-    warning = capsys.readouterr().err
+    warning = caplog.text
     assert "dangling-topic" in warning
     assert "not chain-verified" in warning.lower()
 
@@ -368,3 +369,61 @@ def test_audit_fallback_orders_same_day_notes_by_recording_suffix(
     chain = kb_decision.audit([decision_dir], "topic-x")
 
     assert [n.title for n in chain] == ["A", "B"]
+
+
+# ── audit(): the scan stays inside the vault ──────────────────────────
+
+
+def test_find_decision_dirs_skips_a_symlinked_project(tmp_path: Path) -> None:
+    """`entry.is_dir()` follows symlinks, so an audit would otherwise read
+    decision notes from outside the vault."""
+    vault = tmp_path / "vault"
+    (vault / "proj" / "decisions").mkdir(parents=True)
+    outside = tmp_path / "outside"
+    (outside / "decisions").mkdir(parents=True)
+    (vault / "escaped").symlink_to(outside)
+
+    dirs = kb_decision.find_decision_dirs(vault, None)
+
+    assert dirs == [vault / "proj" / "decisions"]
+
+
+def test_find_decision_dirs_skips_a_symlinked_decisions_dir(
+    tmp_path: Path,
+) -> None:
+    """The project dir can be real and its `decisions` dir a symlink out,
+    so the whole path has to resolve inside the vault, not just its head."""
+    vault = tmp_path / "vault"
+    (vault / "proj").mkdir(parents=True)
+    outside = tmp_path / "outside" / "decisions"
+    outside.mkdir(parents=True)
+    (vault / "proj" / "decisions").symlink_to(outside)
+
+    assert kb_decision.find_decision_dirs(vault, None) == []
+
+
+def test_find_decision_dirs_rejects_a_named_project_that_escapes(
+    tmp_path: Path,
+) -> None:
+    vault = tmp_path / "vault"
+    (vault / "proj").mkdir(parents=True)
+    outside = tmp_path / "outside" / "decisions"
+    outside.mkdir(parents=True)
+    (vault / "proj" / "decisions").symlink_to(outside)
+
+    with pytest.raises(ValueError, match="outside the vault"):
+        kb_decision.find_decision_dirs(vault, "proj")
+
+
+def test_find_notes_for_topic_skips_a_symlinked_note(tmp_path: Path) -> None:
+    decision_dir = tmp_path / "vault" / "proj" / "decisions"
+    decision_dir.mkdir(parents=True)
+    outside = tmp_path / "outside.md"
+    outside.write_text(
+        "---\ntitle: Secret\ntopic: leak-topic\ndate: 2026-07-01\n"
+        "status: active\nsupersedes: \ntags: []\n---\n\nsecret body\n",
+        encoding="utf-8",
+    )
+    (decision_dir / "link.md").symlink_to(outside)
+
+    assert kb_decision.find_notes_for_topic([decision_dir], "leak-topic") == []

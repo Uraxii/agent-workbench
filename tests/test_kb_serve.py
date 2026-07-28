@@ -15,6 +15,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import logging
+import socket
 import sys
 import threading
 import urllib.error
@@ -48,6 +49,9 @@ def _load_kb_serve():
 
 
 kb_serve = _load_kb_serve()
+# The model-backed passes live in scripts/kb_llm.py; kb-serve.py only
+# re-exports them, so a patch must target the defining module.
+kb_llm = sys.modules["kb_llm"]
 KbServeConfig = kb_serve.KbServeConfig
 
 
@@ -96,7 +100,10 @@ def test_health_reports_kb_home_indexed_count_and_ok_status(live_server: tuple[s
     with urllib.request.urlopen(f"{base_url}/health") as response:
         assert response.status == 200
         body = json.loads(response.read())
-    assert body == {"status": "ok", "kb_home": str(config.kb_home), "indexed_count": 0}
+    assert body == {
+        "status": "ok", "kb_home": str(config.kb_home), "indexed_count": 0,
+        "vector_count": 0, "embeddings_enabled": False,
+    }
 
 
 # ── /put ────────────────────────────────────────────────────────────────
@@ -118,23 +125,65 @@ def test_put_writes_note_with_expected_frontmatter(live_server: tuple[str, KbSer
 
 
 def test_put_uses_llm_atomize_when_enrichment_enabled(tmp_path: Path) -> None:
+    """type=source is splittable; note/decision are already atomic (see
+    test_put_of_an_atomic_type_is_never_split_by_the_model)."""
     config = _config(tmp_path, enrich_enabled=True, llm_api_key="fake-key")
     llm_items = [{"title": "Child A", "body": "Body A content."}]
     with (
         _server_for_config(config) as base_url,
-        patch.object(kb_serve, "request_atomize_split", return_value=llm_items) as mock_split,
+        patch.object(kb_llm, "request_atomize_split", return_value=llm_items) as mock_split,
     ):
         status, body = _post(base_url, "/put", {
-            "project": "proj1", "title": "Parent Note", "content": "Some parent content.",
+            "project": "proj1", "title": "Parent Note", "type": "source",
+            "content": "Some parent content.",
         })
 
     mock_split.assert_called_once()
     assert status == 201
-    assert set(body.keys()) == {"path", "children"}
+    assert set(body.keys()) == {"path", "children", "method", "indexed", "embedded"}
     assert len(body["children"]) == 1
     child_text = Path(str(body["children"][0])).read_text(encoding="utf-8")
     assert 'title: "Child A"' in child_text
     assert "Body A content." in child_text
+
+
+def test_put_of_an_atomic_type_is_never_split_by_the_model(tmp_path: Path) -> None:
+    """Enabling the model changes how WELL a splittable note is split, not
+    WHICH notes get split: a note (like a decision) is one idea by
+    construction, and the deterministic splitter has always left both
+    alone."""
+    config = _config(tmp_path, enrich_enabled=True, llm_api_key="fake-key")
+    with (
+        _server_for_config(config) as base_url,
+        patch.object(kb_llm, "request_atomize_split") as mock_split,
+    ):
+        status, body = _post(base_url, "/put", {
+            "project": "proj1", "title": "Atomic Note", "type": "note",
+            "content": "One idea, stated once.",
+        })
+
+    mock_split.assert_not_called()
+    assert status == 201
+    assert body["children"] == []
+    assert body["method"] == "already-atomic"
+
+
+def test_decision_is_recorded_through_the_same_ingest_finish(
+    live_server: tuple[str, KbServeConfig],
+) -> None:
+    """POST /decision writes markdown, so it reports the same atomize +
+    index result every other ingest route does."""
+    base_url, _ = live_server
+    status, body = _post(base_url, "/decision", {
+        "project": "proj1", "topic": "widget-shape", "title": "Round",
+        "text": "Widgets ship round.",
+    })
+    assert status == 201
+    assert body["method"] == "already-atomic"
+    assert body["children"] == []
+    assert body["indexed"] == 1
+    assert body["supersedes"] == ""
+    assert Path(str(body["path"])).read_text(encoding="utf-8").startswith("---\n")
 
 
 def test_put_missing_required_field_returns_400(live_server: tuple[str, KbServeConfig]) -> None:
@@ -171,7 +220,7 @@ def test_query_no_hits_returns_empty_list(live_server: tuple[str, KbServeConfig]
 
 def test_enrich_disabled_by_default_makes_zero_network_calls(tmp_path: Path) -> None:
     config = _config(tmp_path, enrich_enabled=False)
-    with patch.object(kb_serve, "request_enrichment") as mock_request:
+    with patch.object(kb_llm, "request_enrichment") as mock_request:
         result = kb_serve.kb_enrich(config, {})
     mock_request.assert_not_called()
     assert result == {"enriched": 0, "message": "KB_ENRICH is 0; enrichment disabled"}
@@ -182,7 +231,7 @@ def test_enrich_disabled_by_default_makes_zero_network_calls(tmp_path: Path) -> 
 
 def test_enrich_enabled_without_key_makes_zero_network_calls(tmp_path: Path) -> None:
     config = _config(tmp_path, enrich_enabled=True, llm_api_key=None)
-    with patch.object(kb_serve, "request_enrichment") as mock_request:
+    with patch.object(kb_llm, "request_enrichment") as mock_request:
         result = kb_serve.kb_enrich(config, {})
     mock_request.assert_not_called()
     assert result["enriched"] == 0
@@ -202,7 +251,7 @@ def test_enrich_success_rewrites_only_question_and_summary(tmp_path: Path) -> No
     body_before = text_before.split("---\n", 2)[2]
 
     with patch.object(
-        kb_serve, "request_enrichment",
+        kb_llm, "request_enrichment",
         return_value={"question": "What does the widget do?", "summary": "The widget does things well."},
     ) as mock_request:
         result = kb_serve.kb_enrich(config, {})
@@ -254,7 +303,7 @@ def test_kb_enrich_degrades_cleanly_when_note_read_fails(tmp_path: Path) -> None
     vanished_note = tmp_path / "vanished.md"  # never created on disk
     with (
         patch.object(kb_serve, "find_unenriched_notes", return_value=[vanished_note]),
-        patch.object(kb_serve, "request_enrichment") as mock_request,
+        patch.object(kb_llm, "request_enrichment") as mock_request,
     ):
         result = kb_serve.kb_enrich(config, {})  # must not raise
     mock_request.assert_not_called()  # read_text raised before the network call
@@ -388,7 +437,9 @@ def test_clip_happy_path_writes_source_note_with_extracted_content(
     assert 'title: "Canned OG Title"' in text
     assert 'source: "https://example.invalid/article"' in text
     assert "canned paragraph" in text
-    assert set(body.keys()) == {"path", "children"}  # no unexpected/leaked fields in the response
+    assert set(body.keys()) == {
+        "path", "children", "method", "indexed", "embedded",
+    }  # no unexpected/leaked fields in the response
 
 
 @needs_lxml
@@ -507,7 +558,7 @@ def _long_sectioned_body() -> str:
 def test_request_atomize_split_small_body_makes_one_model_call(tmp_path: Path) -> None:
     config = _config(tmp_path, enrich_enabled=True, llm_api_key="fake-key")
     with patch.object(
-        kb_serve, "_chat_completion_json",
+        kb_llm, "_chat_completion_json",
         return_value={"notes": [{"title": "Only Child", "body": "Small body note."}]},
     ) as mock_chat:
         result = kb_serve.request_atomize_split(config, "Small Parent", "Small parent body.")
@@ -530,7 +581,7 @@ def test_request_atomize_split_long_body_keeps_tail_content(tmp_path: Path) -> N
             return {"notes": [{"title": "Tail Child", "body": f"Saw {tail_marker}."}]}
         return {"notes": [{"title": "Earlier Child", "body": "Earlier chunk."}]}
 
-    with patch.object(kb_serve, "_chat_completion_json", side_effect=fake_chat) as mock_chat:
+    with patch.object(kb_llm, "_chat_completion_json", side_effect=fake_chat) as mock_chat:
         result = kb_serve.request_atomize_split(config, "Long Parent", body)
 
     assert mock_chat.call_count > 1
@@ -544,7 +595,7 @@ def test_atomize_degrades_to_deterministic_when_later_chunk_fails(tmp_path: Path
     with (
         _server_for_config(config) as base_url,
         patch.object(
-            kb_serve, "_chat_completion_json",
+            kb_llm, "_chat_completion_json",
             side_effect=[
                 {"notes": [{"title": "First LLM Child", "body": "First chunk."}]},
                 json.JSONDecodeError("bad json", "doc", 0),
@@ -585,7 +636,7 @@ def test_atomize_content_happy_path_returns_llm_children_with_parent_ref(tmp_pat
     ]
     with (
         _server_for_config(config) as base_url,
-        patch.object(kb_serve, "request_atomize_split", return_value=llm_items) as mock_split,
+        patch.object(kb_llm, "request_atomize_split", return_value=llm_items) as mock_split,
     ):
         status, body = _post(base_url, "/atomize", {
             "project": "proj1", "title": "Parent Note", "content": "Some parent content.",
@@ -613,7 +664,7 @@ def test_atomize_url_happy_path_returns_llm_children(tmp_path: Path) -> None:
     with (
         _server_for_config(config) as base_url,
         patch("urllib.request.build_opener", return_value=_fake_opener(html=_CANNED_HTML)),
-        patch.object(kb_serve, "request_atomize_split", return_value=llm_items) as mock_split,
+        patch.object(kb_llm, "request_atomize_split", return_value=llm_items) as mock_split,
         # example.invalid never resolves via real DNS; the SSRF guard is
         # exercised on its own in test_kb_clip.py, not re-derived here.
         patch.object(kb_serve.kb_clip_module(), "check_destination_is_public"),
@@ -636,7 +687,7 @@ def test_atomize_deterministic_fallback_when_enrich_disabled(tmp_path: Path) -> 
     config = _config(tmp_path, enrich_enabled=False)
     with (
         _server_for_config(config) as base_url,
-        patch.object(kb_serve, "request_atomize_split") as mock_split,
+        patch.object(kb_llm, "request_atomize_split") as mock_split,
     ):
         status, body = _post(base_url, "/atomize", {
             "project": "proj1", "title": "Long Parent", "content": _long_sectioned_body(),
@@ -653,7 +704,7 @@ def test_atomize_degrades_to_deterministic_on_llm_failure(tmp_path: Path) -> Non
     with (
         _server_for_config(config) as base_url,
         patch.object(
-            kb_serve, "request_atomize_split",
+            kb_llm, "request_atomize_split",
             side_effect=json.JSONDecodeError("bad json", "doc", 0),
         ) as mock_split,
     ):
@@ -675,7 +726,7 @@ def test_atomize_degrades_to_deterministic_on_llm_value_error(tmp_path: Path) ->
     with (
         _server_for_config(config) as base_url,
         patch.object(
-            kb_serve, "request_atomize_split",
+            kb_llm, "request_atomize_split",
             side_effect=ValueError("malformed atomize response"),
         ) as mock_split,
     ):
@@ -725,3 +776,55 @@ def test_atomize_both_url_and_content_given_prefers_url(tmp_path: Path) -> None:
     text = Path(str(body["parent"])).read_text(encoding="utf-8")
     assert "canned paragraph" in text
     assert "must be ignored" not in text
+
+
+# ── request body bounds ────────────────────────────────────────────────
+
+
+def test_a_negative_content_length_is_rejected(
+    live_server: tuple[str, KbServeConfig],
+) -> None:
+    """rfile.read(-1) drains to EOF, so a negative length would sail past
+    the byte cap on an unauthenticated loopback service."""
+    base_url, _ = live_server
+    host, port = base_url.removeprefix("http://").split(":")
+    with socket.create_connection((host, int(port)), timeout=5) as sock:
+        sock.sendall(
+            b"POST /put HTTP/1.1\r\nHost: kb\r\n"
+            b"Content-Length: -1\r\n\r\n"
+        )
+        status_line = sock.recv(4096).split(b"\r\n")[0]
+    assert b"400" in status_line
+
+
+def test_an_oversized_content_length_is_rejected(
+    live_server: tuple[str, KbServeConfig],
+) -> None:
+    base_url, _ = live_server
+    host, port = base_url.removeprefix("http://").split(":")
+    oversized = kb_serve.MAX_BODY_BYTES + 1
+    with socket.create_connection((host, int(port)), timeout=5) as sock:
+        sock.sendall(
+            b"POST /put HTTP/1.1\r\nHost: kb\r\n"
+            b"Content-Length: %d\r\n\r\n" % oversized
+        )
+        status_line = sock.recv(4096).split(b"\r\n")[0]
+    assert b"400" in status_line
+
+
+def test_a_symlinked_index_dir_is_refused_rather_than_written_to(
+    tmp_path: Path,
+) -> None:
+    """The derived database is a vault path like any other: a symlinked
+    index/ dir would put kb.db somewhere the service does not own."""
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (vault / "index").symlink_to(outside)
+
+    with pytest.raises(ValueError, match="outside the vault"):
+        kb_serve.index_db_path(vault)
+    with pytest.raises(ValueError, match="outside the vault"):
+        kb_serve.rebuild_derived(_config(vault))
+    assert list(outside.iterdir()) == []

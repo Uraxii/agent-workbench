@@ -1,8 +1,13 @@
 # agent-workbench: kb mode
 
-Knowledgebase vault ops:
+Knowledgebase ops:
 init/add/path/index/clip/put/query/atomize/status/decision.
-Replaces `scripts/kb.sh`.
+
+The vault lives at `$KB_HOME` (default `~/.knowledgebase`) and the
+knowledgebase service is the only thing that opens it. Every verb below is
+one HTTP call to that service. There is no filesystem fallback: if the
+service is down, the command fails and says which endpoint it tried and
+why it failed. Start it with `docker compose up -d kb-serve`.
 
 ```bash
 AW=$HOME/.claude/skills/agent-workbench/agent-workbench
@@ -13,16 +18,17 @@ $AW kb index
 $AW kb status
 ```
 
-`clip` / `put` / `query` prefer the running kb-serve HTTP service (so the
-call also atomizes + reindexes) and fall back to an in-process kb-serve.py
-call when the service is down. Same behavior kb.sh had.
+Every ingest is atomized, indexed and embedded in the same call. There is
+no flag to skip any of that, because an opt-in index is an index that
+drifts.
 
-`kb` honors `KB_SERVE_HOST` (not only `KB_SERVE_PORT`) and surfaces the
-HTTP error body on failure instead of swallowing it.
+`kb index` rebuilds the whole derived layer (FTS5 rows and vectors) from
+the vault markdown alone. That is the recovery path: the index is never
+something to back up, and editing the vault outside the service is
+repaired by rerunning it.
 
-The clip path preserves kb-clip.py's http/https scheme allowlist verbatim
-(it delegates to the same `check_url_scheme`), so `file://` and other
-schemes stay rejected with zero new code.
+Service address: `KB_SERVE_HOST` (default `127.0.0.1`) and
+`KB_SERVE_PORT` (default `9100`).
 
 ## decision -- dated, auditable decision notes
 
@@ -47,27 +53,28 @@ auditing a topic rarely knows which project holds it). JSON by default;
 Decision notes use a different frontmatter dialect from `kb put`'s notes:
 bare, unquoted scalars (`title/topic/date/status/supersedes/tags`), not
 `put`'s quoted `type/title/source/...` schema -- see
-`cli/kb_decision.py`'s `render_decision` for the exact byte shape.
+`scripts/kb_decision.py`'s `render_decision` for the exact byte shape.
 
-## kb-serve LLM endpoints (agent-facing)
+## Retrieval
 
-Two optional, LLM-backed endpoints exist on the running kb-serve service
-(see `scripts/kb-serve.py`'s module docstring for exact behavior):
+`kb query` fuses two rankings: the FTS5 keyword search decides which
+notes match and applies the project/type/superseded filters, and the
+vector search reorders them. With no embedding model configured (the
+default) the vector half contributes nothing and search is plain
+keyword ranking. Turn it on by setting `KB_EMBED_MODEL` in
+`$HOME/.knowledgebase/kb.env`, then rerun `kb index`.
 
-- `POST /enrich` -- fills in a note's `question`/`summary` frontmatter
-  fields via the configured LLM. Gated by `KB_ENRICH` (must be `1`;
-  default `0` is a clean no-op, zero network calls) plus a resolvable API
-  key (`KB_LLM_API_KEY`, or preferably `KB_LLM_API_KEY_CMD`, a vault CLI
-  command whose stdout is the key -- see
-  `scripts/kb-container/kb.env.example` for the exact modes/format).
-- `POST /atomize` -- LLM-assisted atomize/split of a URL or raw document
-  content into decontextualized child notes, using a "strong" model tier
-  (bigger than enrich's, since atomize needs real
-  decontextualization/section-splitting, not just a gist). If
-  `KB_ENRICH`/the key isn't configured, it falls back to the deterministic
-  heading-based split (no model call) -- never fails, just degrades.
+## Optional LLM passes
 
-Both are off/degraded by default; opt in via `KB_ENRICH=1` plus a
-configured key in the real `$HOME/.knowledgebase/kb.env` (see
-`scripts/kb-container/kb.env.example` for the template -- never document
-or imply a real secret value there).
+Both are off by default and degrade rather than fail:
+
+- `kb atomize` splits a URL or stdin document into decontextualized child
+  notes using a strong model tier, falling back to the deterministic
+  heading split when no key is configured.
+- `POST /enrich` fills a note's `question`/`summary` frontmatter fields.
+  It has no CLI verb; it is an agent-facing endpoint.
+
+Opt in with `KB_ENRICH=1` plus a key in the real
+`$HOME/.knowledgebase/kb.env` (template:
+`scripts/kb-container/kb.env.example` -- never document or imply a real
+secret value there).
