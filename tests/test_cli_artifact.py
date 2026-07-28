@@ -396,3 +396,210 @@ def test_non_json_response_fails_loudly(
 
     assert result.returncode != 0
     assert "invalid JSON response" in result.stderr
+
+
+def test_publish_force_flag_sends_overwrite(
+    artifact_server: tuple[str, type[RecordingArtifactHandler]],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    base_url, handler = artifact_server
+    source = tmp_path / "file.txt"
+    source.write_text("body", encoding="utf-8")
+
+    result = run_publish(["publish", "--project", "proj", "--src", str(source), "--force"], base_url, handler, monkeypatch, capsys)
+
+    assert result.returncode == 0
+    assert handler.publishes[0]["archive"] is not None
+    assert handler.publishes[0].get("overwrite") is None or handler.publishes[0].get("overwrite") == "1"
+
+
+def test_publish_as_defaults_to_source_basename(
+    artifact_server: tuple[str, type[RecordingArtifactHandler]],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    base_url, handler = artifact_server
+    source = tmp_path / "myfile.html"
+    source.write_text("body", encoding="utf-8")
+
+    result = run_publish(["publish", "--project", "proj", "--src", str(source)], base_url, handler, monkeypatch, capsys)
+
+    assert result.returncode == 0
+    assert handler.publishes[0]["as"] == "myfile.html"
+
+
+def test_publish_as_can_be_overridden(
+    artifact_server: tuple[str, type[RecordingArtifactHandler]],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    base_url, handler = artifact_server
+    source = tmp_path / "myfile.html"
+    source.write_text("body", encoding="utf-8")
+
+    result = run_publish(["publish", "--project", "proj", "--src", str(source), "--as", "custom-name"], base_url, handler, monkeypatch, capsys)
+
+    assert result.returncode == 0
+    assert handler.publishes[0]["as"] == "custom-name"
+
+
+def test_feedback_sub_path_filter(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """Test that --sub-path sends the sub_path query parameter."""
+    module = load_artifact_module()
+
+    def fake_json_request(url: str, **kwargs: object) -> object:
+        if "sub_path=mypath" in url:
+            return {"artifact_id": "test/art", "sub_path": "mypath", "threads": []}
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    monkeypatch.setenv("ARTIFACT_SVC_URL", "http://test.local")
+    monkeypatch.setattr(module, "_json_request", fake_json_request)
+
+    result = module.cmd_feedback(argparse.Namespace(artifact_id="test/art", sub_path="mypath", all_paths=False))
+
+    assert result == 0
+    output = capsys.readouterr().out
+    assert "test/art" in output
+
+
+def test_feedback_all_paths_omits_sub_path(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """Test that --all-paths does not send the sub_path query parameter."""
+    module = load_artifact_module()
+
+    captured_url = []
+
+    def fake_json_request(url: str, **kwargs: object) -> object:
+        captured_url.append(url)
+        if "sub_path" not in url:
+            return {"artifact_id": "test/art", "threads": []}
+        raise AssertionError(f"sub_path should not be in URL for --all-paths: {url}")
+
+    monkeypatch.setenv("ARTIFACT_SVC_URL", "http://test.local")
+    monkeypatch.setattr(module, "_json_request", fake_json_request)
+
+    result = module.cmd_feedback(argparse.Namespace(artifact_id="test/art", sub_path=None, all_paths=True))
+
+    assert result == 0
+    assert "sub_path" not in captured_url[0]
+
+
+def test_feedback_empty_sub_path_distinguishable_from_omitted(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """Test that --sub-path '' is sent and distinguishable from omitting it."""
+    module = load_artifact_module()
+
+    captured_url = []
+
+    def fake_json_request(url: str, **kwargs: object) -> object:
+        captured_url.append(url)
+        if "sub_path=" in url:
+            return {"artifact_id": "test/art", "sub_path": "", "threads": []}
+        raise AssertionError(f"sub_path should be in URL: {url}")
+
+    monkeypatch.setenv("ARTIFACT_SVC_URL", "http://test.local")
+    monkeypatch.setattr(module, "_json_request", fake_json_request)
+
+    result = module.cmd_feedback(argparse.Namespace(artifact_id="test/art", sub_path="", all_paths=False))
+
+    assert result == 0
+    assert "sub_path=" in captured_url[0]
+
+
+def test_comment_builds_correct_request(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """Test that the comment command builds the correct request."""
+    module = load_artifact_module()
+
+    captured_calls = []
+
+    def fake_run_json_command(verb: str, url: str, **kwargs: object) -> int:
+        captured_calls.append((verb, url, kwargs))
+        return 0
+
+    def fake_csrf_opener(base_url: str, post_url: str) -> tuple:
+        return (None, "mock-csrf-token")
+
+    monkeypatch.setenv("ARTIFACT_SVC_URL", "http://test.local")
+    monkeypatch.setattr(module, "_run_json_command", fake_run_json_command)
+    monkeypatch.setattr(module, "_csrf_opener", fake_csrf_opener)
+
+    result = module.cmd_comment(
+        argparse.Namespace(
+            artifact_id="test/art",
+            body="Test comment",
+            sub_path="section1",
+            author="alice",
+            anchor_kind="page"
+        )
+    )
+
+    assert result == 0
+    assert len(captured_calls) == 1
+    verb, url, kwargs = captured_calls[0]
+    assert verb == "comment"
+    assert "/_/api/threads" in url
+
+
+def test_reply_builds_correct_request(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """Test that the reply command builds the correct request."""
+    module = load_artifact_module()
+
+    captured_calls = []
+
+    def fake_run_json_command(verb: str, url: str, **kwargs: object) -> int:
+        captured_calls.append((verb, url, kwargs))
+        return 0
+
+    def fake_csrf_opener(base_url: str, post_url: str) -> tuple:
+        return (None, "mock-csrf-token")
+
+    monkeypatch.setenv("ARTIFACT_SVC_URL", "http://test.local")
+    monkeypatch.setattr(module, "_run_json_command", fake_run_json_command)
+    monkeypatch.setattr(module, "_csrf_opener", fake_csrf_opener)
+
+    result = module.cmd_reply(
+        argparse.Namespace(
+            thread=42,
+            body="Test reply",
+            author="bob"
+        )
+    )
+
+    assert result == 0
+    assert len(captured_calls) == 1
+    verb, url, kwargs = captured_calls[0]
+    assert verb == "reply"
+    assert "/42/replies" in url
+
+
+def test_resolve_builds_correct_request(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """Test that the resolve command builds the correct request."""
+    module = load_artifact_module()
+
+    captured_calls = []
+
+    def fake_run_json_command(verb: str, url: str, **kwargs: object) -> int:
+        captured_calls.append((verb, url, kwargs))
+        return 0
+
+    def fake_csrf_opener(base_url: str, post_url: str) -> tuple:
+        return (None, "mock-csrf-token")
+
+    monkeypatch.setenv("ARTIFACT_SVC_URL", "http://test.local")
+    monkeypatch.setattr(module, "_run_json_command", fake_run_json_command)
+    monkeypatch.setattr(module, "_csrf_opener", fake_csrf_opener)
+
+    result = module.cmd_resolve(
+        argparse.Namespace(
+            thread=42,
+            reopen=False
+        )
+    )
+
+    assert result == 0
+    assert len(captured_calls) == 1
+    verb, url, kwargs = captured_calls[0]
+    assert verb == "resolve"
+    assert "/42/resolve" in url
