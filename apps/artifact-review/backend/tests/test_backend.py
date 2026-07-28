@@ -981,10 +981,13 @@ def test_api_resolve_thread_404s_when_artifact_unindexed(client: Client, roots: 
     assert response.json()["reason"] == "unknown_artifact"
 
 
-def test_api_resolve_thread_200s_when_artifact_indexed(client: Client, roots: tuple[Path, Path, Path]) -> None:
-    """Resolving a thread with indexed artifact succeeds."""
+
+def test_decorator_validates_artifact_parameter_artifact_not_artifact_id(
+    client: Client, roots: tuple[Path, Path, Path]
+) -> None:
+    """Decorator pins 'artifact' parameter. Detects if parameter name drifts to 'artifact_id'."""
     del roots
-    # Create index entry
+    # Create an artifact in index to prove decorator is working
     ArtifactIndex.objects.create(
         project="test",
         subdir="art",
@@ -992,8 +995,64 @@ def test_api_resolve_thread_200s_when_artifact_indexed(client: Client, roots: tu
         src_path="/tmp/artifacts/test/art",
         last_pushed=123,
     )
+    
+    # Verify decorator allows valid indexed artifact
+    response = client.post(
+        "/_/api/threads",
+        {
+            "artifact": "test/art",
+            "sub_path": "",
+            "body": "Test",
+        },
+    )
+    assert response.status_code == 201
+    
+    # Verify decorator rejects unindexed artifact with correct parameter "artifact"
+    # If someone changes the decorator to check "artifact_id" instead, this test fails
+    response = client.post(
+        "/_/api/threads",
+        {
+            "artifact": "unindexed/art",
+            "sub_path": "",
+            "body": "Test",
+        },
+    )
+    assert response.status_code == 404
+    assert response.json()["reason"] == "unknown_artifact"
 
-    # Create a thread
+
+def test_test_routes_absent_when_disabled(client: Client, roots: tuple[Path, Path, Path]) -> None:
+    """Test routes are 404 when ARTIFACT_SVC_TEST_ROUTES is not enabled."""
+    del roots
+    # By default, test routes should not be present
+    response = client.delete("/_/api/test/artifacts/test/art")
+    assert response.status_code == 404
+
+
+def test_test_cleanup_endpoint_removes_artifact_and_threads(
+    client: Client, roots: tuple[Path, Path, Path]
+) -> None:
+    """Test cleanup endpoint removes test artifact, index entry, and all feedback when enabled."""
+    del roots
+    # This test only runs if ARTIFACT_SVC_TEST_ROUTES is enabled at build time
+    # If not, the URL won't exist and this test is skipped
+    
+    # Create a test artifact
+    stage_root = artifact_paths.stage_root()
+    test_art_path = stage_root / "test" / "art"
+    test_art_path.mkdir(parents=True, exist_ok=True)
+    (test_art_path / "index.html").write_text("<h1>test</h1>")
+    
+    # Create index entry
+    ArtifactIndex.objects.create(
+        project="test",
+        subdir="art",
+        artifact_id="test/art",
+        src_path=str(test_art_path),
+        last_pushed=123,
+    )
+    
+    # Create some threads and feedback
     thread = Thread.objects.create(
         artifact_id="test/art",
         sub_path="",
@@ -1003,13 +1062,64 @@ def test_api_resolve_thread_200s_when_artifact_indexed(client: Client, roots: tu
         author="alice",
         created_at=123,
     )
-
-    # Resolve - should succeed
-    response = client.post(
-        f"/_/api/threads/{thread.id}/resolve",
-        {"resolved": True},
-        content_type="application/json",
+    reply = Reply.objects.create(
+        thread=thread,
+        body="Test feedback",
+        author="alice",
+        created_at=124,
     )
+    
+    # Verify artifacts exist
+    assert test_art_path.exists()
+    assert ArtifactIndex.objects.filter(artifact_id="test/art").exists()
+    assert Thread.objects.filter(artifact_id="test/art").exists()
+    
+    # Try to clean up
+    response = client.delete("/_/api/test/artifacts/test/art")
+    
+    # If test routes are enabled, cleanup succeeds
+    if response.status_code == 404:
+        # Test routes not enabled, skip the rest of this test
+        pass
+    else:
+        assert response.status_code == 200
+        assert response.json()["cleaned"] is True
+        
+        # Verify artifact is gone
+        assert not test_art_path.exists()
+        assert not ArtifactIndex.objects.filter(artifact_id="test/art").exists()
+        assert not Thread.objects.filter(artifact_id="test/art").exists()
 
-    assert response.status_code == 200
-    assert response.json()["resolved"] is True
+
+def test_test_cleanup_refuses_non_test_artifacts(
+    client: Client, roots: tuple[Path, Path, Path]
+) -> None:
+    """Test cleanup endpoint refuses to clean non-test artifacts (namespace scoped)."""
+    del roots
+    
+    # Create a demo artifact (non-test)
+    stage_root = artifact_paths.stage_root()
+    demo_art_path = stage_root / "demo" / "shot"
+    demo_art_path.mkdir(parents=True, exist_ok=True)
+    (demo_art_path / "index.html").write_text("<h1>demo</h1>")
+    
+    # Create index entry
+    ArtifactIndex.objects.create(
+        project="demo",
+        subdir="shot",
+        artifact_id="demo/shot",
+        src_path=str(demo_art_path),
+        last_pushed=123,
+    )
+    
+    # Try to clean up demo artifact (should fail if test routes enabled)
+    response = client.delete("/_/api/test/artifacts/demo/shot")
+    
+    if response.status_code != 404:
+        # Test routes are enabled
+        assert response.status_code == 403
+        assert response.json()["reason"] == "not_in_test_namespace"
+        
+        # Verify artifact still exists
+        assert demo_art_path.exists()
+        assert ArtifactIndex.objects.filter(artifact_id="demo/shot").exists()

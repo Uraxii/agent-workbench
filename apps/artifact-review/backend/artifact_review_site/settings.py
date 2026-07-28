@@ -23,6 +23,7 @@ ARTIFACT_SVC_ASSETS_ROOT = Path(
     os.environ.get("ARTIFACT_SVC_ASSETS_ROOT", str(BASE_DIR / "artifact_review" / "assets"))
 ).expanduser()
 ARTIFACT_SVC_PUBLISH_ENABLED = os.environ.get("ARTIFACT_SVC_PUBLISH_ENABLED", "1")
+ARTIFACT_SVC_TEST_ROUTES = os.environ.get("ARTIFACT_SVC_TEST_ROUTES", "0") == "1"
 
 ALLOWED_HOSTS = [
     host.strip()
@@ -67,6 +68,7 @@ __all__ = [
     "ARTIFACT_SVC_HOST",
     "ARTIFACT_SVC_PORT",
     "ARTIFACT_SVC_PUBLISH_ENABLED",
+    "ARTIFACT_SVC_TEST_ROUTES",
     "ARTIFACT_SVC_SPA_ROOT",
     "ARTIFACT_SVC_STAGE_ROOT",
     "ASGI_APPLICATION",
