@@ -1,15 +1,7 @@
-"""Light-touch coverage for cli/bd.py.
-
-cli/bd.py carries no logic of its own: it is a pure re-registration of
-`hub.py`/`board.py`'s existing `cmd_*` handlers under one `bd`
-sub-subcommand tree. This just asserts the wiring is correct (each
-sub-subcommand's `func` is the expected existing function object), not
-`hub.py`/`board.py`'s actual behavior (unchanged, pre-existing, out of
-scope here).
-"""
 from __future__ import annotations
 
 import argparse
+import socket
 import sys
 from pathlib import Path
 
@@ -21,74 +13,109 @@ SKILL_DIR = REPO_ROOT / ".claude" / "skills" / "agent-workbench"
 if str(SKILL_DIR) not in sys.path:
     sys.path.insert(0, str(SKILL_DIR))
 
-from cli import bd, board, hub  # noqa: E402  (path shim must precede this import)
+from cli import bd, board  # noqa: E402
 
 
 def build_bd_parser() -> argparse.ArgumentParser:
-    """A standalone parser with only `bd` registered under it."""
     parser = argparse.ArgumentParser(prog="agent-workbench")
     subparsers = parser.add_subparsers(dest="command", required=True)
     bd.register(subparsers)
     return parser
 
 
-def test_bd_init_wires_to_hub_cmd_init() -> None:
-    args = build_bd_parser().parse_args(["bd", "init"])
-    assert args.func is hub.cmd_init
+@pytest.fixture
+def captured_posts(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dict[str, object]]]:
+    posts: list[tuple[str, dict[str, object]]] = []
+
+    def fake_post(endpoint: str, payload: dict[str, object]) -> dict[str, object]:
+        posts.append((endpoint, payload))
+        return {"ok": True}
+
+    monkeypatch.setattr(bd, "_post_json", fake_post)
+    return posts
 
 
-def test_bd_add_wires_to_hub_cmd_add_with_name_and_optional_prefix() -> None:
-    args = build_bd_parser().parse_args(["bd", "add", "myproj"])
-    assert args.func is hub.cmd_add
-    assert args.name == "myproj"
-    assert args.prefix is None
+@pytest.mark.parametrize(
+    ("argv", "func", "endpoint", "payload"),
+    [
+        (["bd", "init"], bd.cmd_init, "/hub/init", {}),
+        (["bd", "add", "proj"], bd.cmd_add, "/hub/add", {"name": "proj"}),
+        (["bd", "add", "proj", "p"], bd.cmd_add, "/hub/add", {"name": "proj", "prefix": "p"}),
+        (["bd", "sync"], bd.cmd_sync, "/hub/sync", {}),
+        (["bd", "repos"], bd.cmd_repos, "/hub/repos", {}),
+        (["bd", "path", "proj"], bd.cmd_path, "/hub/path", {"name": "proj"}),
+        (["bd", "status"], bd.cmd_status, "/hub/status", {}),
+        (["bd", "list", "--board", "proj", "--status", "open", "--assignee", "me",
+          "--label", "a", "--label", "b", "--limit", "5", "--all"], bd.cmd_list,
+         "/issue/list", {"board": "proj", "status": "open", "assignee": "me",
+                          "labels": ["a", "b"], "limit": "5", "all": True}),
+        (["bd", "show", "A1"], bd.cmd_show, "/issue/show", {"board": "hub", "id": "A1"}),
+        (["bd", "create", "T", "--board", "proj", "-d", "D", "-p", "2", "-l", "x",
+          "--parent", "P1", "--assignee", "me"], bd.cmd_create, "/issue/create",
+         {"board": "proj", "title": "T", "description": "D", "priority": "2",
+          "labels": ["x"], "parent": "P1", "assignee": "me"}),
+        (["bd", "update", "A1", "--status", "blocked", "--assignee", "me", "-p", "1",
+          "-d", "D", "--add-label", "x", "--remove-label", "y", "--claim"],
+         bd.cmd_update, "/issue/update", {"board": "hub", "id": "A1", "status": "blocked",
+         "assignee": "me", "priority": "1", "description": "D", "add_labels": ["x"],
+         "remove_labels": ["y"], "claim": True}),
+        (["bd", "close", "A1", "--reason", "done"], bd.cmd_close, "/issue/close",
+         {"board": "hub", "id": "A1", "reason": "done"}),
+        (["bd", "note", "A1", "hello"], bd.cmd_note, "/issue/note",
+         {"board": "hub", "id": "A1", "text": "hello"}),
+        (["bd", "link", "A1", "B2", "--type", "related"], bd.cmd_link, "/issue/link",
+         {"board": "hub", "from_id": "A1", "to_id": "B2", "type": "related"}),
+        (["bd", "children", "A1"], bd.cmd_children, "/issue/children",
+         {"board": "hub", "id": "A1"}),
+        (["bd", "priority", "A1", "4"], bd.cmd_priority, "/issue/priority",
+         {"board": "hub", "id": "A1", "priority": "4"}),
+    ],
+)
+def test_bd_verbs_post_expected_payloads(
+    argv: list[str],
+    func: object,
+    endpoint: str,
+    payload: dict[str, object],
+    captured_posts: list[tuple[str, dict[str, object]]],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    args = build_bd_parser().parse_args(argv)
+    assert args.func is func
+    assert args.func(args) == 0
+    assert captured_posts == [(endpoint, payload)]
+    assert capsys.readouterr().out.strip() == '{"ok": true}'
 
-    args = build_bd_parser().parse_args(["bd", "add", "myproj", "mp"])
-    assert args.func is hub.cmd_add
-    assert args.prefix == "mp"
 
-
-def test_bd_sync_wires_to_hub_cmd_sync() -> None:
-    args = build_bd_parser().parse_args(["bd", "sync"])
-    assert args.func is hub.cmd_sync
-
-
-def test_bd_list_wires_to_hub_cmd_list() -> None:
-    args = build_bd_parser().parse_args(["bd", "list"])
-    assert args.func is hub.cmd_list
-
-
-def test_bd_path_wires_to_hub_cmd_path() -> None:
-    args = build_bd_parser().parse_args(["bd", "path", "myproj"])
-    assert args.func is hub.cmd_path
-    assert args.name == "myproj"
-
-
-def test_bd_status_wires_to_hub_cmd_status() -> None:
-    args = build_bd_parser().parse_args(["bd", "status"])
-    assert args.func is hub.cmd_status
-
-
-def test_bd_ui_up_wires_to_board_cmd_up_with_default_repo_dir() -> None:
+def test_ui_verbs_still_route_to_board_module() -> None:
     args = build_bd_parser().parse_args(["bd", "ui-up"])
     assert args.func is board.cmd_up
     assert args.repo_dir == "."
 
-    args = build_bd_parser().parse_args(["bd", "ui-up", "/some/repo"])
-    assert args.repo_dir == "/some/repo"
+    args = build_bd_parser().parse_args(["bd", "ui-up", "/repo"])
+    assert args.func is board.cmd_up
+    assert args.repo_dir == "/repo"
 
-
-def test_bd_ui_down_wires_to_board_cmd_down_with_default_repo_dir() -> None:
     args = build_bd_parser().parse_args(["bd", "ui-down"])
     assert args.func is board.cmd_down
     assert args.repo_dir == "."
 
-
-def test_bd_ui_status_wires_to_board_cmd_status() -> None:
     args = build_bd_parser().parse_args(["bd", "ui-status"])
     assert args.func is board.cmd_status
 
 
-def test_bd_requires_a_sub_subcommand() -> None:
-    with pytest.raises(SystemExit):
-        build_bd_parser().parse_args(["bd"])
+def test_unreachable_service_error_names_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A real closed port, so the loud-failure path runs end to end."""
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+
+    monkeypatch.setenv("BD_SERVE_HOST", "127.0.0.1")
+    monkeypatch.setenv("BD_SERVE_PORT", str(port))
+    with pytest.raises(RuntimeError) as excinfo:
+        bd.cmd_list(argparse.Namespace(board="hub", status=None, assignee=None, label=[],
+                                       limit=None, all=False))
+    message = str(excinfo.value)
+    assert f"http://127.0.0.1:{port}/issue/list" in message
+    assert "Connection refused" in message or "Errno 111" in message
