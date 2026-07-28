@@ -82,9 +82,19 @@ def live_server(tmp_path: Path) -> Iterator[tuple[str, KbServeConfig]]:
         thread.join(timeout=5)
 
 
-def _post(base_url: str, path: str, payload: dict[str, object]) -> tuple[int, dict[str, object]]:
+def _post(
+    base_url: str,
+    path: str,
+    payload: dict[str, object],
+    headers: dict[str, str] | None = None,
+) -> tuple[int, dict[str, object]]:
     data = json.dumps(payload).encode("utf-8")
-    request = urllib.request.Request(f"{base_url}{path}", data=data, method="POST")
+    # The service refuses any POST that is not declared JSON, so that a
+    # cross-origin browser POST needs a preflight it will never get.
+    sent = {"Content-Type": "application/json", **(headers or {})}
+    request = urllib.request.Request(
+        f"{base_url}{path}", data=data, method="POST", headers=sent,
+    )
     try:
         with urllib.request.urlopen(request) as response:
             return response.status, json.loads(response.read())
@@ -104,6 +114,161 @@ def test_health_reports_kb_home_indexed_count_and_ok_status(live_server: tuple[s
         "status": "ok", "kb_home": str(config.kb_home), "indexed_count": 0,
         "vector_count": 0, "embeddings_enabled": False,
     }
+
+
+# ── security baseline: headers, browser origins, path containment ───────
+# See docs/design/security-baseline-threat-model.md. Loopback is not a
+# trust boundary: a browser tab can aim JavaScript at 127.0.0.1.
+
+
+def test_every_response_carries_the_security_header_baseline(
+    live_server: tuple[str, KbServeConfig],
+) -> None:
+    base_url, _ = live_server
+    with urllib.request.urlopen(f"{base_url}/health") as response:
+        headers = dict(response.headers)
+    for name, value in kb_serve.SECURITY_HEADERS.items():
+        assert headers[name] == value
+    assert headers["Content-Type"] == "application/json; charset=utf-8"
+
+
+def test_error_response_also_carries_the_security_headers(
+    live_server: tuple[str, KbServeConfig],
+) -> None:
+    base_url, _ = live_server
+    try:
+        urllib.request.urlopen(f"{base_url}/no-such-route")
+        raise AssertionError("expected 404")
+    except urllib.error.HTTPError as exc:
+        assert exc.code == 404
+        assert exc.headers["X-Content-Type-Options"] == "nosniff"
+
+
+def test_unimplemented_method_reply_also_carries_the_security_headers(
+    live_server: tuple[str, KbServeConfig],
+) -> None:
+    """OPTIONS is answered by the stdlib's own send_error(), not by
+    _send_json, so the headers have to be stamped in end_headers()."""
+    base_url, _ = live_server
+    request = urllib.request.Request(f"{base_url}/health", method="OPTIONS")
+    try:
+        urllib.request.urlopen(request)
+        raise AssertionError("expected an error status")
+    except urllib.error.HTTPError as exc:
+        assert exc.code == 501
+        assert exc.headers["Content-Security-Policy"] == \
+            kb_serve.SECURITY_HEADERS["Content-Security-Policy"]
+        assert "Access-Control-Allow-Origin" not in exc.headers
+
+
+def test_cross_origin_post_is_refused_and_writes_nothing(
+    live_server: tuple[str, KbServeConfig],
+) -> None:
+    base_url, config = live_server
+    status, body = _post(
+        base_url, "/put",
+        {"project": "proj1", "title": "Evil", "content": "from a web page"},
+        headers={"Origin": "https://evil.example"},
+    )
+    assert status == 403
+    assert "cross-origin" in str(body["error"])
+    assert not (config.kb_home / "proj1").exists()
+
+
+def test_get_with_foreign_host_header_is_refused(
+    live_server: tuple[str, KbServeConfig],
+) -> None:
+    """A DNS-rebound request is same-origin, so it carries no Origin
+    header; only the Host header gives it away."""
+    base_url, _ = live_server
+    request = urllib.request.Request(
+        f"{base_url}/health", headers={"Host": "rebind.evil.example"},
+    )
+    try:
+        urllib.request.urlopen(request)
+        raise AssertionError("expected 403")
+    except urllib.error.HTTPError as exc:
+        assert exc.code == 403
+
+
+def test_post_without_json_content_type_is_refused(
+    live_server: tuple[str, KbServeConfig],
+) -> None:
+    """text/plain is a CORS 'simple request' -- refusing it forces a
+    preflight this service never answers."""
+    base_url, config = live_server
+    status, body = _post(
+        base_url, "/put",
+        {"project": "proj1", "title": "Evil", "content": "simple request"},
+        headers={"Content-Type": "text/plain"},
+    )
+    assert status == 415
+    assert "application/json" in str(body["error"])
+    assert not (config.kb_home / "proj1").exists()
+
+
+@pytest.mark.parametrize(
+    "project", ["../escape", "..", "/tmp", "a/b", ".hidden", "proj\x00"],
+)
+def test_put_rejects_project_names_that_are_not_one_safe_segment(
+    live_server: tuple[str, KbServeConfig], project: str,
+) -> None:
+    base_url, config = live_server
+    status, body = _post(
+        base_url, "/put", {"project": project, "title": "T", "content": "C"},
+    )
+    assert status == 400
+    assert "project" in str(body["error"])
+    assert list(config.kb_home.iterdir()) == []
+
+
+def test_put_traversal_attempt_writes_nothing_outside_the_vault(
+    tmp_path: Path,
+) -> None:
+    kb_home = tmp_path / "vault"
+    kb_home.mkdir()
+    outside = tmp_path / "outside"
+    config = _config(kb_home)
+    with _server_for_config(config) as base_url:
+        status, _ = _post(base_url, "/put", {
+            "project": "../outside", "title": "Pwned", "content": "x",
+        })
+    assert status == 400
+    assert not outside.exists()
+
+
+def test_clip_rejects_a_project_dir_symlinked_out_of_the_vault(tmp_path: Path) -> None:
+    """The name rule alone cannot see a symlink: 'escape' is a legal
+    segment. Only kb_vault's post-resolve containment check catches it,
+    and the clip path delegates its write to kb-clip.py, so the check has
+    to happen before the delegation."""
+    kb_home = tmp_path / "vault"
+    kb_home.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (kb_home / "escape").symlink_to(outside)
+    config = _config(kb_home)
+    with (
+        _server_for_config(config) as base_url,
+        patch.object(kb_serve.kb_clip_module(), "clip") as mock_clip,
+    ):
+        status, body = _post(base_url, "/clip", {
+            "url": "https://example.invalid/a", "project": "escape",
+        })
+    mock_clip.assert_not_called()
+    assert status == 400
+    assert "resolves outside the vault" in str(body["error"])
+
+
+def test_assert_inside_vault_rejects_a_join_that_escapes_the_root(
+    tmp_path: Path,
+) -> None:
+    """kb_vault owns path containment now; kb-serve carries no join of
+    its own, so this is the one place the rule is checked."""
+    with pytest.raises(ValueError, match="resolves outside the vault"):
+        kb_serve.kb_vault.assert_inside_vault(
+            tmp_path, tmp_path / ".." / "elsewhere",
+        )
 
 
 # ── /put ────────────────────────────────────────────────────────────────
@@ -789,8 +954,11 @@ def test_a_negative_content_length_is_rejected(
     base_url, _ = live_server
     host, port = base_url.removeprefix("http://").split(":")
     with socket.create_connection((host, int(port)), timeout=5) as sock:
+        # An allowlisted Host and a JSON content type, so the request gets
+        # past the security baseline and the body cap is what answers.
         sock.sendall(
-            b"POST /put HTTP/1.1\r\nHost: kb\r\n"
+            b"POST /put HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+            b"Content-Type: application/json\r\n"
             b"Content-Length: -1\r\n\r\n"
         )
         status_line = sock.recv(4096).split(b"\r\n")[0]
@@ -804,8 +972,11 @@ def test_an_oversized_content_length_is_rejected(
     host, port = base_url.removeprefix("http://").split(":")
     oversized = kb_serve.MAX_BODY_BYTES + 1
     with socket.create_connection((host, int(port)), timeout=5) as sock:
+        # An allowlisted Host and a JSON content type, so the request gets
+        # past the security baseline and the body cap is what answers.
         sock.sendall(
-            b"POST /put HTTP/1.1\r\nHost: kb\r\n"
+            b"POST /put HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+            b"Content-Type: application/json\r\n"
             b"Content-Length: %d\r\n\r\n" % oversized
         )
         status_line = sock.recv(4096).split(b"\r\n")[0]

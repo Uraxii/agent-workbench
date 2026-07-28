@@ -117,6 +117,38 @@ INDEX_DB_NAME = "kb.db"
 # service read an unbounded body into memory.
 MAX_BODY_BYTES = 8 * 1024 * 1024
 
+# ── security baseline (docs/design/security-baseline-threat-model.md) ──
+# Loopback is NOT a trust boundary: any local process, including a browser
+# tab running an attacker's JavaScript against 127.0.0.1, can reach this
+# port. These constants are the workbench-wide baseline every non-artifact
+# service sends and enforces; keep them identical across services.
+
+# Every response, including errors. This service returns only JSON, so its
+# CSP can forbid literally every fetch: nothing here is ever a document.
+SECURITY_HEADERS = {
+    "Content-Security-Policy":
+        "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; "
+        "form-action 'none'; sandbox",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Cross-Origin-Resource-Policy": "same-origin",
+    "Cross-Origin-Embedder-Policy": "require-corp",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+    "Cache-Control": "no-store",
+}
+
+# Host header allowlist, checked per request: a DNS-rebinding attack sends
+# the attacker's own hostname while the browser treats the connection as
+# same-origin, so Origin alone cannot catch it.
+ALLOWED_HOST_NAMES = frozenset({"127.0.0.1", "localhost", "::1"})
+
+# Requiring a JSON body content type forces a CORS preflight on any
+# cross-origin POST; this service answers no preflight and sends no
+# Access-Control-Allow-Origin, so the browser blocks the real request.
+JSON_CONTENT_TYPE = "application/json"
+
 
 def kb_index_module() -> ModuleType:
     """The FTS5 index script (hyphenated filename, loaded by path)."""
@@ -357,13 +389,44 @@ class KbRequestHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args: object) -> None:
         log.info("%s - %s", self.address_string(), fmt % args)
 
+    def end_headers(self) -> None:
+        """Stamp the security baseline onto EVERY response.
+
+        Here rather than in _send_json so that the stdlib's own
+        send_error() replies (405/501 for methods this handler does not
+        implement) carry the headers too.
+        """
+        for name, value in SECURITY_HEADERS.items():
+            self.send_header(name, value)
+        super().end_headers()
+
     def _send_json(self, status: int, payload: dict[str, object]) -> None:
         body = json.dumps(payload).encode("utf-8")
         self.send_response(status)
-        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _reject_browser_origin(self) -> bool:
+        """Answer 403 and return True when the request looks like it came
+        from a web page rather than the CLI.
+
+        Two checks, because neither covers the other: a cross-origin
+        request carries an Origin header we never allowlist, and a
+        DNS-rebound request is same-origin (no Origin header at all) but
+        carries the attacker's hostname in Host.
+        """
+        if self.headers.get("Origin"):
+            self._send_json(403, {"error": "cross-origin requests are refused"})
+            return True
+        host = self.headers.get("Host", "")
+        # urlparse strips the :port and the IPv6 brackets for us.
+        hostname = urlparse(f"//{host}").hostname or ""
+        if hostname not in ALLOWED_HOST_NAMES:
+            self._send_json(403, {"error": f"unexpected Host header {host!r}"})
+            return True
+        return False
 
     def _read_json_body(self) -> dict[str, object]:
         length = int(self.headers.get("Content-Length", "0"))
@@ -382,6 +445,8 @@ class KbRequestHandler(BaseHTTPRequestHandler):
     # ── GET ───────────────────────────────────────────────────────────
 
     def do_GET(self) -> None:  # noqa: N802 stdlib override name
+        if self._reject_browser_origin():
+            return
         parsed = urlparse(self.path)
         params = parse_qs(parsed.query)
         routes = {
@@ -443,6 +508,14 @@ class KbRequestHandler(BaseHTTPRequestHandler):
     # ── POST ──────────────────────────────────────────────────────────
 
     def do_POST(self) -> None:  # noqa: N802 stdlib override name
+        if self._reject_browser_origin():
+            return
+        content_type = self.headers.get("Content-Type", "").split(";")[0].strip()
+        if content_type != JSON_CONTENT_TYPE:
+            return self._send_json(415, {
+                "error": f"Content-Type must be {JSON_CONTENT_TYPE}, "
+                         f"got {content_type or 'none'}",
+            })
         parsed = urlparse(self.path)
         try:
             payload = self._read_json_body()
