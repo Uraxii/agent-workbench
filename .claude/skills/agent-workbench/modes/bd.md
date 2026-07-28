@@ -27,19 +27,13 @@ same thing:
   -- bare-host, per-repo
   dev-workstation tool. Scans a free port and shows one project's own
   board. Use this for ad-hoc local inspection of a single repo.
-- **`bdui` (the always-on compose/quadlet-managed service)** -- a
-  `deploy`-managed quadlet unit like kb-serve and artifact-serve, not
-  compose-only: `deploy up` builds `localhost/bdui:latest`, installs
-  `scripts/bdui-container/bdui.container`, and health-checks
-  `http://127.0.0.1:3100/`; `deploy down` removes it if this bundle owns
-  the installed quadlet. It runs with `UserNS=keep-id` so the
-  container's user maps to the real host user, matching ownership of
-  the bind-mounted `$HOME/.beads-hub` board files (0700/0600). It serves the
+- **`bdui` (the always-on compose service)** -- brought up by
+  `docker-compose.yml` alongside kb-serve and artifact-serve, and
+  published at `http://127.0.0.1:3100/`. It serves the
   bd **hub aggregator** board (the cross-project view, not a single
-  repo) via the `${HOME}/.beads-hub` mount, and is also reachable via
+  repo) via the `${HOME}/.beads-hub` mount. Bring it up with
   `podman-compose -f docker-compose.yml up -d` (on by default in
-  compose, no profile gate). Either path publishes at
-  `http://127.0.0.1:3100`, built from
+  compose, no profile gate). It is built from
   `scripts/bdui-container/Containerfile`.
 
 Use `bd ui-up` for a quick look at one repo's board; use the always-on

@@ -11,13 +11,13 @@ import argparse
 import logging
 import subprocess
 
-from cli import artifact, bd, deploy, init_workspace, install, kb
+from cli import artifact, bd, doctor, init_workspace, install, kb
 
 __all__ = ["build_parser", "main"]
 
 log = logging.getLogger("agent-workbench")
 
-SUBCOMMAND_MODULES = (kb, bd, artifact, deploy, install, init_workspace)
+SUBCOMMAND_MODULES = (kb, bd, artifact, install, init_workspace, doctor)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -32,8 +32,8 @@ def build_parser() -> argparse.ArgumentParser:
         description="Locally deployable agent workbench: knowledgebase "
                      "vault (kb), bd board hub + web UI (bd), the "
                      "artifact review app (artifact), workspace scaffold "
-                     "(init-workspace), and hardened kb-serve/"
-                     "artifact-serve containers (deploy).",
+                     "(init-workspace), and fresh-machine prerequisite "
+                     "checks (doctor).",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
     for module in SUBCOMMAND_MODULES:

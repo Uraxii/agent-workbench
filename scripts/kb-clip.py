@@ -30,8 +30,12 @@ from email.message import Message
 from pathlib import Path
 from typing import IO
 
-import lxml.html
-from readability import Document
+# lxml and readability are imported inside the three functions that parse
+# HTML, not here. They ship in the kb-serve image, but scripts/kb-serve.py
+# also loads this module just to reach slugify()/build_note_path(), which are
+# pure stdlib -- an eager import made those two helpers unreachable anywhere
+# the parsing libraries are absent. Annotations below name lxml types and
+# stay valid because `from __future__ import annotations` defers them.
 
 USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -249,6 +253,8 @@ def html_to_markdown(fragment: str | lxml.html.HtmlElement) -> str:
     # here. A block nested inside another matched block (e.g. <p> inside
     # <li>) can double-count; rare in readability's cleaned output.
     """
+    import lxml.html
+
     tree = lxml.html.fromstring(fragment) if isinstance(fragment, str) else fragment
     lines: list[str] = []
     for el in tree.xpath(BLOCK_XPATH):
@@ -276,13 +282,22 @@ def pick_densest_container(tree: lxml.html.HtmlElement) -> lxml.html.HtmlElement
 def extract_body_markdown(html: str) -> str:
     """Extract main content: readability-lxml first, a densest-block
     fallback second (kept for a machine without the lib installed)."""
+    import lxml.html
+
     try:
+        # Imported here, inside the guarded block, so the fallback this
+        # docstring promises actually fires on a machine without readability.
+        # At module scope a missing readability killed the import instead,
+        # which made the fallback unreachable dead code.
+        from readability import Document
+
         markdown = html_to_markdown(Document(html).summary())
         if markdown.strip():
             return markdown
     except Exception as exc:  # noqa: BLE001 readability raises many
-        # parser-specific exception types across malformed real-world
-        # pages; any of them means "fall back", not "crash the clip".
+        # parser-specific exception types across malformed real-world pages,
+        # and ImportError joins them when the library is absent; any of them
+        # means "fall back", not "crash the clip".
         print(f"kb-clip: readability extraction failed ({exc}), using fallback", file=sys.stderr)
 
     # ponytail: densest <article>/<main>/<p> block, nav/script/style
@@ -379,6 +394,8 @@ def resolve_kb_home(cli_value: str | None) -> Path:
 
 def clip(url: str, project: str, kb_home: Path) -> Path:
     """Fetch url, extract metadata + body, write a type:source note."""
+    import lxml.html
+
     html = fetch_html(url)
     tree = lxml.html.fromstring(html)
     meta = parse_metadata(tree, url)

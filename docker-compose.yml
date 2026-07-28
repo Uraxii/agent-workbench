@@ -1,17 +1,11 @@
-# Portable, docker/podman-compose deploy artifact for the agent-workbench
-# stack (kb-serve, artifact-serve, n8n).
+# The deploy for the agent-workbench stack (kb-serve, artifact-serve, bdui,
+# n8n), run with `podman-compose up -d` or `docker compose up -d`.
 #
-# This COEXISTS with the live rootless-podman + systemd quadlet deploy
-# (scripts/kb-container/kb-serve.container,
-# .claude/skills/artifact-serve/container/artifact-serve.container,
-# scripts/n8n-container/n8n.container), driven by `agent-workbench deploy
-# up/down`. It does NOT replace that mechanism, and running this file does
-# NOT cut over the live stack. Quadlets remain the production path on this
-# host; this file exists for hosts without systemd-quadlet (plain Docker,
-# a cloud VM, etc).
+# Compose is the ONLY deploy path. The systemd quadlet units this file used
+# to coexist with have been deleted from the repo; nothing here depends on
+# systemd, so the same file works on any host with a container runtime.
 #
-# See the architecture decision for full rationale:
-# ~/.knowledgebase/agent-workbench/decisions/deploy-compose__2026-07-23.md
+# See README.md for the fresh-machine install steps.
 
 services:
   kb-serve:

@@ -1,44 +1,35 @@
 # artifact-serve container
 
-Rootless-podman packaging of `artifact-serve.py` for durable, boot-surviving
-deployment via a systemd user quadlet.
+Container packaging of `artifact-serve.py`.
 
 ## Files
 
 - `Containerfile` — builds the image (`python:3.13-slim`, stdlib-only, no
   `pip install`).
-- `artifact-serve.container` — the quadlet unit. Tracked copy; the install
-  target is `~/.config/containers/systemd/artifact-serve.container` (see
-  Install below).
 
-## Build
+## Build and run
 
-```bash
-cd /path/to/repo/.claude/skills/artifact-serve
-podman build -t localhost/artifact-serve:latest -f container/Containerfile .
-```
-
-## Install the quadlet
+The repo-root `docker-compose.yml` builds and runs this service. From the repo
+root:
 
 ```bash
-mkdir -p ~/.config/containers/systemd
-cp /path/to/repo/.claude/skills/artifact-serve/container/artifact-serve.container \
-   ~/.config/containers/systemd/artifact-serve.container
-systemctl --user daemon-reload
-systemctl --user start artifact-serve
+podman-compose up -d artifact-serve    # or: docker compose up -d artifact-serve
 ```
 
-The unit carries `WantedBy=default.target`, so quadlet auto-wires it into
-`default.target.wants` on every `daemon-reload`/boot — no separate
-`systemctl enable` needed. It also needs `loginctl enable-linger $USER` (a
-one-time, already-done step on this host) so the user's systemd instance
-keeps running, and the container with it, without an active login session.
-
-Re-run the `cp` + `daemon-reload` after any edit to the tracked quadlet file;
-the `~/.config/containers/systemd/` copy is the live one, not a symlink to
-the repo.
+See the repo-root README for the fresh-machine install sequence. The systemd
+user quadlet that used to live here has been deleted; compose is the only
+deploy path.
 
 ## Mounts and their security note
+
+> The mount table, the `--userns keep-id` note, and the `Network=host` note
+> below describe the retired quadlet deploy. `docker-compose.yml` makes
+> different choices (a narrower mount set with no `~` mount, a `user:` line
+> instead of `keep-id`, and a published `127.0.0.1:9099:9099` port instead of
+> host networking). Reconciling this section with what compose actually does
+> belongs to the container workstream, not the portability one; the analysis
+> is kept because the reasoning it records is still the reasoning that has to
+> be answered.
 
 artifact-serve stages every artifact into `/tmp/claude-artifacts/<project>/`
 as a **symlink** pointing at the real file elsewhere on disk (see
@@ -106,15 +97,13 @@ the only code change made to `artifact-serve.py` for containerization.
 
 ## Bare-to-container cutover
 
-1. Build the image and install the quadlet (above).
-2. Stop the bare instance with its own `stop` verb:
+1. Stop the bare instance with its own `stop` verb:
    ```bash
    /path/to/repo/.claude/skills/artifact-serve/scripts/artifact-serve.py stop
    ```
    Note: `stop` also runs `tailscale serve --https=443 off` as part of its
    normal shutdown — re-run the `tailscale serve --bg ...` command above
    once the container is up, to point port 443 back at 9099.
-3. `systemctl --user start artifact-serve` (or let the already-running unit
-   take over the now-free port).
-4. Verify: `curl http://127.0.0.1:9099/`, an artifact URL, and that
-   `systemctl --user restart artifact-serve` survives cleanly.
+2. Bring the service up with compose (see Build and run above).
+3. Verify: `curl http://127.0.0.1:9099/`, an artifact URL, and that the
+   container survives a restart.

@@ -37,23 +37,19 @@ that open the viewer). Code files use `...&view=code` (per-line comments).
 ## Step 0: is a server already running?
 
 ```bash
-$AW deploy status                                                    # preferred
 curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:9099/      # 200 = up
-systemctl --user is-active artifact-serve                           # container instance?
 ```
 
-If it answers 200 (or `deploy status` reports it up), skip to Publish. If
-NOT, deploy one (next section).
+If it answers 200, skip to Publish. If NOT, bring one up (next section).
 
-## Deploy a server (only if none is running)
+## Bring up a server (only if none is running)
 
-Preferred: rootless-podman container, durable across reboot (systemd
-quadlet), managed by this repo's deploy subcommand -- see the router
-SKILL.md's "Deploy + hardening" section for the full build/install/hardening
+Preferred: the compose stack, which is the only supported deploy path --
+see the router SKILL.md's "Deploy + hardening" section for the hardening
 detail:
 
 ```bash
-$AW deploy up
+podman-compose -f docker-compose.yml up -d artifact-serve
 ```
 
 Bare daemon (no container), fine for a quick one-off:
@@ -74,14 +70,14 @@ tailscale serve --bg --https=443 http://127.0.0.1:9099
 > secrets; the server follows pushed symlinks. `artifact-serve.py stop` also
 > runs `tailscale serve --https=443 off` as a side effect, tearing down the
 > 443 mapping; for the container prefer
-> `systemctl --user restart artifact-serve`.
+> `podman-compose -f docker-compose.yml restart artifact-serve`.
 
 **artifact-serve's network artifact-publish endpoint is NOT shipped.** It is
 held back pending an XSS lockdown (tracked as `agent-workbench-wxh`, P2,
 describing exactly this `/_/api/publish` same-origin-XSS finding, held by
-explicit user decision "mark as todo, no fix now" as of 2026-07-23). As
-deployed (quadlet or compose), artifact-serve is local/loopback-only
-(127.0.0.1-bound) -- do not assume or rely on a network publish path.
+explicit user decision "mark as todo, no fix now" as of 2026-07-23).
+artifact-serve is local/loopback-only (127.0.0.1-bound) -- do not assume
+or rely on a network publish path.
 
 ## Publish
 
@@ -344,8 +340,7 @@ works as user.
 
 - Feedback DB + uploads are durable at `$HOME/.local/share/claude-artifacts/`;
   the staging root `/tmp/claude-artifacts/` wipes on reboot (re-push after).
-- Container specifics (build context, quadlet install) live at
+- Container specifics (build context) live at
   `.claude/skills/artifact-serve/container/README.md`; the router
   SKILL.md's "Deploy + hardening" section is the current path for
-  building/installing via
-  `$HOME/.claude/skills/agent-workbench/agent-workbench deploy up`.
+  bringing the service up via `docker-compose.yml`.

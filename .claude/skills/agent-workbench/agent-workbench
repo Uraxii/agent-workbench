@@ -13,8 +13,6 @@ Subcommands (see each cli/*.py module docstring):
                     hub and board subcommands; ports of
                     scripts/beads-hub.sh and scripts/board-ui.sh)
     artifact        artifact review app ops (publish/feedback/serve/status)
-    deploy          build + run the kb-serve / artifact-serve containers
-                    (port of deploy/agent-workbench/agent-workbench)
     install         (un)install this repo's skill into ~/.claude/skills
     init-workspace  scaffold a repo's agent workspace (port of
                     scripts/init-agent-workspace.sh)
