@@ -13,12 +13,24 @@ services:
       context: ./scripts
       dockerfile: kb-container/Containerfile
     image: localhost/kb-serve:latest
-    # ponytail: "${UID:-1000}:${GID:-1000}" approximates the quadlet's
-    # `User=%U Group=%U UserNS=keep-id` (bind-mounted files come out owned
-    # by the real host user). Plain compose has no true user-namespace
-    # remap, so this is a best-effort stand-in, not equivalent. Drop it if
-    # `podman-compose config`/`convert` shows it doesn't translate cleanly.
-    user: "${UID:-1000}:${GID:-1000}"
+    # No `user:` override -- PROVEN broken, not just a cosmetic gap, same
+    # as artifact-serve/bdui below. `user: "${UID:-1000}:${GID:-1000}"`
+    # sets the container-internal uid, but plain compose has no real
+    # UserNS=keep-id remap: verified via `podman unshare cat
+    # /proc/self/uid_map` that container uid 1000 lands on an unrelated
+    # host subuid (525287 on this host), which owns nothing on the
+    # ~/.knowledgebase mount. kb.env is 0644 under a 0755 dir, so DAC
+    # alone would have permitted that read at subuid 525287 -- the
+    # PermissionError actually seen at startup was SELinux blocking it
+    # first (see the volumes comment below), which is what surfaced the
+    # problem before a write ever got the chance to EACCES on the DAC
+    # side. Every write route (`kb put`/`clip`/`decision`/`atomize`/
+    # `reindex`) still needs real ownership, so the DAC fix is required
+    # regardless of which failure was seen first. Omitting
+    # `user:` runs root-in-container, which under rootless podman's
+    # default subuid mapping IS the invoking host user for file-ownership
+    # purposes -- cap_drop ALL + no-new-privileges + read_only rootfs
+    # still apply, so this isn't a meaningfully weaker container.
     environment:
       KB_SERVE_HOST: "0.0.0.0"
       KB_SERVE_PORT: "9100"
@@ -41,7 +53,17 @@ services:
     ports:
       - "127.0.0.1:9100:9100"
     volumes:
-      - "${HOME}/.knowledgebase:${HOME}/.knowledgebase:rw"
+      # :z relabels the mount to container_file_t for shared container
+      # access. Without it, SELinux denies the container's context read on
+      # the host's user_home_t label -- a type denial (confirmed by the
+      # container's PermissionError plus the DAC perms being otherwise
+      # sufficient), not the private-MCS-category case `:Z` applies instead.
+      # Combined with dropping `user:` above (the DAC half of the same
+      # class of problem bd-serve/bdui already hit), this is the narrower
+      # sibling of their `security_opt: label:disable` fix: only this one
+      # mount gets relabeled rather than disabling SELinux confinement for
+      # the whole container.
+      - "${HOME}/.knowledgebase:${HOME}/.knowledgebase:rw,z"
     read_only: true
     cap_drop:
       - ALL
@@ -251,8 +273,13 @@ services:
     # down right now by user choice; run with `--profile n8n` to include it.
     profiles:
       - n8n
-    # ponytail: see kb-serve's user: comment -- same best-effort
-    # approximation of the quadlet's User/Group/UserNS=keep-id.
+    # ponytail: best-effort approximation of the quadlet's
+    # User/Group/UserNS=keep-id -- unlike kb-serve, which had to drop this
+    # override (see kb-serve's own comment above: plain compose has no
+    # real UserNS=keep-id remap, so this maps to an unrelated host subuid).
+    # n8n keeps the override for now since it isn't part of this cutover's
+    # compose bring-up (profiled off, running from a pre-existing container
+    # not started by this file) and untested here either way.
     user: "${UID:-1000}:${GID:-1000}"
     environment:
       N8N_PORT: "5678"
