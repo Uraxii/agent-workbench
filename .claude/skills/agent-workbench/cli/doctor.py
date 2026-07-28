@@ -282,12 +282,18 @@ def check_skill_install() -> Check:
         )
 
     head = paths.git_head(repo_root)
+    if head is None:
+        return Check(
+            name, False, True,
+            f"pinned at {short}, repo HEAD could not be read (staleness "
+            "not checked)",
+            "",
+        )
     if head == commit:
         return Check(name, False, True, f"pinned at {short}, matches repo HEAD", "")
     return Check(
         name, False, False,
-        f"stale -- installed at {short}, repo HEAD is now "
-        f"{(head or 'unknown')[:12]}",
+        f"stale -- installed at {short}, repo HEAD is now {head[:12]}",
         _copy_reinstall_hint(),
     )
 

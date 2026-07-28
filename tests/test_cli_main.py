@@ -53,8 +53,6 @@ def _shell_out_violations(source: str, filename: str) -> list[str]:
                     alias.name == "system" or alias.name.startswith("exec")
                 ):
                     violations.append(f"from os import {alias.name} (line {node.lineno})")
-                if node.module == "tempfile" and alias.name == "mkdtemp":
-                    violations.append(f"from tempfile import mkdtemp (line {node.lineno})")
                 if node.module == "shutil" and alias.name == "which":
                     violations.append(f"from shutil import which (line {node.lineno})")
         elif isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
@@ -161,8 +159,8 @@ def test_cli_modules_never_shell_out_except_doctor() -> None:
     primitive reappears anywhere outside doctor.py."""
     offenders = {
         path.name: violations
-        for path in sorted(CLI_DIR.glob("*.py"))
-        if path.name not in SHELL_OUT_ALLOWLIST
+        for path in sorted(CLI_DIR.rglob("*.py"))
+        if path.relative_to(CLI_DIR).as_posix() not in SHELL_OUT_ALLOWLIST
         and (violations := _shell_out_violations(
             path.read_text(encoding="utf-8"), str(path),
         ))

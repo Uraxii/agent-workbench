@@ -436,6 +436,30 @@ def test_skill_install_matches_repo_head_is_ok(
     assert result.fix_hint == ""
 
 
+def test_skill_install_head_unreadable_is_ok_not_stale(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """Marker source matches but `paths.git_head` returns None (HEAD could
+    not be read, e.g. a tarball checkout) -> ok, pinned short SHA shown,
+    never called "stale", no fix hint."""
+    target = tmp_path / "target"
+    repo_root = tmp_path / "repo"
+    commit = "deadbeef" * 5
+    source = str((repo_root / ".claude" / "skills" / "agent-workbench").resolve())
+    _write_marker(target, commit, source=source)
+    monkeypatch.setattr(doctor.install, "install_target", lambda: target)
+    monkeypatch.setattr(doctor.paths, "repo_root", lambda: repo_root)
+    monkeypatch.setattr(doctor.paths, "git_head", lambda root: None)
+
+    result = doctor.check_skill_install()
+
+    assert result.ok is True
+    assert "stale --" not in result.detail
+    assert commit[:12] in result.detail
+    assert "could not be read" in result.detail
+    assert result.fix_hint == ""
+
+
 def test_skill_install_stale_marker_is_not_ok(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
@@ -583,6 +607,7 @@ def test_run_checks_includes_skill_install(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
     """`run_checks` (and therefore --json) includes the new check by name."""
+    _all_present(monkeypatch, tmp_path)
     monkeypatch.setattr(doctor.install, "install_target", lambda: tmp_path / "gone")
 
     names = [c.name for c in doctor.run_checks()]
