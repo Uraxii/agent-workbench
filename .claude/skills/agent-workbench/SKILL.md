@@ -17,23 +17,22 @@ $AW <subcommand> [ARGS]
 
 ## Subcommands
 
-| Subcommand | Replaces | Purpose |
-|---|---|---|
-| `kb` | `scripts/kb.sh` | knowledgebase service client: init/add/path/index/clip/put/query/atomize/status/decision |
-| `bd` | `scripts/beads-hub.sh` + `scripts/board-ui.sh` | bd board hub (init/add/sync/list/path/status) + bdui web front end (ui-up/ui-down/ui-status, bare-host, per-repo -- separate from the always-on compose `bdui` service below, which is the single global hub-aggregator view) |
-| `artifact` | (new) | artifact review service client: publish/feedback/serve/status, an HTTP client of the `artifact-review` service in `apps/artifact-review/` |
-| `install` | (new) | (un)install this repo's skill into `$HOME/.claude/skills/agent-workbench` (`--link`/`--copy`/`--uninstall`) |
-| `init-workspace` | `scripts/init-agent-workspace.sh` | scaffold docs/kb + workstreams + bd board into a repo |
+| Subcommand | Purpose |
+|---|---|
+| `kb` | knowledgebase service client (see modes/kb.md for verbs and detailed walkthrough) |
+| `bd` | bd board hub + bdui web front end (see modes/bd.md for verbs and detailed walkthrough) |
+| `artifact` | artifact review service client (see modes/artifact.md for verbs and detailed walkthrough) |
+| `install` | (un)install this repo's skill into `$HOME/.claude/skills/agent-workbench` |
+| `init-workspace` | scaffold docs/kb + workstreams + bd board into a repo |
+| `doctor` | prerequisite checks and install diagnostics |
 
-- `kb` -- see `modes/kb.md` for the full kb walkthrough (clip/put/query,
-  decisions, the derived-index rebuild, the optional LLM passes).
-- `bd` -- see `modes/bd.md` for board-hub + bdui detail (bare-host
-  `ui-up` vs the always-on hub-aggregator `bdui` service).
-- `artifact` -- see `modes/artifact.md` for the artifact review app
-  (publish/feedback/serve/status), which now also carries everything the
-  retired standalone `artifact-svc` skill used to document.
+For the full verb list and invocation examples for each subcommand family,
+see the corresponding mode doc:
+- `modes/kb.md` for kb verbs (clip/put/query/atomize/decision/enrich/etc)
+- `modes/bd.md` for bd verbs (init/add/sync/repos/path/status + issue operations + ui status)
+- `modes/artifact.md` for artifact verbs (publish/feedback/status + new comment/reply/resolve)
 
-### install / init-workspace
+## install / init-workspace
 
 ```bash
 $AW install --link
@@ -89,58 +88,11 @@ containers are running (compose binds the paths at container start); only
 `BEADS_HUB_DIR` is read directly by the Python code. See the env.example
 comments.
 
-**artifact-svc's network artifact-publish endpoint is NOT shipped.** It
-is held back pending an XSS lockdown (tracked as `agent-workbench-wxh`).
-artifact-svc is local/loopback-only (127.0.0.1-bound) -- do not assume
-or rely on a network publish path. See `modes/artifact.md` for the full
-detail on this holdback.
+artifact-svc's publish endpoint is enabled and loopback-only (127.0.0.1-bound).
+It is driven by `artifact publish` and is the only publish path.
+See `modes/artifact.md` for the full detail.
 
-## n8n Public API (agent-facing)
+## n8n Public API
 
-n8n's Public REST API is enabled (pinned in `docker-compose.yml`), letting an
-agent create and trigger workflows without a human in the loop for the
-API calls themselves.
-
-**One-time human bootstrap** (already done for the owner account setup;
-only the API key step remains): log into the n8n editor at
-http://127.0.0.1:5678, go to Settings -> n8n API -> Create an API Key,
-then store the value per `scripts/n8n-container/n8n.env.example`'s
-`N8N_API_KEY` / `N8N_API_KEY_CMD` Mode 2 block. There is no headless mint
-path for this key in n8n Community edition.
-
-**Agent resolves the key:**
-
-```bash
-API_KEY=$(scripts/n8n-container/n8n-secret.py resolve-api-key --data-dir $HOME/.local/share/n8n)
-```
-
-**Create a workflow** (body = a workflow JSON file):
-
-```bash
-curl -X POST http://127.0.0.1:5678/api/v1/workflows \
-  -H "Content-Type: application/json" \
-  -H "X-N8N-API-KEY: $API_KEY" \
-  --data @path/to/workflow.json
-```
-
-**Activate it** (makes its trigger nodes live):
-
-```bash
-curl -X POST http://127.0.0.1:5678/api/v1/workflows/<id>/activate \
-  -H "X-N8N-API-KEY: $API_KEY"
-```
-
-**Trigger an already-activated Webhook-triggered workflow** (no API key
-needed for the webhook call itself, only the two calls above use it):
-
-```bash
-curl -X POST http://127.0.0.1:5678/webhook/<path>
-```
-
-This only works for workflows containing a Webhook trigger node. The
-starter workflow at `workflows/image-approval-pipeline.n8n.json` uses a
-Form Trigger instead, so it is NOT webhook-triggerable as-is -- a
-separate, already-ticketed workflow-design concern.
-
-All endpoints above are `http://127.0.0.1:5678` (loopback-published;
-reachable over Tailscale via the host, same as the rest of this stack).
+n8n integration is currently inactive and not driven through this CLI.
+See https://github.com/TODO/agent-workbench/issues/TODO for status.

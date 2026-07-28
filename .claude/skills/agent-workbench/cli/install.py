@@ -6,11 +6,12 @@ Replaces hand-managed symlinks with a scripted, reversible step:
                  .claude/skills/agent-workbench (replaces any existing
                  symlink there; refuses a real dir or file)
     --copy       same target, but a recursive copy instead of a symlink
-                 (__pycache__ excluded)
-    --uninstall  remove ~/.claude/skills/agent-workbench, but only if it
-                 is a symlink pointing at this repo's skill dir -- refuses
-                 (does nothing) on a real dir or a symlink elsewhere, so a
-                 different install is never deleted by accident
+                 (__pycache__ excluded); stamps the install with a marker
+                 file so --uninstall can safely remove it
+    --uninstall  remove ~/.claude/skills/agent-workbench; succeeds on a
+                 symlink pointing at this repo's skill dir, or on a real
+                 dir stamped by --copy; refuses otherwise to avoid
+                 deleting a different install
 
 Flags are mutually exclusive; exactly one is required.
 """
@@ -23,6 +24,9 @@ from pathlib import Path
 from cli import paths
 
 __all__ = ["register", "install_target"]
+
+# Marker file written by --copy to indicate the install can be safely removed.
+INSTALL_MARKER = ".installed-by-agent-workbench"
 
 
 def register(subparsers: argparse._SubParsersAction) -> None:
@@ -66,26 +70,50 @@ def _install_link(target: Path, source: Path) -> None:
 
 
 def _install_copy(target: Path, source: Path) -> None:
-    """Recursively copy ``source`` over ``target`` (__pycache__ excluded)."""
+    """Recursively copy ``source`` over ``target`` (__pycache__ excluded).
+    
+    Stamps the install with INSTALL_MARKER so --uninstall can safely
+    remove it later.
+    """
     if target.is_symlink():
         target.unlink()
     shutil.copytree(source, target, dirs_exist_ok=True, ignore=_ignore_pycache)
+    (target / INSTALL_MARKER).touch()
     print(f"agent-workbench: copied {source} -> {target}")
 
 
-def _uninstall(target: Path, source: Path) -> None:
-    """Remove ``target`` only if it is a symlink pointing at ``source``."""
+def _uninstall(target: Path, source: Path) -> bool:
+    """Remove ``target`` if it is a symlink pointing at ``source`` or a
+    stamped copy install.
+    
+    Returns: True if uninstall succeeded, False if refused.
+    """
     if not target.exists() and not target.is_symlink():
         print(f"agent-workbench: nothing installed at {target}")
-        return
-    if not (target.is_symlink() and target.resolve() == source.resolve()):
-        print(
-            f"agent-workbench: refusing to remove {target} -- not this repo's "
-            "own symlink (real dir, or points elsewhere)",
-        )
-        return
-    target.unlink()
-    print(f"agent-workbench: removed {target}")
+        return True
+    
+    # Case 1: symlink pointing to this repo's skill dir (old installs)
+    if target.is_symlink() and target.resolve() == source.resolve():
+        target.unlink()
+        print(f"agent-workbench: removed symlink {target}")
+        return True
+    
+    # Case 2: real dir stamped by --copy install
+    if (
+        target.is_dir()
+        and not target.is_symlink()
+        and (target / INSTALL_MARKER).exists()
+    ):
+        shutil.rmtree(target)
+        print(f"agent-workbench: removed stamped copy install at {target}")
+        return True
+    
+    # Refuse: not ours to delete
+    print(
+        f"agent-workbench: refusing to remove {target} -- not this repo's "
+        "own symlink or stamped copy install (real dir, or points elsewhere)",
+    )
+    return False
 
 
 def cmd_install(args: argparse.Namespace) -> int:
@@ -93,8 +121,9 @@ def cmd_install(args: argparse.Namespace) -> int:
     target, source = install_target(), source_dir()
     if args.link:
         _install_link(target, source)
+        return 0
     elif args.copy:
         _install_copy(target, source)
-    else:
-        _uninstall(target, source)
-    return 0
+        return 0
+    else:  # args.uninstall
+        return 0 if _uninstall(target, source) else 1
