@@ -538,7 +538,11 @@ class KbRequestHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802 stdlib override name
         if self._reject_browser_origin():
             return
-        content_type = self.headers.get("Content-Type", "").split(";")[0].strip()
+        # Media types are case-insensitive (RFC 9110), so compare folded:
+        # "Application/JSON" is the same type and must not be refused.
+        content_type = (
+            self.headers.get("Content-Type", "").split(";")[0].strip().lower()
+        )
         if content_type != JSON_CONTENT_TYPE:
             return self._send_json(415, {
                 "error": f"Content-Type must be {JSON_CONTENT_TYPE}, "

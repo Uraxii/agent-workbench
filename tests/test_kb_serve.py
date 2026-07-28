@@ -276,6 +276,22 @@ def test_a_duplicate_content_length_is_refused(
     assert b"400" in status_line
 
 
+@pytest.mark.parametrize(
+    "content_type",
+    ["application/json", "Application/JSON", "APPLICATION/JSON",
+     "application/json; charset=utf-8"],
+)
+def test_a_case_folded_json_content_type_is_accepted(
+    live_server: tuple[str, KbServeConfig], content_type: str,
+) -> None:
+    """Media types are case-insensitive (RFC 9110). Refusing
+    "Application/JSON" would reject a spec-compliant client."""
+    status, _ = _post(
+        live_server[0], "/reindex", {}, headers={"Content-Type": content_type},
+    )
+    assert status == 200
+
+
 def test_kb_and_bd_enforce_the_same_security_baseline() -> None:
     """The baseline is workbench-wide. If one service gains a guard the
     other does not, this is what says so before it ships."""

@@ -104,7 +104,7 @@ reply being re-interpreted as a document.
 No service ever sends `Access-Control-Allow-Origin`. There is no legitimate
 cross-origin consumer: the only client is the CLI.
 
-Alongside the headers, every service enforces three request-side rules,
+Alongside the headers, every service enforces four request-side rules,
 because headers on the reply do not stop a request that has already taken
 effect:
 
@@ -118,6 +118,21 @@ effect:
    415. A JSON content type is not a CORS "simple request", so a
    cross-origin POST must first win a preflight, and a service that answers
    no preflight and sends no CORS headers fails it.
+4. **Refuse any request this service cannot frame exactly.** Rules 1-3 all
+   read one header and act on its value, so they are only as good as the
+   guarantee that the value read is the value that took effect. Four cases
+   break that guarantee, and each is refused:
+   - a second `Host` header, so the checked value and the value anything in
+     front of the service reads can differ
+   - an absolute-form request target (`GET http://elsewhere/path`), so
+     routing reads one authority while `Host` claims another
+   - `Transfer-Encoding`, because a body this service cannot frame would
+     otherwise be read as no body at all, silently turning "here is my
+     body" into "run the endpoint on its defaults"
+   - a duplicate or out-of-range `Content-Length`, for the same reason
+
+   These are what keep the first three rules from being bypassable rather
+   than an extra layer on top of them.
 
 ### Routes that serve user-supplied content
 
