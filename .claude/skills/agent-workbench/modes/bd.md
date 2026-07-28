@@ -17,6 +17,24 @@ Response shape for every verb: one JSON object on stdout with keys `ok`,
 payload -- an object for hub verbs, a list of issue objects for
 list/show/ready/search/dep.
 
+## Verifying against a scratch instance (not the live stack)
+
+Never probe the live bd-svc (port 9101, the real `~/.beads-hub`) to verify
+a change works -- that leaves permanent residue in the real board hub. Use
+`scratch`, which brings up a throwaway bd-svc against a fresh temp data
+dir, runs the wrapped command, and tears both down when it returns:
+
+```bash
+AW=$HOME/.claude/skills/agent-workbench/agent-workbench
+$AW scratch bd -- $AW bd status
+# -> agent-workbench scratch: bd-svc up at 127.0.0.1:<random port>
+# -> {"hub_root": "/tmp/aw-scratch-XXXXXXXX", "initialized": false, "repos": []}
+```
+
+Same response shape as a live `bd status`, except `hub_root` points at the
+scratch dir instead of the real hub. See `SKILL.md` for the full `scratch`
+contract (any `bd` verb works the same way inside it).
+
 ## Hub verbs
 
 ```bash

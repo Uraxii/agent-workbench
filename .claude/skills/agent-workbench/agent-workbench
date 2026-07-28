@@ -17,6 +17,8 @@ Subcommands (see each cli/*.py module docstring):
     init-workspace  scaffold a repo's agent workspace (port of
                     scripts/init-agent-workspace.sh)
     doctor          prerequisite checks and install diagnostics
+    scratch         run a command against a throwaway service instance,
+                    never the live stack
 """
 from __future__ import annotations
 

@@ -26,7 +26,8 @@ def run_cli(*args: str) -> subprocess.CompletedProcess[str]:
 
 
 def test_top_level_help_lists_expected_subcommands() -> None:
-    """--help lists kb/bd/artifact/install/init-workspace/doctor, not hub/board/deploy."""
+    """--help lists kb/bd/artifact/install/init-workspace/doctor/scratch,
+    not hub/board/deploy."""
     result = run_cli("--help")
     assert result.returncode == 0
     assert "kb" in result.stdout
@@ -35,11 +36,15 @@ def test_top_level_help_lists_expected_subcommands() -> None:
     assert "install" in result.stdout
     assert "init-workspace" in result.stdout
     assert "doctor" in result.stdout
+    assert "scratch" in result.stdout
     # The old separate top-level `hub`/`board` subcommands were folded into
     # `bd`; the exact choices set proves they no longer appear as top-level
     # subcommands (a stray "hub"/"board" would only show up folded inside
     # `bd`'s own help text, checked separately in test_bd_help_lists_*).
-    assert "{kb,bd,artifact,install,init-workspace,doctor}" in result.stdout
+    assert (
+        "{kb,bd,artifact,install,init-workspace,doctor,scratch}"
+        in result.stdout
+    )
 
 
 @pytest.mark.parametrize("flag", ["--help", "-h"])

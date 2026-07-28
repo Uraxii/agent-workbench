@@ -71,6 +71,7 @@ def test_build_parser_registers_every_subcommand() -> None:
     ]
     assert set(command_action.choices) == {
         "kb", "bd", "artifact", "install", "init-workspace", "doctor",
+        "scratch",
     }
 
 

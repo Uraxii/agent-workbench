@@ -23,6 +23,27 @@ If the service is down or returns bad data, the command exits non-zero and
 prints the failed verb, full URL, and underlying error to stderr. There is no
 filesystem fallback.
 
+## Verifying against a scratch instance (not the live stack)
+
+Never probe the live artifact-svc (port 9099, the real
+`/tmp/artifacts` + `~/.local/share/artifacts`) to verify a change works --
+that leaves permanent residue in the real artifact store. Use `scratch`,
+which brings up a throwaway artifact-svc against a fresh temp data dir,
+runs the wrapped command, and tears both down when it returns:
+
+```bash
+AW=$HOME/.claude/skills/agent-workbench/agent-workbench
+$AW scratch artifact -- $AW artifact status
+# -> agent-workbench scratch: artifact-svc up at 127.0.0.1:<random port>
+# -> {"artifacts": [], "endpoint": "http://127.0.0.1:<random port>",
+#     "health": {"status": "ok"}}
+```
+
+Same response shape as a live `artifact status`, except `artifacts` is
+empty (the scratch store is brand new) and `endpoint` points at the
+scratch port. See `SKILL.md` for the full `scratch` contract (any
+`artifact` verb, including `publish`, works the same way inside it).
+
 ## Publish
 
 Publish a file or directory as a new artifact for review.

@@ -16,6 +16,23 @@ Service address: `KB_SVC_HOST` (default `127.0.0.1`) and
 AW=$HOME/.claude/skills/agent-workbench/agent-workbench
 ```
 
+## Verifying against a scratch instance (not the live stack)
+
+Never probe the live kb-svc (port 9100, the real `~/.knowledgebase`) to
+verify a change works -- that leaves permanent residue in the real vault.
+Use `scratch`, which brings up a throwaway kb-svc against a fresh temp
+data dir, runs the wrapped command, and tears both down when it returns:
+
+```bash
+$AW scratch kb -- $AW kb status
+# -> agent-workbench scratch: kb-svc up at 127.0.0.1:<random port>
+# -> {"kb_home": "/tmp/aw-scratch-XXXXXXXX", "initialized": true, "projects": []}
+```
+
+Same response shape as a live `kb status`, except `kb_home` points at the
+scratch dir instead of the real vault. See `SKILL.md` for the full
+`scratch` contract (any `kb` verb works the same way inside it).
+
 When a request makes at least one model call, the response includes a `usage`
 key with `calls` (HTTP calls made), token counts (summed across calls),
 `generation_ids` (provider ids in call order, for billing reconciliation),

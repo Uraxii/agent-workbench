@@ -25,12 +25,41 @@ $AW <subcommand> [ARGS]
 | `install` | (un)install this repo's skill into `$HOME/.claude/skills/agent-workbench` |
 | `init-workspace` | scaffold docs/kb + workstreams + bd board into a repo |
 | `doctor` | prerequisite checks and install diagnostics |
+| `scratch` | run a command against a throwaway `kb`/`bd`/`artifact` instance instead of the live stack (see below) |
 
 For the full verb list and invocation examples for each subcommand family,
 see the corresponding mode doc:
 - `modes/kb.md` for kb verbs (clip/put/query/atomize/decision/enrich/etc)
 - `modes/bd.md` for bd verbs (init/add/sync/repos/path/status + issue operations + ui status)
 - `modes/artifact.md` for artifact verbs (publish/feedback/status + new comment/reply/resolve)
+
+## Verification goes through `scratch`, never the live stack
+
+Probing the live stack (curling `127.0.0.1:9099`/`9100`/`9101`, or any
+`kb`/`bd`/`artifact` verb with no `KB_SVC_*`/`BD_SVC_*`/`ARTIFACT_SVC_*`
+override) to verify a change is NOT an acceptable verification method. It
+permanently mutates the real vault, the real board hub, or the real
+artifact store. HTTP-surface verification of kb-svc/bd-svc/artifact-svc
+goes through `scratch` instead:
+
+```bash
+$AW scratch <kb|bd|artifact> -- <command...>
+```
+
+This brings up ONE throwaway container for that service against a fresh
+temp data dir on a random free host port, exports the same
+`KB_SVC_HOST`/`KB_SVC_PORT` (etc.) env vars the `kb`/`bd`/`artifact`
+clients already read so `<command...>` transparently talks to the scratch
+instance, runs it, and tears the container + temp dir down in a `finally`
+-- self-cleaning even on failure or Ctrl-C. Exit code is the command's
+exit code. There is no separate up/down mode: chain multi-step probes
+inside the single wrapped command, e.g. `-- bash -c 'first && second'`.
+
+Requires a repo checkout (it reuses `docker-compose.yml` +
+`docker-compose.scratch.yml` at the repo root) and `podman-compose` on
+PATH; fails loudly and non-zero, never falling back to the live stack, if
+either is missing. See `modes/kb.md`, `modes/bd.md`, `modes/artifact.md`
+for a worked example against each service.
 
 ## install / init-workspace
 

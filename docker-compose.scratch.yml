@@ -1,0 +1,64 @@
+# Override for `agent-workbench scratch <kb|bd|artifact> -- <command...>`
+# (cli/scratch.py). Brings up ONE throwaway instance of a service against a
+# scratch data dir, published on a random free host port, torn down
+# (`down -v`) by the same run. Never used standalone -- always layered on
+# top of docker-compose.yml with `-f docker-compose.yml -f
+# docker-compose.scratch.yml`, so every service keeps that file's hardening
+# (read_only rootfs, cap_drop ALL, no-new-privileges, tmpfs /tmp,
+# healthcheck) unchanged. Only ports/volumes/environment/restart are
+# overridden here, to point at the scratch dir instead of the real data
+# root and publish on an ephemeral port instead of the fixed 9099/9100/9101.
+#
+# The __AW_SCRATCH__ placeholder is substituted by cli/scratch.py with the
+# real scratch dir path via plain string replace BEFORE this file is ever
+# handed to podman-compose -- deliberately NOT a compose `${VAR}`.
+# podman-compose 1.6.0's `!override` YAML tag captures each scalar's RAW
+# pre-substitution text, so a `${VAR}` written inside an `!override:` block
+# is never resolved (verified: both `up` and `config` raise `RuntimeError:
+# volume [${VAR}] not defined in top level`, because the unresolved
+# "${VAR}" string doesn't look like a bind-mount path and gets treated as
+# an undeclared named volume instead).
+#
+# `!override` itself (rather than a plain key) is required because
+# compose's default list-merge behavior APPENDS `ports`/`volumes` instead
+# of replacing them -- verified via `podman-compose ... config`: a plain
+# override left BOTH the real 127.0.0.1:9100:9100 publish AND the real
+# ~/.knowledgebase bind mount active alongside the scratch ones, which is
+# exactly the live-data exposure this command exists to prevent.
+services:
+  kb-svc:
+    # Decouples scratch from the real, optional ~/.knowledgebase/kb.env:
+    # absent on a fresh host, present or not it never affects scratch.
+    env_file: !override []
+    ports: !override
+      - "127.0.0.1::9100"
+    volumes: !override
+      - "__AW_SCRATCH__:__AW_SCRATCH__:rw,z"
+    environment:
+      KB_HOME: "__AW_SCRATCH__"
+      HOME: "__AW_SCRATCH__"
+    restart: "no"
+
+  bd-svc:
+    ports: !override
+      - "127.0.0.1::9101"
+    volumes: !override
+      - "__AW_SCRATCH__:__AW_SCRATCH__:rw"
+    environment:
+      BEADS_HUB_DIR: "__AW_SCRATCH__"
+    restart: "no"
+
+  artifact-svc:
+    ports: !override
+      - "127.0.0.1::9099"
+    volumes: !override
+      - "__AW_SCRATCH__/stage:__AW_SCRATCH__/stage:rw,z"
+      - "__AW_SCRATCH__/feedback:__AW_SCRATCH__/feedback:rw,z"
+    environment:
+      ARTIFACT_SVC_STAGE_ROOT: "__AW_SCRATCH__/stage"
+      ARTIFACT_SVC_FEEDBACK_ROOT: "__AW_SCRATCH__/feedback"
+      # Mirrors bd-svc/bdui's own container-internal HOME=/tmp -- scratch
+      # never needs the real host HOME here, only the tmpfs /tmp already
+      # granted by docker-compose.yml.
+      HOME: "/tmp"
+    restart: "no"
