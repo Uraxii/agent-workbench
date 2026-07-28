@@ -176,6 +176,12 @@ def test_build_runs_by_default(
     builds a missing image, so without this a stale `:scratch` tag left
     over from an earlier branch would be reused forever.
     """
+    # The PARSER DEFAULT is the fix, so assert on it directly. Handing
+    # cmd_scratch a hand-built `build=True` namespace only exercises
+    # _bring_up's dispatch and passes even with the default flipped back
+    # to opt-in, which is the exact defect this test exists to catch.
+    assert scratch.build_parser().parse_args(["kb"]).build is True
+
     calls = _stub_compose(tmp_path, monkeypatch)
     args = argparse.Namespace(service="kb", command=["true"], build=True)
     scratch.cmd_scratch(args)

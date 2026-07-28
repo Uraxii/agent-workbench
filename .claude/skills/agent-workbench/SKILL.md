@@ -82,8 +82,11 @@ inside the wrapped command (`scratch.py bd -- ... && $AW kb ...` will
 fail loudly, by design), and do not nest `scratch` runs -- there is no
 bookkeeping to keep an outer run's service live inside an inner one, so a
 nested call re-sentinels it and fails loudly on the `.invalid` DNS error.
-To probe two services, chain multi-step calls inside the single wrapped
-command instead, e.g. `-- bash -c 'first && second'`.
+
+**There is therefore no supported way to probe two services in one
+`scratch` run.** Run `scratch` once per service. Within a single run you
+can chain as many steps as you like against *that* service, e.g.
+`-- bash -c 'first && second'`.
 
 Requires a repo checkout (it reuses `docker-compose.yml` +
 `docker-compose.scratch.yml` at the repo root) and `podman-compose` on

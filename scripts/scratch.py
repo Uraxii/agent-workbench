@@ -97,10 +97,18 @@ def _scratch_image(spec: ServiceSpec) -> str:
 
 def build_parser() -> argparse.ArgumentParser:
     """Build the `scratch.py` parser: SERVICE followed by `-- COMMAND...`."""
+    # `_split_argv` consumes the wrapped command before argparse ever sees
+    # it, so there is no `command` positional for argparse to document.
+    # Spell the `-- COMMAND...` half in `usage` by hand, or `--help` would
+    # advertise an invocation that always errors.
     parser = argparse.ArgumentParser(
         prog="scratch.py",
+        usage="scratch.py [-h] [--no-build] {artifact,bd,kb} -- COMMAND...",
         description="run a command against a throwaway service instance, "
                      "never the live stack",
+        epilog="COMMAND is everything after the literal `--`, e.g. "
+               "`scratch.py kb -- kb query 'foo'`. Chain multi-step probes "
+               "inside one command: `-- bash -c 'first && second'`.",
     )
     parser.add_argument("service", choices=sorted(SERVICES))
     parser.add_argument(
@@ -121,8 +129,8 @@ def _split_argv(argv: list[str]) -> tuple[list[str], list[str]]:
 
     Done by hand rather than via argparse `nargs=REMAINDER` on a trailing
     `command` argument: REMAINDER swallows any later recognized flag (e.g.
-    `--build`) into the wrapped command once positional matching begins,
-    breaking `scratch.py kb --build -- true` (--build after the service).
+    `--no-build`) into the wrapped command once positional matching begins,
+    breaking `scratch.py kb --no-build -- true` (flag after the service).
     """
     if "--" in argv:
         idx = argv.index("--")

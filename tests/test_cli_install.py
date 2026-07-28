@@ -202,16 +202,19 @@ def test_install_copy_removes_temp_dir_when_copytree_fails(
     for skills, so a surviving ``*.tmp-<pid>`` there (carrying a valid
     marker once `_write_marker` has run) would register as a second,
     permanently stale copy of the skill."""
-    def fail_copytree(*_args: object, **_kwargs: object) -> None:
+    # Fail AFTER copytree has populated the temp dir. Failing copytree
+    # itself leaves nothing on disk to clean up, so such a test passes
+    # even with the `finally` deleted -- it can never catch the defect.
+    def fail_write_marker(*_args: object, **_kwargs: object) -> None:
         raise OSError("disk full")
 
-    monkeypatch.setattr(install.shutil, "copytree", fail_copytree)
+    monkeypatch.setattr(install, "_write_marker", fail_write_marker)
 
     with pytest.raises(OSError, match="disk full"):
         install._install_copy(target, source)
 
     leftovers = list(target.parent.glob(f"{target.name}.tmp-*"))
-    assert leftovers == []
+    assert leftovers == [], f"temp dir survived: {leftovers}"
 
 
 def test_uninstall_removes_correctly_pointing_symlink(
