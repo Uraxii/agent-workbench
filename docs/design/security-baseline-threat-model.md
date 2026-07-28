@@ -39,7 +39,7 @@ nobody else.
 | Service | Port | Data it owns | Worst thing reachable through it |
 |---|---|---|---|
 | kb (`scripts/kb-serve.py`) | 9100 | `~/.knowledgebase`, the whole personal vault | Read every note; write arbitrary markdown into the vault; make the server fetch an arbitrary URL (`/clip`, `/atomize`); spend money against the configured LLM key when `KB_ENRICH=1` |
-| artifact | 9099 | `~/.local/share/claude-artifacts`, staged review artifacts | Serves attacker-authored HTML and SVG **and** its own review UI. Scripted content from the same origin as the UI is full control of the UI |
+| artifact | 9099 | `~/.local/share/artifacts`, staged review artifacts | Serves attacker-authored HTML and SVG **and** its own review UI. Scripted content from the same origin as the UI is full control of the UI |
 | bd | 3100 (bdui today) | `~/.beads-hub`, every board in every project | Read and rewrite issue state across all projects |
 | n8n | 5678 | workflow definitions and credentials | Third-party, opt-in, profiled off. Out of scope here beyond "do not treat its port as private" |
 

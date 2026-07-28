@@ -237,6 +237,7 @@ def test_publish_without_csrf_token_is_rejected(roots: tuple[Path, Path, Path]) 
     )
 
     assert response.status_code == 403
+    _assert_app_security_headers(response)
 
 
 def test_publish_with_valid_csrf_token_succeeds(roots: tuple[Path, Path, Path]) -> None:
@@ -560,6 +561,24 @@ def test_publish_unexpected_exception_returns_json_error(
     assert "RuntimeError" not in response.text
 
 
+def test_disallowed_host_returns_400_with_security_headers() -> None:
+    """DisallowedHost errors carry security headers."""
+    client = Client()
+    response = client.get("/_/health", HTTP_HOST="evil.example")
+
+    assert response.status_code == 400
+    _assert_app_security_headers(response)
+
+
+def test_method_not_allowed_carries_security_headers() -> None:
+    """Method not allowed responses carry security headers."""
+    client = Client()
+    response = client.delete("/_/api/threads")
+
+    assert response.status_code == 405
+    _assert_app_security_headers(response)
+
+
 def _publish(
     client: Client,
     members: dict[str, bytes],
@@ -592,6 +611,14 @@ def _assert_artifact_security_headers(response: HttpResponse) -> None:
     assert _csp_directive_present(csp, "sandbox")
     assert "script-src 'none'" in csp
     assert response.headers["X-Content-Type-Options"] == "nosniff"
+    assert response.headers["Referrer-Policy"] == "no-referrer"
+    assert response.headers["X-Frame-Options"] == "SAMEORIGIN"
+    assert response.headers["Cross-Origin-Opener-Policy"] == "same-origin"
+    assert response.headers["Cross-Origin-Resource-Policy"] == "same-origin"
+    assert response.headers["Cross-Origin-Embedder-Policy"] == "require-corp"
+    assert "Permissions-Policy" in response.headers
+    assert response.headers["Cache-Control"] == "no-store"
+    assert "Access-Control-Allow-Origin" not in response.headers
     assert csp != APP_CSP
 
 
@@ -600,6 +627,14 @@ def _assert_app_security_headers(response: HttpResponse) -> None:
     assert csp == APP_CSP
     assert csp != ARTIFACT_CSP
     assert response.headers["X-Content-Type-Options"] == "nosniff"
+    assert response.headers["Referrer-Policy"] == "no-referrer"
+    assert response.headers["X-Frame-Options"] == "DENY"
+    assert response.headers["Cross-Origin-Opener-Policy"] == "same-origin"
+    assert response.headers["Cross-Origin-Resource-Policy"] == "same-origin"
+    assert response.headers["Cross-Origin-Embedder-Policy"] == "require-corp"
+    assert "Permissions-Policy" in response.headers
+    assert response.headers["Cache-Control"] == "no-store"
+    assert "Access-Control-Allow-Origin" not in response.headers
 
 
 def _csp_directive_present(csp: str, directive: str) -> bool:
