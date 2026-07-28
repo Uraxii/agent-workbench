@@ -57,6 +57,7 @@ import logging
 import os
 import sqlite3
 import sys
+import threading
 import urllib.error
 from collections.abc import Mapping, Sequence
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -312,12 +313,17 @@ def _finish_ingest(
 ) -> dict[str, object]:
     """Atomize, reindex, then embed only the note and its children.
 
-    Keeping this on one path is the invariant: no caller can write a note
-    into the vault without its children, its index rows and its vectors
-    being produced in the same request. Embedding is scoped to
-    ``[note_path] + children`` rather than the whole vault -- that is the
-    fix: ingest is now O(1) in vault size no matter how many stale rows
-    exist elsewhere, which is also what makes the vector migration safe.
+    Keeping this on one path is the invariant: no caller can write a NEW
+    note into the vault through this function without its children, its
+    index rows and its vectors being produced in the same request. That
+    is not every vault write, though: ``kb decision record`` flips a
+    PRIOR note's status to ``superseded`` in place, outside this
+    function, so that note's vector goes stale (not deleted, not wrong,
+    just stale) until the next ``/regenerate`` or ``/reindex`` pass picks
+    it up. Embedding is scoped to ``[note_path] + children`` rather than
+    the whole vault -- that is the fix: ingest is now O(1) in vault size
+    no matter how many stale rows exist elsewhere, which is also what
+    makes the vector migration safe.
 
     DELIBERATE ASYMMETRY (also see ``regenerate``): an embedding failure
     here still returns normally with ``embed_error`` set, never raises,
@@ -446,9 +452,15 @@ def audit_decisions(
 def _regenerate_atomize_block() -> dict[str, object]:
     """The always-present, always-disabled atomize block (see SCOPE
     BOUNDARY in the regenerate design: re-atomizing needs a delete route
-    the standing no-delete policy does not grant)."""
+    the standing no-delete policy does not grant).
+
+    ``processed``/``remaining`` are ``null``, not ``0``: a real ``0``
+    reads as "nothing to do", which is not true here -- this tier has
+    never run at all, and null must never be mistaken for a completed
+    pass.
+    """
     return {
-        "enabled": False, "processed": 0, "remaining": 0,
+        "enabled": False, "processed": None, "remaining": None,
         "message": ATOMIZE_REGENERATE_MESSAGE,
     }
 
@@ -604,7 +616,15 @@ def regenerate(
 
 
 class KbHTTPServer(ThreadingHTTPServer):
-    """ThreadingHTTPServer carrying the resolved KbServeConfig."""
+    """ThreadingHTTPServer carrying the resolved KbServeConfig.
+
+    ``embed_lock`` serializes ``/reindex`` and ``/regenerate/*``: they are
+    the only routes that embed an unbounded-ish set of notes, and two of
+    them running at once would embed the same stale notes twice, which is
+    duplicate model spend -- the exact cost this workstream exists to
+    remove. Every other route (including ``_finish_ingest``'s bounded,
+    per-note embed) is left unlocked on purpose.
+    """
 
     def __init__(
         self,
@@ -613,6 +633,7 @@ class KbHTTPServer(ThreadingHTTPServer):
         config: KbServeConfig,
     ) -> None:
         self.config = config
+        self.embed_lock = threading.Lock()
         super().__init__(address, handler_cls)
 
 
@@ -731,6 +752,8 @@ class KbRequestHandler(BaseHTTPRequestHandler):
             handler(params)
         except (KeyError, ValueError) as exc:
             self._send_json(400, {"error": str(exc)})
+        except sqlite3.Error as exc:
+            self._send_json(503, {"error": f"database unavailable: {exc}"})
 
     def _handle_health(self, _params: dict[str, list[str]]) -> None:
         config = self.server.config
@@ -813,6 +836,12 @@ class KbRequestHandler(BaseHTTPRequestHandler):
             handler(payload)
         except (KeyError, ValueError) as exc:
             self._send_json(400, {"error": str(exc)})
+        except sqlite3.Error as exc:
+            # sqlite3.OperationalError (e.g. "database is locked") is not
+            # an OSError, so it would otherwise fall through every catch
+            # here and drop the connection with no status and no body --
+            # exactly the failure a /regenerate retry loop must never see.
+            self._send_json(503, {"error": f"database unavailable: {exc}"})
         except (OSError, urllib.error.URLError) as exc:
             self._send_json(502, {"error": f"vault operation failed: {exc}"})
 
@@ -841,8 +870,32 @@ class KbRequestHandler(BaseHTTPRequestHandler):
             201, kb_ingest_and_atomize(config.kb_home, config, payload),
         )
 
+    def _try_acquire_embed_lock(self, retry_command: str) -> bool:
+        """Acquire ``embed_lock``; on contention, answer 409 and return
+        False.
+
+        The 409 body's ``next`` names the exact command a retrying caller
+        already has, so the retry loop this route is built for (see
+        modes/kb.md) just re-runs what it already printed instead of
+        constructing anything new. True means the caller now owns the
+        lock and MUST release it.
+        """
+        if self.server.embed_lock.acquire(blocking=False):
+            return True
+        self._send_json(409, {
+            "error": "another reindex or regenerate is already running",
+            "next": f"{NEXT_COMMAND_PREFIX} {retry_command}",
+        })
+        return False
+
     def _handle_reindex(self, _payload: dict[str, object]) -> None:
-        self._send_json(200, rebuild_derived(self.server.config))
+        if not self._try_acquire_embed_lock("kb index"):
+            return
+        try:
+            result = rebuild_derived(self.server.config)
+        finally:
+            self.server.embed_lock.release()
+        self._send_json(200, result)
 
     def _handle_decision(self, payload: dict[str, object]) -> None:
         self._send_json(201, record_decision(self.server.config, payload))
@@ -857,10 +910,16 @@ class KbRequestHandler(BaseHTTPRequestHandler):
         self._send_json(200, result)
 
     def _handle_regenerate(self, payload: dict[str, object], reset: bool) -> None:
-        dry_run = payload.get("dry_run", False)
-        if not isinstance(dry_run, bool):
-            raise ValueError("dry_run must be a boolean")
-        result = regenerate(self.server.config, reset, dry_run)
+        command = "kb regenerate full" if reset else "kb regenerate missing"
+        if not self._try_acquire_embed_lock(command):
+            return
+        try:
+            dry_run = payload.get("dry_run", False)
+            if not isinstance(dry_run, bool):
+                raise ValueError("dry_run must be a boolean")
+            result = regenerate(self.server.config, reset, dry_run)
+        finally:
+            self.server.embed_lock.release()
         self._send_json(502 if "error" in result else 200, result)
 
     def _handle_regenerate_full(self, payload: dict[str, object]) -> None:

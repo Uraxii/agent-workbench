@@ -423,6 +423,40 @@ def test_embed_texts_returns_a_call_record_per_backend_call(tmp_path: Path) -> N
     assert record["total_tokens"] == 42
 
 
+def test_embed_texts_raises_when_backend_returns_fewer_vectors_than_inputs(
+    tmp_path: Path,
+) -> None:
+    """A short response must RAISE, not silently truncate: `zip()` in
+    `sync_vectors` would otherwise under-count `embedded`, so `remaining`
+    never reaches 0 and an agent following `next` loops forever -- the
+    exact wait-loop failure this design exists to make unreachable."""
+    config = _config(tmp_path, embed_model="fake/embed")
+
+    class _FakeResponse:
+        def __init__(self, body: bytes) -> None:
+            self._body = body
+
+        def __enter__(self) -> "_FakeResponse":
+            return self
+
+        def __exit__(self, *exc_info: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return self._body
+
+    def fake_urlopen(request, timeout=None):  # noqa: ANN001 stdlib shape
+        # Two texts sent this batch, only one embedding comes back.
+        body = json.dumps({"data": [{"embedding": [0.1, 0.2]}]}).encode("utf-8")
+        return _FakeResponse(body)
+
+    with (
+        patch("urllib.request.urlopen", side_effect=fake_urlopen),
+        pytest.raises(ValueError, match="1 vectors for 2 inputs"),
+    ):
+        kb_embed.embed_texts(config, ["one", "two"])
+
+
 # ── search ranking ────────────────────────────────────────────────────
 
 

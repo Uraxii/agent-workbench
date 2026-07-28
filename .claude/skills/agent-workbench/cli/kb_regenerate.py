@@ -16,8 +16,9 @@ Sub-subcommands (registered under `kb` by `cli.kb`):
 
 Both answers carry a `next` field naming the exact command to run again;
 call it until `next` is null. There is no `--limit`: the batch size is a
-fixed module constant (`kb_embed.REGENERATE_BATCH_LIMIT`), sized to finish
-inside the CLI's request timeout.
+fixed module constant (`kb_embed.REGENERATE_BATCH_LIMIT`, 3 backend
+requests x EMBED_TIMEOUT_SEC(30s) = 90s worst case), which stays inside
+the CLI's 120s REQUEST_TIMEOUT_SEC with real margin.
 """
 from __future__ import annotations
 

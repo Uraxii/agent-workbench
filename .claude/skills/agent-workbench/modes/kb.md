@@ -285,13 +285,13 @@ Never document or imply a real secret value in deploy configuration.
 ```bash
 $AW kb regenerate missing
 # -> {"mode": "missing", "dry_run": false,
-#     "embeddings": {"enabled": true, "embedded": 192, "pruned": 0,
-#                     "remaining": 2188, "chars_sent": 341908,
-#                     "usage": {"calls": 6, "prompt_tokens": 85477,
-#                               "completion_tokens": 0, "total_tokens": 85477,
+#     "embeddings": {"enabled": true, "embedded": 96, "pruned": 0,
+#                     "remaining": 2284, "chars_sent": 170954,
+#                     "usage": {"calls": 3, "prompt_tokens": 42739,
+#                               "completion_tokens": 0, "total_tokens": 42739,
 #                               "generation_ids": [],
 #                               "models": ["text-embedding-3-small"]}},
-#     "atomize": {"enabled": false, "processed": 0, "remaining": 0,
+#     "atomize": {"enabled": false, "processed": null, "remaining": null,
 #                 "message": "atomize regeneration is not implemented; ..."},
 #     "next": "$HOME/.claude/skills/agent-workbench/agent-workbench kb regenerate missing"}
 
@@ -300,8 +300,8 @@ $AW kb regenerate full --dry-run
 #     "embeddings": {"enabled": true, "would_embed": 2380, "would_prune": 0,
 #                     "chars_to_send": 4241700, "estimated_tokens": 1060425,
 #                     "estimated_tokens_basis": "chars_to_send // 4; an estimate, not a billed count",
-#                     "batch_limit": 192, "calls_required": 13},
-#     "atomize": {"enabled": false, "processed": 0, "remaining": 0,
+#                     "batch_limit": 96, "calls_required": 25},
+#     "atomize": {"enabled": false, "processed": null, "remaining": null,
 #                 "message": "atomize regeneration is not implemented; ..."},
 #     "next": "$HOME/.claude/skills/agent-workbench/agent-workbench kb regenerate full"}
 ```
@@ -310,10 +310,12 @@ Two verbs, both `--dry-run`-able, no `--limit` and no `--project`: `missing`
 embeds only notes never embedded or changed since (compares each note's
 current content hash against what is stored); `full` marks every note
 stale first, then runs the exact same bounded batch `missing` would. Each
-real call embeds at most a fixed batch of notes (module constant, not a
-flag) so a call always finishes well inside the CLI's request timeout;
-`full` is the answer to "I changed `KB_EMBED_MODEL`" -- it is what makes
-every note stale again so the next batches re-embed under the new model.
+real call embeds at most `REGENERATE_BATCH_LIMIT` (96) notes -- 3 backend
+requests of `EMBED_BATCH_SIZE` (32) each, at up to `EMBED_TIMEOUT_SEC`
+(30s) apiece, so 90s worst case against the CLI's 120s
+`REQUEST_TIMEOUT_SEC`, real margin, not a coincidence; `full` is the
+answer to "I changed `KB_EMBED_MODEL`" -- it is what makes every note
+stale again so the next batches re-embed under the new model.
 
 The `next` field is the whole control plane: keep re-running the printed
 command until `next` comes back `null`. Note that `full`'s `next` always
@@ -332,6 +334,12 @@ differs from every other ingest verb: because embedding IS the operation
 here (not a side effect of a write that already safely landed), a failed
 batch is reported as a 502 rather than a silent degrade, with whatever
 batches already committed kept and counted.
+
+`regenerate` and `kb index` share one lock: a second call that arrives
+while one is already running gets 409 with a `next` naming the exact
+command it already has, rather than racing to embed the same stale notes
+twice. Re-running `next` is the correct response to a 409, same as any
+other value in that field.
 
 The atomize tier of `regenerate` is NOT implemented. Both verbs always
 return an `atomize` block with `enabled: false` and a message naming the

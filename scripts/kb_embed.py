@@ -69,14 +69,29 @@ EMBED_CHAR_LIMIT = 6000
 # influence of a single list's top rank so neither half dominates.
 RRF_K = 60
 VECTOR_CANDIDATE_LIMIT = 50
-# 6 x EMBED_BATCH_SIZE, i.e. exactly six backend requests per call. Sized to
-# finish inside the CLI's 120s REQUEST_TIMEOUT_SEC with room to spare; a
-# timeout is not data loss, since every batch commits.
-REGENERATE_BATCH_LIMIT = 192
+# 3 x EMBED_BATCH_SIZE, i.e. exactly three backend requests per call, each
+# up to EMBED_TIMEOUT_SEC (30s): 90s worst case, inside the CLI's 120s
+# REQUEST_TIMEOUT_SEC with real margin. A timeout is not data loss, since
+# every batch commits.
+REGENERATE_BATCH_LIMIT = 96
 
 # Failures a backend call or its response parsing can raise; callers that
 # want to degrade to keyword-only rather than fail catch exactly this set.
 _BACKEND_FAILURES = (OSError, KeyError, IndexError, ValueError)
+
+# Ordinary lock contention (a concurrent writer mid-transaction) then
+# waits up to this long before sqlite3 raises "database is locked",
+# instead of raising immediately. kb-svc.py's own embed_lock is what
+# actually stops two embedding runs from overlapping; this only covers
+# contention against unrelated writers (e.g. a human's sqlite3 shell).
+BUSY_TIMEOUT_MS = 5_000
+
+
+def _connect(db_path: Path) -> sqlite3.Connection:
+    """Open ``db_path`` with ``busy_timeout`` set (see BUSY_TIMEOUT_MS)."""
+    connection = sqlite3.connect(db_path)
+    connection.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
+    return connection
 
 
 class EmbedCounts(NamedTuple):
@@ -167,7 +182,20 @@ def embed_texts(
         )
         with urllib.request.urlopen(request, timeout=EMBED_TIMEOUT_SEC) as response:
             data = json.loads(response.read())
-        vectors.extend([item["embedding"] for item in data["data"]])
+        batch_vectors = [item["embedding"] for item in data["data"]]
+        if len(batch_vectors) != len(batch):
+            # A short response would otherwise under-count `embedded` in
+            # sync_vectors via zip()'s silent truncation, so `remaining`
+            # never reaches 0 and `next` loops forever -- the exact
+            # wait-loop failure this design exists to make unreachable.
+            # A real raise, not a bare assert: this is prod code and gets
+            # stripped under -O. Already inside _BACKEND_FAILURES's
+            # ValueError, so it degrades normally rather than crashing.
+            raise ValueError(
+                f"embedding backend returned {len(batch_vectors)} vectors "
+                f"for {len(batch)} inputs"
+            )
+        vectors.extend(batch_vectors)
         usage = data.get("usage", {})
         call_records.append({
             "id": data.get("id", ""),
@@ -180,18 +208,26 @@ def embed_texts(
 
 
 def stored_fingerprints(db_path: Path) -> dict[str, str | None]:
-    """``{path: content_hash}`` for every stored vector, ``{}`` if no table."""
+    """``{path: content_hash}`` for every stored vector, ``{}`` if no table.
+
+    Deliberately does NOT catch ``sqlite3.Error``: a read failure here
+    (corrupt db, a lock this connection's busy_timeout did not clear in
+    time) must never be swallowed into an empty map, because an empty map
+    reads as "nothing is embedded" -- every note goes stale, and
+    ``rebuild_derived`` would re-embed the whole vault on what was really
+    just a transient read error. Let it propagate; kb-svc.py turns it
+    into a 503 so a caller sees a loud, structured failure instead of a
+    silently wrong "everything is stale".
+    """
     if not db_path.exists():
         return {}
-    connection = sqlite3.connect(db_path)
+    connection = _connect(db_path)
     try:
         ensure_vector_schema(connection)
         rows = connection.execute(
             f"SELECT path, content_hash FROM {VECTOR_TABLE}"
         ).fetchall()
         return dict(rows)
-    except sqlite3.Error:
-        return {}
     finally:
         connection.close()
 
@@ -224,7 +260,7 @@ def mark_all_stale(db_path: Path) -> int:
     """
     if not db_path.exists():
         return 0
-    connection = sqlite3.connect(db_path)
+    connection = _connect(db_path)
     try:
         ensure_vector_schema(connection)
         cursor = connection.execute(f"UPDATE {VECTOR_TABLE} SET content_hash = NULL")
@@ -254,7 +290,7 @@ def sync_vectors(
     if not embeddings_enabled(config) or not notes:
         return EmbedCounts(0, 0, None, None)
 
-    connection = sqlite3.connect(db_path)
+    connection = _connect(db_path)
     try:
         ensure_vector_schema(connection)
         embedded = 0
@@ -294,11 +330,15 @@ def prune_vectors(db_path: Path, live_paths: Collection[str]) -> int:
 
     Callers MUST pass the full live vault path set, never a batch slice
     -- a partial set here would delete vectors for notes that still
-    exist. Returns the number of rows deleted, 0 if there is no table.
+    exist. In practice that set comes from ``_note_texts``, which skips
+    (rather than raises on) a note it fails to read, so a note that is
+    merely transiently unreadable this pass is indistinguishable here
+    from a deleted one and loses its vector, not just goes stale. Returns
+    the number of rows deleted, 0 if there is no table.
     """
     if not db_path.exists():
         return 0
-    connection = sqlite3.connect(db_path)
+    connection = _connect(db_path)
     try:
         ensure_vector_schema(connection)
         stored_paths = {
@@ -321,7 +361,7 @@ def count_vectors(db_path: Path) -> int:
     """Rows in the vector table, or 0 when it has never been built."""
     if not db_path.exists():
         return 0
-    connection = sqlite3.connect(db_path)
+    connection = _connect(db_path)
     try:
         return connection.execute(
             f"SELECT COUNT(*) FROM {VECTOR_TABLE}"
@@ -363,7 +403,7 @@ def search_ranking(
         return []
     query_vector = vectors[0]
 
-    connection = sqlite3.connect(db_path)
+    connection = _connect(db_path)
     try:
         rows = connection.execute(
             f"SELECT path, vector FROM {VECTOR_TABLE}"

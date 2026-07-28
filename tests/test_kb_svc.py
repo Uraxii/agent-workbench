@@ -16,6 +16,7 @@ import importlib.util
 import json
 import logging
 import socket
+import sqlite3
 import sys
 import threading
 import urllib.error
@@ -567,7 +568,11 @@ def test_find_unenriched_notes_happy_path_returns_candidate(tmp_path: Path) -> N
     note_path = Path(str(put_result["path"]))
     rel = note_path.relative_to(tmp_path)
     result = kb_serve.find_unenriched_notes(tmp_path, None, str(rel))
-    assert result == [note_path.resolve()]
+    # UNRESOLVED (kb_home / note_filter), not .resolve(): this is the same
+    # shape find_markdown_files returns for the vault-scan case, so a
+    # note never gets embedded under two different vector keys (see the
+    # symlinked-kb_home tests below).
+    assert result == [tmp_path / rel]
 
 
 # ── security fix: kb_enrich degrades cleanly on an unreadable note ────────
@@ -1353,6 +1358,76 @@ def test_enrich_embeds_only_the_notes_it_enriched(tmp_path: Path) -> None:
     assert texts == [target_path.read_text(encoding="utf-8")]
 
 
+# ── /enrich: single-note vector key must match the ingest key (fix 4) ─
+# Before this fix, find_unenriched_notes returned the RESOLVED single-note
+# path while ingest always stores vectors under the UNRESOLVED (vault-scan)
+# path. With a symlinked kb_home the two differ, so /enrich's embed wrote a
+# second, orphaned vector row for the same note.
+
+
+def test_find_unenriched_notes_matches_the_vault_scan_path_shape(
+    tmp_path: Path,
+) -> None:
+    real_home = tmp_path / "real"
+    real_home.mkdir()
+    link_home = tmp_path / "link"
+    link_home.symlink_to(real_home)
+
+    put_result = kb_serve.kb_put(link_home, _config(link_home), {
+        "project": "proj1", "title": "Note", "content": "content",
+    })
+    note_path = Path(str(put_result["path"]))
+    rel = note_path.relative_to(link_home)
+
+    scanned = kb_serve.kb_index_module().find_markdown_files(link_home)
+    result = kb_serve.find_unenriched_notes(link_home, None, str(rel))
+
+    assert result == [note_path]
+    assert [str(p) for p in result] == [str(p) for p in scanned]
+
+
+def test_enrich_does_not_orphan_a_vector_row_when_kb_home_is_symlinked(
+    tmp_path: Path,
+) -> None:
+    """THE fix-4 regression tripwire: a symlinked kb_home must still end
+    up with exactly one vector row per note after /enrich, under the same
+    key ingest used, never a second row fuse_rankings can never match."""
+    real_home = tmp_path / "real"
+    real_home.mkdir()
+    link_home = tmp_path / "link"
+    link_home.symlink_to(real_home)
+    config = _config(
+        link_home, enrich_enabled=True, llm_api_key="fake-key",
+        embed_model="fake-embed",
+    )
+
+    put_result = kb_serve.kb_put(link_home, _config(link_home), {
+        "project": "proj1", "title": "Target", "content": "Target content.",
+    })
+    note_path = Path(str(put_result["path"]))
+    rel = note_path.relative_to(link_home)
+
+    with patch.object(kb_embed, "embed_texts", side_effect=_fake_embed_texts):
+        kb_serve.rebuild_derived(config)  # seeds the one vector row
+    db_path = kb_serve.index_db_path(link_home)
+    assert kb_embed.count_vectors(db_path) == 1
+
+    with (
+        _server_for_config(config) as base_url,
+        patch.object(
+            kb_llm, "request_enrichment",
+            return_value=({"question": "Q?", "summary": "S."}, {}),
+        ),
+        patch.object(kb_embed, "embed_texts", side_effect=_fake_embed_texts),
+    ):
+        status, body = _post(base_url, "/enrich", {"note": str(rel)})
+
+    assert status == 200
+    assert body["enriched"] == 1
+    assert kb_embed.count_vectors(db_path) == 1  # still one row, not two
+    assert set(kb_embed.stored_fingerprints(db_path)) == {str(note_path)}
+
+
 # ── /regenerate/missing and /regenerate/full ──────────────────────────
 
 
@@ -1568,8 +1643,10 @@ def test_regenerate_response_always_carries_the_atomize_tier_block(
     config = _config(tmp_path, embed_model=embed_model, llm_api_key=llm_api_key)
     with patch.object(kb_embed, "embed_texts", side_effect=_fake_embed_texts):
         result = kb_serve.regenerate(config, reset=False, dry_run=False)
+    # processed/remaining are null, not 0: a real 0 reads as "nothing to
+    # do", which is false here -- this tier has never run at all.
     assert result["atomize"] == {
-        "enabled": False, "processed": 0, "remaining": 0,
+        "enabled": False, "processed": None, "remaining": None,
         "message": kb_serve.ATOMIZE_REGENERATE_MESSAGE,
     }
 
@@ -1593,3 +1670,86 @@ def test_regenerate_full_next_points_at_missing_not_full(tmp_path: Path) -> None
     assert result["next"] is not None
     assert "regenerate missing" in str(result["next"])
     assert "regenerate full" not in str(result["next"])
+
+
+# ── concurrency: locked db, and racing /regenerate calls (fix 1) ──────
+
+
+def test_locked_database_returns_503_json_not_a_dropped_connection(
+    tmp_path: Path,
+) -> None:
+    """sqlite3.OperationalError is not an OSError, so before this fix a
+    lock held on kb.db during exactly the route documented as a retry
+    loop came back as a dropped connection: no status, no body. Now it
+    is a loud, structured 503."""
+    config = _config(tmp_path, embed_model="fake-embed", llm_api_key="fake-key")
+    kb_serve.kb_vault.write_note(tmp_path, "proj1", "note", "A", "", "body a")
+    with patch.object(kb_embed, "embed_texts", side_effect=_fake_embed_texts):
+        kb_serve.rebuild_derived(config)
+    db_path = kb_serve.index_db_path(tmp_path)
+
+    locker = sqlite3.connect(db_path)
+    locker.execute("BEGIN EXCLUSIVE")
+    try:
+        with (
+            _server_for_config(config) as base_url,
+            patch.object(kb_embed, "BUSY_TIMEOUT_MS", 200),  # keep the test fast
+        ):
+            status, body = _post(
+                base_url, "/regenerate/missing", {"dry_run": False},
+            )
+    finally:
+        locker.rollback()
+        locker.close()
+
+    assert status == 503
+    assert "error" in body
+
+
+def test_concurrent_regenerate_calls_the_second_gets_409_not_a_double_embed(
+    tmp_path: Path,
+) -> None:
+    """Two /regenerate (or /reindex) calls in flight at once would
+    otherwise both embed the same stale notes -- duplicate model spend,
+    the exact cost this workstream exists to remove. The loser gets 409
+    with a `next` naming the command it already has."""
+    config = _config(tmp_path, embed_model="fake-embed", llm_api_key="fake-key")
+    kb_serve.kb_vault.write_note(tmp_path, "proj1", "note", "A", "", "body a")
+
+    entered = threading.Event()
+    release = threading.Event()
+    call_count = 0
+
+    def blocking_embed(_config: KbServeConfig, texts: list[str]):
+        nonlocal call_count
+        call_count += 1
+        entered.set()
+        release.wait(timeout=5)
+        return [[1.0, 0.0]] * len(texts), []
+
+    first_result: dict[str, object] = {}
+
+    def run_first(base_url: str) -> None:
+        first_result["status"], first_result["body"] = _post(
+            base_url, "/regenerate/missing", {"dry_run": False},
+        )
+
+    with (
+        _server_for_config(config) as base_url,
+        patch.object(kb_embed, "embed_texts", side_effect=blocking_embed),
+    ):
+        first_thread = threading.Thread(target=run_first, args=(base_url,))
+        first_thread.start()
+        assert entered.wait(timeout=5), "first call never reached the backend"
+
+        second_status, second_body = _post(
+            base_url, "/regenerate/missing", {"dry_run": False},
+        )
+
+        release.set()
+        first_thread.join(timeout=5)
+
+    assert second_status == 409
+    assert "next" in second_body
+    assert first_result["status"] == 200
+    assert call_count == 1  # never double-embedded the same note
