@@ -13,8 +13,10 @@ silently falling back to the live stack, is covered here:
 """
 from __future__ import annotations
 
+import argparse
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -50,3 +52,50 @@ def test_empty_command_raises() -> None:
     """`scratch kb --` with nothing after `--` refuses instead of no-op."""
     with pytest.raises(RuntimeError, match="no command given"):
         scratch._command_args(["--"], "kb")
+
+
+def test_podman_compose_chatter_stays_off_stdout(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """podman-compose's own `up`/`down` output must never share stdout with
+    the wrapped command -- an agent piping scratch's stdout to `jq` would
+    otherwise see container IDs and project lines ahead of the JSON.
+
+    No podman: every subprocess.run call is faked and recorded. Asserts
+    `up` and `down` redirect stdout away from the process's own stdout,
+    the `port` lookup (already capture_output=True) doesn't leak either,
+    and the wrapped command's own subprocess.run call is untouched -- no
+    `stdout` kwarg at all, so it inherits the real stdout.
+    """
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def fake_run(cmd: list[str], *args: object, **kwargs: object):
+        calls.append((cmd, kwargs))
+        return SimpleNamespace(returncode=0, stdout="127.0.0.1:12345\n")
+
+    template = tmp_path / "docker-compose.scratch.yml"
+    template.write_text("services: {}\n")  # placeholder has none to replace
+    base = tmp_path / "docker-compose.yml"
+
+    monkeypatch.setattr(scratch.subprocess, "run", fake_run)
+    monkeypatch.setattr(scratch, "_require_podman_compose", lambda: None)
+    monkeypatch.setattr(scratch, "_compose_files", lambda: (base, template))
+    monkeypatch.setattr(scratch, "_wait_healthy", lambda *a, **kw: None)
+
+    args = argparse.Namespace(service="kb", command=["--", "echo", "hi"])
+    returncode = scratch.cmd_scratch(args)
+    assert returncode == 0
+
+    def find(token: str) -> dict[str, object]:
+        [kwargs] = [kw for cmd, kw in calls if token in cmd]
+        return kwargs
+
+    assert find("up")["stdout"] is sys.stderr
+    assert find("down")["stdout"] is sys.stderr
+    # port lookup already uses capture_output=True; must not ALSO leak
+    # to the process's own stdout via an explicit stdout= kwarg.
+    assert "stdout" not in find("port")
+
+    wrapped_cmd, wrapped_kwargs = calls[-2]  # up, port, [wrapped], down
+    assert wrapped_cmd == ["echo", "hi"]
+    assert "stdout" not in wrapped_kwargs

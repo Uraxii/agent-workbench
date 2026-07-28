@@ -171,12 +171,16 @@ def _bring_up(
     base: Path, override: Path, project: str, spec: ServiceSpec,
 ) -> int:
     """`up -d` the service, wait for health, return its host port."""
+    # stdout=sys.stderr: podman-compose writes container IDs / project
+    # lines to stdout. The wrapped command's stdout must be the ONLY
+    # thing on scratch's own stdout (agents pipe it to `jq`), so
+    # podman-compose's own chatter goes to stderr instead.
     subprocess.run(
         [
             "podman-compose", "-p", project, "-f", str(base), "-f", str(override),
             "up", "-d", spec.compose_name,
         ],
-        check=True,
+        stdout=sys.stderr, check=True,
     )
     port = _host_port(base, override, project, spec)
     print(
@@ -227,5 +231,6 @@ def cmd_scratch(args: argparse.Namespace) -> int:
         result = subprocess.run(command, env=env, check=False)
         return result.returncode
     finally:
-        subprocess.run(down_cmd, check=False)
+        # Same stdout=sys.stderr reasoning as `up` in _bring_up above.
+        subprocess.run(down_cmd, stdout=sys.stderr, check=False)
         shutil.rmtree(scratch_dir, ignore_errors=True)
