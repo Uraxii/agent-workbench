@@ -7,6 +7,7 @@ sys.path, and exercise the CLI exactly the way a real user/agent does.
 """
 from __future__ import annotations
 
+import ast
 import subprocess
 import sys
 from pathlib import Path
@@ -15,6 +16,54 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXECUTABLE = REPO_ROOT / ".claude" / "skills" / "agent-workbench" / "agent-workbench"
+CLI_DIR = REPO_ROOT / ".claude" / "skills" / "agent-workbench" / "cli"
+
+# doctor.py is the sole allowed exception to "the CLI never shells out":
+# its entire job is probing the host for prerequisites (container runtime,
+# compose impl) via `which`/`--version` checks. It never starts a container
+# or manages persisted data, unlike the shelling-out module this invariant
+# guards against re-adding (1dacb62 broke this, 869697a repaired it).
+SHELL_OUT_ALLOWLIST = {"doctor.py"}
+
+# Modules/attributes that mean "this file can launch a subprocess".
+_BANNED_MODULES = {"subprocess", "tempfile", "podman", "docker"}
+_BANNED_ATTRS = {("os", "system"), ("shutil", "which")}
+
+
+def _shell_out_violations(source: str, filename: str) -> list[str]:
+    """AST-based scan of `source` for the banned shelling-out primitives
+    (subprocess, tempfile/mkdtemp, shutil.which, os.system, os.exec*, or a
+    podman/docker import). Parses with `ast` rather than grepping raw text,
+    so a docstring/comment mentioning these words never trips it, and a
+    real import cannot hide from it."""
+    tree = ast.parse(source, filename=filename)
+    violations: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                top = alias.name.split(".")[0]
+                if top in _BANNED_MODULES:
+                    violations.append(f"import {alias.name} (line {node.lineno})")
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            top = node.module.split(".")[0]
+            if top in _BANNED_MODULES:
+                violations.append(f"from {node.module} import ... (line {node.lineno})")
+            for alias in node.names:
+                if node.module == "os" and (
+                    alias.name == "system" or alias.name.startswith("exec")
+                ):
+                    violations.append(f"from os import {alias.name} (line {node.lineno})")
+                if node.module == "tempfile" and alias.name == "mkdtemp":
+                    violations.append(f"from tempfile import mkdtemp (line {node.lineno})")
+                if node.module == "shutil" and alias.name == "which":
+                    violations.append(f"from shutil import which (line {node.lineno})")
+        elif isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+            base = node.value.id
+            if (base, node.attr) in _BANNED_ATTRS or (
+                base == "os" and node.attr.startswith("exec")
+            ):
+                violations.append(f"{base}.{node.attr} (line {node.lineno})")
+    return violations
 
 
 def run_cli(*args: str) -> subprocess.CompletedProcess[str]:
@@ -101,3 +150,29 @@ def test_missing_top_level_subcommand_errors_nonzero() -> None:
     """No subcommand at all is also a hard argparse error (required=True)."""
     result = run_cli()
     assert result.returncode != 0
+
+
+def test_cli_modules_never_shell_out_except_doctor() -> None:
+    """The CLI is a pure HTTP client of kb-svc/bd-svc/artifact-svc. This
+    has already been broken and repaired once (1dacb62 broke it, 869697a
+    repaired it) with nothing stopping a third round -- this is that
+    guard. Fails loudly, naming the offending file and symbol, if a
+    subprocess/tempfile/shutil.which/os.system/os.exec*/podman/docker
+    primitive reappears anywhere outside doctor.py."""
+    offenders = {
+        path.name: violations
+        for path in sorted(CLI_DIR.glob("*.py"))
+        if path.name not in SHELL_OUT_ALLOWLIST
+        and (violations := _shell_out_violations(
+            path.read_text(encoding="utf-8"), str(path),
+        ))
+    }
+
+    assert not offenders, (
+        "cli/*.py must stay a pure HTTP client of kb-svc/bd-svc/"
+        "artifact-svc -- it never shells out, spawns a subprocess, or "
+        "invokes podman/docker directly (doctor.py is the sole allowed "
+        "exception: its whole job is probing host prerequisites for "
+        "presence, never starting a container or managing data). "
+        f"Offending file(s): {offenders}"
+    )

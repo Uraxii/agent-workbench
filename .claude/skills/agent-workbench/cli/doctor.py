@@ -219,6 +219,12 @@ def check_skill_install() -> Check:
 
     if target.is_symlink():
         resolved = target.resolve()
+        if not target.exists():
+            return Check(
+                name, False, False,
+                f"broken symlink -> {resolved} (target does not exist)",
+                _copy_reinstall_hint(),
+            )
         return Check(
             name, False, False,
             f"dev symlink -> {resolved} (tracks whatever branch that "
@@ -258,6 +264,20 @@ def check_skill_install() -> Check:
             name, False, True,
             f"pinned at {short} (source repo unreachable from here; "
             "staleness could not be checked)",
+            "",
+        )
+
+    # A repo root resolves here (e.g. this machine has an unrelated
+    # ~/scripts dir) but it may not be the repo this copy came FROM --
+    # including the degenerate case where it resolves to `target` itself.
+    # Only compare HEAD when the marker's recorded source still matches.
+    marker_source = marker.get("source")
+    resolved_source = install.source_dir().resolve()
+    if marker_source is None or Path(str(marker_source)).resolve() != resolved_source:
+        return Check(
+            name, False, True,
+            f"pinned at {short}, installed from {marker_source or 'unknown source'}; "
+            "that source is not reachable from here, staleness not checked",
             "",
         )
 

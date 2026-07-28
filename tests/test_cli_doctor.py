@@ -24,11 +24,13 @@ if str(SKILL_DIR) not in sys.path:
 from cli import doctor, install  # noqa: E402  (path shim must precede this import)
 
 
-def _write_marker(target: Path, commit: str | None) -> None:
-    """Stand in for a --copy install's marker with a chosen `commit`."""
+def _write_marker(target: Path, commit: str | None, source: str = "s") -> None:
+    """Stand in for a --copy install's marker with a chosen `commit` /
+    `source` (defaults to a source that matches nothing real, i.e. the
+    "source unreachable" case)."""
     target.mkdir(parents=True, exist_ok=True)
     (target / install.INSTALL_MARKER).write_text(
-        json.dumps({"commit": commit, "source": "s", "installed_at": "t"}),
+        json.dumps({"commit": commit, "source": source, "installed_at": "t"}),
         encoding="utf-8",
     )
 
@@ -393,15 +395,38 @@ def test_skill_install_symlink_flags_dev_defect(
     assert result.fix_hint.endswith("install --copy")
 
 
+def test_skill_install_broken_symlink_is_not_ok(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """A dangling symlink is not a healthy dev symlink: `target.exists()`
+    must be checked before assuming a symlink is a live dev install, and
+    the fix hint must point at a path that actually exists (not the dead
+    resolved target)."""
+    target = tmp_path / "target"
+    target.symlink_to(tmp_path / "gone-forever")
+    monkeypatch.setattr(doctor.install, "install_target", lambda: target)
+
+    result = doctor.check_skill_install()
+
+    assert result.ok is False
+    assert "broken symlink" in result.detail
+    assert "gone-forever" in result.detail
+    assert "does not exist" in result.detail
+    assert "gone-forever" not in result.fix_hint
+    assert result.fix_hint.endswith("install --copy")
+
+
 def test_skill_install_matches_repo_head_is_ok(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
     """Marker commit == repo HEAD -> ok, short SHA shown, no fix hint."""
     target = tmp_path / "target"
+    repo_root = tmp_path / "repo"
     commit = "deadbeef" * 5
-    _write_marker(target, commit)
+    source = str((repo_root / ".claude" / "skills" / "agent-workbench").resolve())
+    _write_marker(target, commit, source=source)
     monkeypatch.setattr(doctor.install, "install_target", lambda: target)
-    monkeypatch.setattr(doctor.paths, "repo_root", lambda: tmp_path / "repo")
+    monkeypatch.setattr(doctor.paths, "repo_root", lambda: repo_root)
     monkeypatch.setattr(doctor.paths, "git_head", lambda root: commit)
 
     result = doctor.check_skill_install()
@@ -416,11 +441,13 @@ def test_skill_install_stale_marker_is_not_ok(
 ) -> None:
     """Marker commit != repo HEAD -> not-ok, both short SHAs shown."""
     target = tmp_path / "target"
+    repo_root = tmp_path / "repo"
     installed = "aaaa" * 10
     current = "bbbb" * 10
-    _write_marker(target, installed)
+    source = str((repo_root / ".claude" / "skills" / "agent-workbench").resolve())
+    _write_marker(target, installed, source=source)
     monkeypatch.setattr(doctor.install, "install_target", lambda: target)
-    monkeypatch.setattr(doctor.paths, "repo_root", lambda: tmp_path / "repo")
+    monkeypatch.setattr(doctor.paths, "repo_root", lambda: repo_root)
     monkeypatch.setattr(doctor.paths, "git_head", lambda root: current)
 
     result = doctor.check_skill_install()
@@ -430,6 +457,53 @@ def test_skill_install_stale_marker_is_not_ok(
     assert installed[:12] in result.detail
     assert current[:12] in result.detail
     assert result.fix_hint != ""
+
+
+def test_skill_install_source_mismatch_is_not_stale(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """A repo resolves here (e.g. an unrelated ~/scripts dir) but it is not
+    the repo this copy came from -- must not compare HEAD, must not report
+    stale, and must not emit a fix hint."""
+    target = tmp_path / "target"
+    repo_root = tmp_path / "unrelated-repo"
+    _write_marker(
+        target, "cccc" * 10,
+        source="/real/repo/.claude/skills/agent-workbench",
+    )
+    monkeypatch.setattr(doctor.install, "install_target", lambda: target)
+    monkeypatch.setattr(doctor.paths, "repo_root", lambda: repo_root)
+    monkeypatch.setattr(doctor.paths, "git_head", lambda root: "bbbb" * 10)
+
+    result = doctor.check_skill_install()
+
+    assert result.ok is True
+    assert "stale --" not in result.detail
+    assert "not reachable from here" in result.detail
+    assert result.fix_hint == ""
+
+
+def test_skill_install_source_resolves_to_target_itself_is_not_stale(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """Degenerate case from the reviewer's repro: the resolved repo root's
+    skill dir IS the install target (a stray ~/scripts dir on a --copy
+    install). Must not report stale, and must never hint at
+    `copytree(src, src)`."""
+    fake_home = tmp_path / "fakehome"
+    target = fake_home / ".claude" / "skills" / "agent-workbench"
+    _write_marker(
+        target, "cccc" * 10,
+        source="/real/repo/.claude/skills/agent-workbench",
+    )
+    monkeypatch.setattr(doctor.install, "install_target", lambda: target)
+    monkeypatch.setattr(doctor.paths, "repo_root", lambda: fake_home)
+
+    result = doctor.check_skill_install()
+
+    assert result.ok is True
+    assert "stale --" not in result.detail
+    assert result.fix_hint == ""
 
 
 def test_skill_install_legacy_empty_marker_is_not_ok(
@@ -488,15 +562,21 @@ def test_skill_install_never_required_so_never_gates_exit_code(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
     """Whatever state the install check is in, it cannot flip doctor's
-    overall required-ok verdict."""
+    overall required-ok verdict: a failing (not-ok, not-required) skill
+    install check must not change `all_required_ok`."""
     target = tmp_path / "target"
     target.symlink_to(tmp_path)  # guaranteed not-ok state
     monkeypatch.setattr(doctor.install, "install_target", lambda: target)
 
     result = doctor.check_skill_install()
+    other_required_checks = [
+        doctor.Check("git", True, True, "found", ""),
+        doctor.Check("python3", True, True, "found", ""),
+    ]
 
     assert result.required is False
-    assert result not in [c for c in doctor.run_checks() if c.required]
+    assert result.ok is False
+    assert doctor.all_required_ok([*other_required_checks, result]) is True
 
 
 def test_run_checks_includes_skill_install(

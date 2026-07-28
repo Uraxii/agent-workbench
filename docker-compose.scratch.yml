@@ -1,5 +1,5 @@
-# Override for `agent-workbench scratch <kb|bd|artifact> -- <command...>`
-# (scripts/scratch.py). Brings up ONE throwaway instance of a service against a
+# Override for `scripts/scratch.py <kb|bd|artifact> -- <command...>`.
+# Brings up ONE throwaway instance of a service against a
 # scratch data dir, published on a random free host port, torn down
 # (`down -v`) by the same run. Never used standalone -- always layered on
 # top of docker-compose.yml with `-f docker-compose.yml -f
