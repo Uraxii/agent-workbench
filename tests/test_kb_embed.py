@@ -7,8 +7,8 @@ exactly the notes it is given and never touches any other stored row --
 that scoping is the whole incremental fix (see
 `test_ingest_embeds_only_the_new_note_and_its_children` in
 test_kb_svc.py for the end-to-end regression tripwire); `mark_all_stale`
-clears hashes without ever deleting a vector row, so an in-flight `full`
-regenerate never degrades retrieval to keyword-only; the legacy
+clears hashes without ever deleting a vector row, so an in-flight `all`
+embed backfill never degrades retrieval to keyword-only; the legacy
 two-column table gains a hash column without losing a single stored
 vector; and the fusion step reorders the keyword hits without ever
 inventing a row the keyword filters excluded.
@@ -149,9 +149,9 @@ def test_sync_embeds_only_the_notes_it_was_given(tmp_path: Path) -> None:
 
 def test_sync_skips_notes_whose_content_is_unchanged(tmp_path: Path) -> None:
     """stale_notes -> sync_vectors is the normal caller pattern (see
-    rebuild_derived / regenerate): a second pass over unchanged notes
-    must make zero backend calls, or a `full` regenerate could never
-    converge."""
+    rebuild_derived / backfill_embeddings): a second pass over unchanged
+    notes must make zero backend calls, or an `all` embed backfill could
+    never converge."""
     config = _config(tmp_path, embed_model="fake/embed")
     db_path = tmp_path / "kb.db"
     notes = [(f"n{i}.md", f"text {i}") for i in range(10)]
@@ -264,7 +264,7 @@ def test_mark_all_stale_keeps_the_vectors_and_only_clears_the_hashes(
 ) -> None:
     """This is the guarantee that stops anyone reintroducing a DELETE:
     marking every note stale must never drop a vector row, or an
-    interrupted `full` regenerate would degrade retrieval to
+    interrupted `all` embed backfill would degrade retrieval to
     keyword-only mid-run."""
     config = _config(tmp_path, embed_model="fake/embed")
     db_path = tmp_path / "kb.db"

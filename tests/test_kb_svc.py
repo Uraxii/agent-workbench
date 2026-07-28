@@ -1204,7 +1204,7 @@ def test_usage_tolerates_missing_usage_field_in_envelope(tmp_path: Path) -> None
 # See kb_embed.py's own tests for the pure sync_vectors/stale_notes
 # contracts. Everything here is the HTTP-facing half: which paths
 # actually reach embed_texts on a real /put, /reindex, /enrich or
-# /regenerate call.
+# /embed call.
 
 
 def test_ingest_embeds_only_the_new_note_and_its_children(tmp_path: Path) -> None:
@@ -1262,7 +1262,7 @@ def test_ingest_with_no_backend_makes_zero_network_calls(tmp_path: Path) -> None
 def test_ingest_reports_embed_error_when_the_backend_fails_but_still_writes_the_note(
     tmp_path: Path,
 ) -> None:
-    """The deliberate asymmetry with /regenerate: an ingest write must
+    """The deliberate asymmetry with /embed: an ingest write must
     never be lost because the embedding backend is down -- the note
     still lands on disk with a 201, and the failure is surfaced via
     embed_error rather than silently dropped."""
@@ -1428,10 +1428,10 @@ def test_enrich_does_not_orphan_a_vector_row_when_kb_home_is_symlinked(
     assert set(kb_embed.stored_fingerprints(db_path)) == {str(note_path)}
 
 
-# ── /regenerate/missing and /regenerate/full ──────────────────────────
+# ── /embed/missing and /embed/all ──────────────────────────────────────
 
 
-def test_regenerate_missing_is_capped_at_the_batch_limit(tmp_path: Path) -> None:
+def test_embed_missing_is_capped_at_the_batch_limit(tmp_path: Path) -> None:
     config = _config(tmp_path, embed_model="fake-embed", llm_api_key="fake-key")
     total_notes = 250
     for i in range(total_notes):
@@ -1440,15 +1440,15 @@ def test_regenerate_missing_is_capped_at_the_batch_limit(tmp_path: Path) -> None
         )
 
     with patch.object(kb_embed, "embed_texts", side_effect=_fake_embed_texts):
-        result = kb_serve.regenerate(config, reset=False, dry_run=False)
+        result = kb_serve.backfill_embeddings(config, reset=False, dry_run=False)
 
-    limit = kb_embed.REGENERATE_BATCH_LIMIT
+    limit = kb_embed.BACKFILL_BATCH_LIMIT
     assert result["embeddings"]["embedded"] == limit
     assert result["embeddings"]["remaining"] == total_notes - limit
     assert result["next"] is not None
 
 
-def test_regenerate_missing_converges_and_clears_next(tmp_path: Path) -> None:
+def test_embed_missing_converges_and_clears_next(tmp_path: Path) -> None:
     """THE anti-wait-loop test. An agent following `next` cannot construct
     a wait loop: there is no job id, no status route, nothing to poll.
     This proves the loop actually terminates in the arithmetic number of
@@ -1462,7 +1462,7 @@ def test_regenerate_missing_converges_and_clears_next(tmp_path: Path) -> None:
             tmp_path, "proj1", "note", f"N{i}", "", f"body {i}",
         )
 
-    limit = kb_embed.REGENERATE_BATCH_LIMIT
+    limit = kb_embed.BACKFILL_BATCH_LIMIT
     expected_calls = -(-total_notes // limit)  # ceiling division
     hard_cap = expected_calls + 2  # margin, but still a hard bound
 
@@ -1470,7 +1470,7 @@ def test_regenerate_missing_converges_and_clears_next(tmp_path: Path) -> None:
     result: dict[str, object] = {}
     with patch.object(kb_embed, "embed_texts", side_effect=_fake_embed_texts):
         while calls < hard_cap:
-            result = kb_serve.regenerate(config, reset=False, dry_run=False)
+            result = kb_serve.backfill_embeddings(config, reset=False, dry_run=False)
             calls += 1
             if result["embeddings"]["remaining"] == 0:
                 break
@@ -1481,66 +1481,66 @@ def test_regenerate_missing_converges_and_clears_next(tmp_path: Path) -> None:
     assert result["next"] is None
 
 
-def test_regenerate_full_reembeds_notes_that_missing_would_have_skipped(
+def test_embed_all_reembeds_notes_that_missing_would_have_skipped(
     tmp_path: Path,
 ) -> None:
     config = _config(tmp_path, embed_model="fake-embed", llm_api_key="fake-key")
     kb_serve.kb_vault.write_note(tmp_path, "proj1", "note", "A", "", "body a")
 
     with patch.object(kb_embed, "embed_texts", side_effect=_fake_embed_texts):
-        kb_serve.regenerate(config, reset=False, dry_run=False)
+        kb_serve.backfill_embeddings(config, reset=False, dry_run=False)
 
     with patch.object(kb_embed, "embed_texts") as mock_missing:
-        result_missing = kb_serve.regenerate(config, reset=False, dry_run=False)
+        result_missing = kb_serve.backfill_embeddings(config, reset=False, dry_run=False)
     mock_missing.assert_not_called()
     assert result_missing["embeddings"]["embedded"] == 0
 
     with patch.object(
         kb_embed, "embed_texts", side_effect=_fake_embed_texts,
-    ) as mock_full:
-        result_full = kb_serve.regenerate(config, reset=True, dry_run=False)
-    mock_full.assert_called_once()
-    assert result_full["embeddings"]["embedded"] == 1
+    ) as mock_all:
+        result_all = kb_serve.backfill_embeddings(config, reset=True, dry_run=False)
+    mock_all.assert_called_once()
+    assert result_all["embeddings"]["embedded"] == 1
 
 
-def test_regenerate_full_does_not_empty_the_vector_table(tmp_path: Path) -> None:
+def test_embed_all_does_not_empty_the_vector_table(tmp_path: Path) -> None:
     """mark_all_stale must NULL the hash, never DELETE the row -- a
     DELETE here would degrade retrieval to keyword-only for the whole
-    duration of a `full` backfill."""
+    duration of an `all` backfill."""
     config = _config(tmp_path, embed_model="fake-embed", llm_api_key="fake-key")
     kb_serve.kb_vault.write_note(
         tmp_path, "proj1", "note", "A", "", "body a widget",
     )
     with patch.object(kb_embed, "embed_texts", side_effect=_fake_embed_texts):
-        kb_serve.regenerate(config, reset=False, dry_run=False)
+        kb_serve.backfill_embeddings(config, reset=False, dry_run=False)
     db_path = kb_serve.index_db_path(tmp_path)
     assert kb_embed.count_vectors(db_path) == 1
 
     with patch.object(kb_embed, "embed_texts", side_effect=_fake_embed_texts):
-        kb_serve.regenerate(config, reset=True, dry_run=False)
+        kb_serve.backfill_embeddings(config, reset=True, dry_run=False)
 
     assert kb_embed.count_vectors(db_path) == 1
     with patch.object(kb_embed, "embed_texts", return_value=([[1.0, 0.0]], [])):
         assert kb_embed.search_ranking(config, db_path, "widget") != []
 
 
-def test_regenerate_full_dry_run_does_not_reset_any_hash(tmp_path: Path) -> None:
+def test_embed_all_dry_run_does_not_reset_any_hash(tmp_path: Path) -> None:
     config = _config(tmp_path, embed_model="fake-embed", llm_api_key="fake-key")
     kb_serve.kb_vault.write_note(tmp_path, "proj1", "note", "A", "", "body a")
     with patch.object(kb_embed, "embed_texts", side_effect=_fake_embed_texts):
-        kb_serve.regenerate(config, reset=False, dry_run=False)
+        kb_serve.backfill_embeddings(config, reset=False, dry_run=False)
     db_path = kb_serve.index_db_path(tmp_path)
     hashes_before = kb_embed.stored_fingerprints(db_path)
     assert all(value is not None for value in hashes_before.values())
 
     with patch.object(kb_embed, "embed_texts") as mock_embed:
-        kb_serve.regenerate(config, reset=True, dry_run=True)
+        kb_serve.backfill_embeddings(config, reset=True, dry_run=True)
 
     mock_embed.assert_not_called()
     assert kb_embed.stored_fingerprints(db_path) == hashes_before
 
 
-def test_regenerate_dry_run_makes_zero_network_calls_and_reports_exact_chars(
+def test_embed_dry_run_makes_zero_network_calls_and_reports_exact_chars(
     tmp_path: Path,
 ) -> None:
     config = _config(tmp_path, embed_model="fake-embed", llm_api_key="fake-key")
@@ -1554,20 +1554,20 @@ def test_regenerate_dry_run_makes_zero_network_calls_and_reports_exact_chars(
     expected_chars = sum(len(text[:kb_embed.EMBED_CHAR_LIMIT]) for _, text in notes)
 
     with patch.object(kb_embed, "embed_texts") as mock_embed:
-        result = kb_serve.regenerate(config, reset=False, dry_run=True)
+        result = kb_serve.backfill_embeddings(config, reset=False, dry_run=True)
 
     mock_embed.assert_not_called()
     assert result["embeddings"]["chars_to_send"] == expected_chars
 
 
-def test_regenerate_with_embeddings_disabled_makes_zero_network_calls_and_says_why(
+def test_embed_with_embeddings_disabled_makes_zero_network_calls_and_says_why(
     tmp_path: Path,
 ) -> None:
     config = _config(tmp_path)  # no embed_model, no key
     kb_serve.kb_vault.write_note(tmp_path, "proj1", "note", "A", "", "body a")
 
     with patch.object(kb_embed, "embed_texts") as mock_embed:
-        result = kb_serve.regenerate(config, reset=False, dry_run=False)
+        result = kb_serve.backfill_embeddings(config, reset=False, dry_run=False)
 
     mock_embed.assert_not_called()
     assert result["embeddings"]["enabled"] is False
@@ -1576,7 +1576,7 @@ def test_regenerate_with_embeddings_disabled_makes_zero_network_calls_and_says_w
     assert result["next"] is None
 
 
-def test_regenerate_returns_502_when_the_backend_fails_with_progress_in_the_body(
+def test_embed_returns_502_when_the_backend_fails_with_progress_in_the_body(
     tmp_path: Path,
 ) -> None:
     config = _config(tmp_path, embed_model="fake-embed", llm_api_key="fake-key")
@@ -1599,7 +1599,7 @@ def test_regenerate_returns_502_when_the_backend_fails_with_progress_in_the_body
         _server_for_config(config) as base_url,
         patch.object(kb_embed, "embed_texts", side_effect=failing_embed),
     ):
-        status, body = _post(base_url, "/regenerate/missing", {"dry_run": False})
+        status, body = _post(base_url, "/embed/missing", {"dry_run": False})
 
     assert status == 502
     assert "error" in body
@@ -1608,7 +1608,7 @@ def test_regenerate_returns_502_when_the_backend_fails_with_progress_in_the_body
     assert body["next"] is not None
 
 
-def test_regenerate_response_carries_a_usage_block_with_token_counts(
+def test_embed_response_carries_a_usage_block_with_token_counts(
     tmp_path: Path,
 ) -> None:
     config = _config(tmp_path, embed_model="fake-embed", llm_api_key="fake-key")
@@ -1622,7 +1622,7 @@ def test_regenerate_response_carries_a_usage_block_with_token_counts(
         return [[1.0, 0.0]] * len(texts), [record]
 
     with patch.object(kb_embed, "embed_texts", side_effect=fake_embed):
-        result = kb_serve.regenerate(config, reset=False, dry_run=False)
+        result = kb_serve.backfill_embeddings(config, reset=False, dry_run=False)
 
     usage = result["embeddings"]["usage"]
     assert usage["calls"] == 1
@@ -1634,45 +1634,45 @@ def test_regenerate_response_carries_a_usage_block_with_token_counts(
     ("embed_model", "llm_api_key"),
     [(None, None), ("fake-embed", "fake-key")],
 )
-def test_regenerate_response_always_carries_the_atomize_tier_block(
+def test_embed_response_always_carries_the_atomize_tier_block(
     tmp_path: Path, embed_model: str | None, llm_api_key: str | None,
 ) -> None:
     """The atomize tier ships disabled regardless of whether embeddings
-    are configured -- it is blocked on a standing no-delete-routes policy
-    decision, not a placeholder to fill in opportunistically."""
+    are configured -- it is blocked on a standing no-delete-routes
+    decision, permanently, not a placeholder to fill in later."""
     config = _config(tmp_path, embed_model=embed_model, llm_api_key=llm_api_key)
     with patch.object(kb_embed, "embed_texts", side_effect=_fake_embed_texts):
-        result = kb_serve.regenerate(config, reset=False, dry_run=False)
+        result = kb_serve.backfill_embeddings(config, reset=False, dry_run=False)
     # processed/remaining are null, not 0: a real 0 reads as "nothing to
     # do", which is false here -- this tier has never run at all.
     assert result["atomize"] == {
         "enabled": False, "processed": None, "remaining": None,
-        "message": kb_serve.ATOMIZE_REGENERATE_MESSAGE,
+        "message": kb_serve.ATOMIZE_BACKFILL_MESSAGE,
     }
 
 
-def test_regenerate_full_next_points_at_missing_not_full(tmp_path: Path) -> None:
-    """`full` resets every hash on every call, so `next` pointing back at
-    `full` would never let a "call until remaining is 0" loop terminate.
+def test_embed_all_next_points_at_missing_not_all(tmp_path: Path) -> None:
+    """`all` resets every hash on every call, so `next` pointing back at
+    `all` would never let a "call until remaining is 0" loop terminate.
     It must always point at `missing`."""
     config = _config(tmp_path, embed_model="fake-embed", llm_api_key="fake-key")
     # More notes than one batch, so remaining stays > 0 after a single
     # call and next actually has something to name.
-    for i in range(kb_embed.REGENERATE_BATCH_LIMIT + 1):
+    for i in range(kb_embed.BACKFILL_BATCH_LIMIT + 1):
         kb_serve.kb_vault.write_note(
             tmp_path, "proj1", "note", f"N{i}", "", f"body {i}",
         )
 
     with patch.object(kb_embed, "embed_texts", side_effect=_fake_embed_texts):
-        result = kb_serve.regenerate(config, reset=True, dry_run=False)
+        result = kb_serve.backfill_embeddings(config, reset=True, dry_run=False)
 
-    assert result["mode"] == "full"
+    assert result["mode"] == "all"
     assert result["next"] is not None
-    assert "regenerate missing" in str(result["next"])
-    assert "regenerate full" not in str(result["next"])
+    assert "embed missing" in str(result["next"])
+    assert "embed all" not in str(result["next"])
 
 
-# ── concurrency: locked db, and racing /regenerate calls (fix 1) ──────
+# ── concurrency: locked db, and racing /embed calls (fix 1) ───────────
 
 
 def test_locked_database_returns_503_json_not_a_dropped_connection(
@@ -1696,7 +1696,7 @@ def test_locked_database_returns_503_json_not_a_dropped_connection(
             patch.object(kb_embed, "BUSY_TIMEOUT_MS", 200),  # keep the test fast
         ):
             status, body = _post(
-                base_url, "/regenerate/missing", {"dry_run": False},
+                base_url, "/embed/missing", {"dry_run": False},
             )
     finally:
         locker.rollback()
@@ -1706,10 +1706,10 @@ def test_locked_database_returns_503_json_not_a_dropped_connection(
     assert "error" in body
 
 
-def test_concurrent_regenerate_calls_the_second_gets_409_not_a_double_embed(
+def test_concurrent_embed_calls_the_second_gets_409_not_a_double_embed(
     tmp_path: Path,
 ) -> None:
-    """Two /regenerate (or /reindex) calls in flight at once would
+    """Two /embed (or /reindex) calls in flight at once would
     otherwise both embed the same stale notes -- duplicate model spend,
     the exact cost this workstream exists to remove. The loser gets 409
     with a `next` naming the command it already has."""
@@ -1731,7 +1731,7 @@ def test_concurrent_regenerate_calls_the_second_gets_409_not_a_double_embed(
 
     def run_first(base_url: str) -> None:
         first_result["status"], first_result["body"] = _post(
-            base_url, "/regenerate/missing", {"dry_run": False},
+            base_url, "/embed/missing", {"dry_run": False},
         )
 
     with (
@@ -1743,7 +1743,7 @@ def test_concurrent_regenerate_calls_the_second_gets_409_not_a_double_embed(
         assert entered.wait(timeout=5), "first call never reached the backend"
 
         second_status, second_body = _post(
-            base_url, "/regenerate/missing", {"dry_run": False},
+            base_url, "/embed/missing", {"dry_run": False},
         )
 
         release.set()

@@ -39,8 +39,8 @@ from kb_config import KbServeConfig
 from kb_llm import fold_call_records
 
 __all__ = [
+    "BACKFILL_BATCH_LIMIT",
     "EmbedCounts",
-    "REGENERATE_BATCH_LIMIT",
     "VECTOR_TABLE",
     "content_fingerprint",
     "count_vectors",
@@ -73,7 +73,7 @@ VECTOR_CANDIDATE_LIMIT = 50
 # up to EMBED_TIMEOUT_SEC (30s): 90s worst case, inside the CLI's 120s
 # REQUEST_TIMEOUT_SEC with real margin. A timeout is not data loss, since
 # every batch commits.
-REGENERATE_BATCH_LIMIT = 96
+BACKFILL_BATCH_LIMIT = 96
 
 # Failures a backend call or its response parsing can raise; callers that
 # want to degrade to keyword-only rather than fail catch exactly this set.
@@ -255,7 +255,7 @@ def mark_all_stale(db_path: Path) -> int:
 
     Deliberately NOT a DELETE: vectors stay in place and keep serving
     ``search_ranking`` while the backfill runs, so an interrupted or
-    in-flight ``full`` regenerate never degrades retrieval to
+    in-flight ``all`` embed backfill never degrades retrieval to
     keyword-only. Do not reintroduce a DROP/DELETE here.
     """
     if not db_path.exists():

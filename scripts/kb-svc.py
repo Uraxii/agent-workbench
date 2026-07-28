@@ -11,7 +11,7 @@ nothing else, which is why ``POST /reindex`` is a complete recovery path.
 Atomization, indexing and embedding are unconditional on every ingest
 route -- there is no flag that skips them and no ingest path that omits
 them. Embedding is scoped to the ingested note and its children, not the
-whole vault: see POST /regenerate/* to backfill everything else.
+whole vault: see POST /embed/* to backfill everything else.
 
 Endpoints (all JSON):
     GET  /health                     status, vault, indexed + vector counts
@@ -32,9 +32,9 @@ Endpoints (all JSON):
     POST /decision {project,topic,title,text,...}
                                      record a decision, supersede the prior
     POST /enrich {project?,note?}    fill question/summary via the LLM
-    POST /regenerate/missing {dry_run?}
+    POST /embed/missing {dry_run?}
                                      embed stale notes, bounded + resumable
-    POST /regenerate/full {dry_run?}
+    POST /embed/all {dry_run?}
                                      mark every note stale, then one bounded
                                      batch
 
@@ -95,6 +95,7 @@ from kb_llm import (  # noqa: E402
 __all__ = [
     "KbServeConfig",
     "apply_enrichment",
+    "backfill_embeddings",
     "build_config",
     "build_parser",
     "cmd_resolve_secret",
@@ -111,7 +112,6 @@ __all__ = [
     "main",
     "rebuild_derived",
     "record_decision",
-    "regenerate",
     "request_atomize_split",
     "request_enrichment",
     "resolve_api_key",
@@ -122,15 +122,16 @@ log = logging.getLogger("kb-svc")
 
 INDEX_DIR = "index"
 INDEX_DB_NAME = "kb.db"
-# Prefix for the copy-pasteable command in a /regenerate response's "next"
+# Prefix for the copy-pasteable command in a /embed response's "next"
 # field. Left as the literal "$HOME" the CLI docs already use everywhere
 # else (see modes/kb.md's `AW=$HOME/...` line): the caller's shell expands
 # it, this process never does.
 NEXT_COMMAND_PREFIX = "$HOME/.claude/skills/agent-workbench/agent-workbench"
-ATOMIZE_REGENERATE_MESSAGE = (
-    "atomize regeneration is not implemented; it requires deleting a "
-    "note's prior atomized children, which the standing no-delete policy "
-    "does not permit. This route covers the vector tier only."
+ATOMIZE_BACKFILL_MESSAGE = (
+    "re-atomizing is out of scope by decision, not unimplemented: it "
+    "requires deleting a note's prior atomize children first, which the "
+    "standing no-delete decision forbids. Re-atomizing is a human "
+    "out-of-band operation; this route covers the vector tier only."
 )
 EMBEDDINGS_DISABLED_MESSAGE = (
     "KB_EMBED_MODEL is unset or no API key resolved (checked "
@@ -233,7 +234,7 @@ def rebuild_derived(config: KbServeConfig) -> dict[str, object]:
     recovery path (``POST /reindex``) and must converge in one call. On a
     cold or freshly migrated database it costs exactly what it cost
     before this change -- a strict non-regression. ``POST
-    /regenerate/missing`` is the bounded, resumable route for keeping
+    /embed/missing`` is the bounded, resumable route for keeping
     vectors current day to day; this is the "start over" path.
     """
     kb_home = config.kb_home
@@ -319,13 +320,13 @@ def _finish_ingest(
     is not every vault write, though: ``kb decision record`` flips a
     PRIOR note's status to ``superseded`` in place, outside this
     function, so that note's vector goes stale (not deleted, not wrong,
-    just stale) until the next ``/regenerate`` or ``/reindex`` pass picks
+    just stale) until the next ``/embed`` or ``/reindex`` pass picks
     it up. Embedding is scoped to ``[note_path] + children`` rather than
     the whole vault -- that is the fix: ingest is now O(1) in vault size
     no matter how many stale rows exist elsewhere, which is also what
     makes the vector migration safe.
 
-    DELIBERATE ASYMMETRY (also see ``regenerate``): an embedding failure
+    DELIBERATE ASYMMETRY (also see ``backfill_embeddings``): an embedding failure
     here still returns normally with ``embed_error`` set, never raises,
     because the note is already safely in the vault and failing the
     write would be worse.
@@ -446,13 +447,14 @@ def audit_decisions(
     ]
 
 
-# ── regenerate: bounded, resumable vector backfill ─────────────────────
+# ── embed: bounded, resumable vector backfill ──────────────────────────
 
 
-def _regenerate_atomize_block() -> dict[str, object]:
+def _backfill_atomize_block() -> dict[str, object]:
     """The always-present, always-disabled atomize block (see SCOPE
-    BOUNDARY in the regenerate design: re-atomizing needs a delete route
-    the standing no-delete policy does not grant).
+    BOUNDARY in the embed-backfill design: re-atomizing needs a note's
+    prior atomize children deleted first, which the standing no-delete
+    decision forbids).
 
     ``processed``/``remaining`` are ``null``, not ``0``: a real ``0``
     reads as "nothing to do", which is not true here -- this tier has
@@ -461,11 +463,11 @@ def _regenerate_atomize_block() -> dict[str, object]:
     """
     return {
         "enabled": False, "processed": None, "remaining": None,
-        "message": ATOMIZE_REGENERATE_MESSAGE,
+        "message": ATOMIZE_BACKFILL_MESSAGE,
     }
 
 
-def _regenerate_disabled(mode: str, dry_run: bool) -> dict[str, object]:
+def _backfill_disabled(mode: str, dry_run: bool) -> dict[str, object]:
     """The whole-response shape when no embedding backend is configured.
 
     200, never an error: offline is a fallback for this route exactly
@@ -478,25 +480,25 @@ def _regenerate_disabled(mode: str, dry_run: bool) -> dict[str, object]:
     }
     return {
         "mode": mode, "dry_run": dry_run,
-        "embeddings": embeddings, "atomize": _regenerate_atomize_block(),
+        "embeddings": embeddings, "atomize": _backfill_atomize_block(),
         "next": None,
     }
 
 
-def _regenerate_dry_run(
+def _backfill_dry_run(
     mode: str, db_path: Path, stale: list[tuple[str, str]], live_paths: set[str],
 ) -> dict[str, object]:
     """Report what the WHOLE remaining job would send, with zero side
     effects.
 
     Unlike a real call, a dry run is never capped to one
-    ``REGENERATE_BATCH_LIMIT`` batch: its purpose is previewing the full
+    ``BACKFILL_BATCH_LIMIT`` batch: its purpose is previewing the full
     operation (how much data leaves the machine, how many invocations
     the ``next``-loop will take) before an operator starts paying for it,
     so ``stale`` here is the entire remaining set, not one call's slice.
     """
     chars_to_send = kb_embed.embed_payload_chars([text for _, text in stale])
-    calls_required = -(-len(stale) // kb_embed.REGENERATE_BATCH_LIMIT)
+    calls_required = -(-len(stale) // kb_embed.BACKFILL_BATCH_LIMIT)
     would_prune = len(set(kb_embed.stored_fingerprints(db_path)) - live_paths)
     embeddings = {
         "enabled": True,
@@ -506,22 +508,22 @@ def _regenerate_dry_run(
         "estimated_tokens": chars_to_send // 4,
         "estimated_tokens_basis":
             "chars_to_send // 4; an estimate, not a billed count",
-        "batch_limit": kb_embed.REGENERATE_BATCH_LIMIT,
+        "batch_limit": kb_embed.BACKFILL_BATCH_LIMIT,
         "calls_required": calls_required,
     }
     # A dry run's next always names the verb you just dry-ran: running it
     # for real is the whole point, and there is nothing to wait on.
     next_command = (
-        None if not stale else f"{NEXT_COMMAND_PREFIX} kb regenerate {mode}"
+        None if not stale else f"{NEXT_COMMAND_PREFIX} kb embed {mode}"
     )
     return {
         "mode": mode, "dry_run": True,
-        "embeddings": embeddings, "atomize": _regenerate_atomize_block(),
+        "embeddings": embeddings, "atomize": _backfill_atomize_block(),
         "next": next_command,
     }
 
 
-def _regenerate_real(
+def _backfill_real(
     config: KbServeConfig,
     mode: str,
     db_path: Path,
@@ -551,15 +553,15 @@ def _regenerate_real(
     }
     if embed_counts.usage:
         embeddings["usage"] = embed_counts.usage
-    # full never points back at itself: it resets every hash on every
-    # call, so a caller that kept calling "full" until remaining hit 0
+    # all never points back at itself: it resets every hash on every
+    # call, so a caller that kept calling "all" until remaining hit 0
     # would never terminate. missing is the only convergent loop target.
     next_command = (
-        None if remaining == 0 else f"{NEXT_COMMAND_PREFIX} kb regenerate missing"
+        None if remaining == 0 else f"{NEXT_COMMAND_PREFIX} kb embed missing"
     )
     result = {
         "mode": mode, "dry_run": False,
-        "embeddings": embeddings, "atomize": _regenerate_atomize_block(),
+        "embeddings": embeddings, "atomize": _backfill_atomize_block(),
         "next": next_command,
     }
     if embed_counts.error:
@@ -567,25 +569,26 @@ def _regenerate_real(
     return result
 
 
-def regenerate(
+def backfill_embeddings(
     config: KbServeConfig, reset: bool, dry_run: bool,
 ) -> dict[str, object]:
     """One bounded, resumable vector-backfill pass.
 
     ``reset`` is the ONLY difference between the two routes: True marks
-    every stored hash NULL first (``/regenerate/full``), False does not
-    (``/regenerate/missing``). Everything after is one code path, so
-    ``full`` inherits ``missing``'s boundedness and resumability for
-    free. At most ``kb_embed.REGENERATE_BATCH_LIMIT`` notes are embedded
+    every stored hash NULL first (``/embed/all``), False does not
+    (``/embed/missing``). Everything after is one code path, so
+    ``all`` inherits ``missing``'s boundedness and resumability for
+    free. At most ``kb_embed.BACKFILL_BATCH_LIMIT`` notes are embedded
     per call. ``dry_run`` runs the identical scan, skips the reset, the
     prune and every network call, and reports the exact
-    ``chars_to_send`` (see ``_regenerate_dry_run``).
+    ``chars_to_send`` (see ``_backfill_dry_run``).
 
     Ships the embeddings tier only: the returned ``atomize`` block always
-    carries ``enabled: false`` naming the pending no-delete-routes policy
-    decision that blocks it, never a placeholder to fill in later.
+    carries ``enabled: false`` naming the settled no-delete-routes
+    decision that blocks it permanently, never a placeholder to fill in
+    later.
     """
-    mode = "full" if reset else "missing"
+    mode = "all" if reset else "missing"
     kb_home = config.kb_home
     # Guarantees index/kb.db's directory exists even against a vault no
     # ingest route has ever touched yet, exactly like every other entry
@@ -595,21 +598,21 @@ def regenerate(
     db_path = index_db_path(kb_home)
 
     if not kb_embed.embeddings_enabled(config):
-        return _regenerate_disabled(mode, dry_run)
+        return _backfill_disabled(mode, dry_run)
 
     notes = _note_texts(kb_home)
     if reset and not dry_run:
         kb_embed.mark_all_stale(db_path)
     # reset means "every note is stale" by definition -- computed directly
     # rather than via stale_notes so a dry run never has to consult (or
-    # mutate) stored hashes to know the answer for `full`.
+    # mutate) stored hashes to know the answer for `all`.
     stale = notes if reset else kb_embed.stale_notes(db_path, notes)
     live_paths = {path for path, _ in notes}
 
     if dry_run:
-        return _regenerate_dry_run(mode, db_path, stale, live_paths)
-    work = stale[:kb_embed.REGENERATE_BATCH_LIMIT]
-    return _regenerate_real(config, mode, db_path, work, live_paths, len(stale))
+        return _backfill_dry_run(mode, db_path, stale, live_paths)
+    work = stale[:kb_embed.BACKFILL_BATCH_LIMIT]
+    return _backfill_real(config, mode, db_path, work, live_paths, len(stale))
 
 
 # ── HTTP server ───────────────────────────────────────────────────────
@@ -618,7 +621,7 @@ def regenerate(
 class KbHTTPServer(ThreadingHTTPServer):
     """ThreadingHTTPServer carrying the resolved KbServeConfig.
 
-    ``embed_lock`` serializes ``/reindex`` and ``/regenerate/*``: they are
+    ``embed_lock`` serializes ``/reindex`` and ``/embed/*``: they are
     the only routes that embed an unbounded-ish set of notes, and two of
     them running at once would embed the same stale notes twice, which is
     duplicate model spend -- the exact cost this workstream exists to
@@ -826,8 +829,8 @@ class KbRequestHandler(BaseHTTPRequestHandler):
             "/reindex": self._handle_reindex,
             "/decision": self._handle_decision,
             "/enrich": self._handle_enrich,
-            "/regenerate/full": self._handle_regenerate_full,
-            "/regenerate/missing": self._handle_regenerate_missing,
+            "/embed/all": self._handle_embed_all,
+            "/embed/missing": self._handle_embed_missing,
         }
         handler = routes.get(parsed.path)
         if handler is None:
@@ -840,7 +843,7 @@ class KbRequestHandler(BaseHTTPRequestHandler):
             # sqlite3.OperationalError (e.g. "database is locked") is not
             # an OSError, so it would otherwise fall through every catch
             # here and drop the connection with no status and no body --
-            # exactly the failure a /regenerate retry loop must never see.
+            # exactly the failure a /embed retry loop must never see.
             self._send_json(503, {"error": f"database unavailable: {exc}"})
         except (OSError, urllib.error.URLError) as exc:
             self._send_json(502, {"error": f"vault operation failed: {exc}"})
@@ -883,7 +886,7 @@ class KbRequestHandler(BaseHTTPRequestHandler):
         if self.server.embed_lock.acquire(blocking=False):
             return True
         self._send_json(409, {
-            "error": "another reindex or regenerate is already running",
+            "error": "another reindex or embed backfill is already running",
             "next": f"{NEXT_COMMAND_PREFIX} {retry_command}",
         })
         return False
@@ -909,24 +912,24 @@ class KbRequestHandler(BaseHTTPRequestHandler):
             _embed_notes(config, [Path(str(p)) for p in result["notes"]])
         self._send_json(200, result)
 
-    def _handle_regenerate(self, payload: dict[str, object], reset: bool) -> None:
-        command = "kb regenerate full" if reset else "kb regenerate missing"
+    def _handle_embed(self, payload: dict[str, object], reset: bool) -> None:
+        command = "kb embed all" if reset else "kb embed missing"
         if not self._try_acquire_embed_lock(command):
             return
         try:
             dry_run = payload.get("dry_run", False)
             if not isinstance(dry_run, bool):
                 raise ValueError("dry_run must be a boolean")
-            result = regenerate(self.server.config, reset, dry_run)
+            result = backfill_embeddings(self.server.config, reset, dry_run)
         finally:
             self.server.embed_lock.release()
         self._send_json(502 if "error" in result else 200, result)
 
-    def _handle_regenerate_full(self, payload: dict[str, object]) -> None:
-        self._handle_regenerate(payload, reset=True)
+    def _handle_embed_all(self, payload: dict[str, object]) -> None:
+        self._handle_embed(payload, reset=True)
 
-    def _handle_regenerate_missing(self, payload: dict[str, object]) -> None:
-        self._handle_regenerate(payload, reset=False)
+    def _handle_embed_missing(self, payload: dict[str, object]) -> None:
+        self._handle_embed(payload, reset=False)
 
 
 def serve_forever(config: KbServeConfig, host: str, port: int) -> None:
