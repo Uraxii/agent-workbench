@@ -64,21 +64,35 @@ services:
 
   artifact-serve:
     build:
-      context: ./.claude/skills/artifact-serve
-      dockerfile: container/Containerfile
-    image: localhost/artifact-serve:latest
-    # ponytail: see kb-serve's user: comment -- same best-effort
-    # approximation of the quadlet's User/Group/UserNS=keep-id.
-    user: "${UID:-1000}:${GID:-1000}"
+      context: ./apps/artifact-review
+      dockerfile: Containerfile
+      target: runtime
+    image: localhost/artifact-review:latest
+    # No `user:` override here -- PROVEN broken for this service, not just a
+    # cosmetic gap. Plain compose has no real UserNS=keep-id, so
+    # `user: "1000:1000"` maps to an unrelated host subuid that owns nothing
+    # on the mount, making writes fail with permission denied. Omitting `user:`
+    # runs root-in-container, which under rootless podman's default subuid
+    # mapping IS the invoking host user for file-ownership purposes.
+    # cap_drop ALL + no-new-privileges + read_only rootfs still apply, so this
+    # is not a meaningfully weaker container despite the nominal root label.
     environment:
       ARTIFACT_SERVE_HOST: "0.0.0.0"
       ARTIFACT_SERVE_PORT: "9099"
+      ARTIFACT_SERVE_ALLOWED_HOSTS: "127.0.0.1,localhost"
+      ARTIFACT_SERVE_STAGE_ROOT: "/tmp/artifacts"
+      ARTIFACT_SERVE_FEEDBACK_ROOT: "${HOME}/.local/share/artifacts"
+      DJANGO_DEBUG: "0"
       HOME: "${HOME}"
     ports:
       - "127.0.0.1:9099:9099"
     volumes:
-      - /tmp/claude-artifacts:/tmp/claude-artifacts:rw
-      - "${HOME}/.local/share/claude-artifacts:${HOME}/.local/share/claude-artifacts:rw"
+      # /tmp is otherwise tmpfs inside the read-only container; verified
+      # this bind mount survives that tmpfs and remains visible on the host.
+      # Shared SELinux relabel is required for both mounts; without it,
+      # publish hit EACCES on the feedback root despite correct DAC perms.
+      - /tmp/artifacts:/tmp/artifacts:rw,z
+      - "${HOME}/.local/share/artifacts:${HOME}/.local/share/artifacts:rw,z"
     read_only: true
     cap_drop:
       - ALL
@@ -88,12 +102,12 @@ services:
       - /tmp
     restart: unless-stopped
     healthcheck:
-      # Mirrors the Containerfile's baked HEALTHCHECK (hits / not /health).
+      # Mirrors the Containerfile's baked HEALTHCHECK.
       test:
         - CMD
         - python3
         - -c
-        - "import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('ARTIFACT_SERVE_PORT','9099')+'/', timeout=3)"
+        - "import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('ARTIFACT_SERVE_PORT','9099')+'/_/health', timeout=3)"
       interval: 30s
       timeout: 5s
       start_period: 5s

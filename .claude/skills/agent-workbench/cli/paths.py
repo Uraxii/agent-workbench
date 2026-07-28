@@ -1,12 +1,9 @@
-"""Repo-root, sibling-artifact and vault path resolution for the CLI.
+"""Repo-root, sibling-script and vault path resolution for the CLI.
 
-The skill lives at ``<repo>/.claude/skills/agent-workbench/``. Every
-ported subcommand needs to locate artifacts elsewhere in the repo: the
-`kb` port delegates to ``<repo>/scripts/kb-serve.py`` (and its hyphenated
-siblings), and the `artifact` port delegates to
-``<repo>/.claude/skills/artifact-serve/scripts/artifact-serve.py``.
-Centralizing that math here keeps it out of the individual subcommand
-modules.
+The skill lives at ``<repo>/.claude/skills/agent-workbench/``. Ported
+subcommands need to locate scripts elsewhere in the repo, e.g. the `kb`
+port's siblings under ``<repo>/scripts/``. Centralizing that math here
+keeps it out of the individual subcommand modules.
 
 ``resolve_kb_home`` lives here for the same reason: both `cli.kb` and
 `cli.kb_decision` need the vault root, and `cli.kb` already imports
@@ -22,7 +19,6 @@ from pathlib import Path
 __all__ = [
     "REPO_ROOT",
     "SCRIPTS_DIR",
-    "ARTIFACT_SKILL_DIR",
     "repo_root",
     "resolve_kb_home",
 ]
@@ -31,7 +27,6 @@ __all__ = [
 # the repo root is four parents up. Resolved once at import.
 REPO_ROOT: Path = Path(__file__).resolve().parents[4]
 SCRIPTS_DIR: Path = REPO_ROOT / "scripts"
-ARTIFACT_SKILL_DIR: Path = REPO_ROOT / ".claude" / "skills" / "artifact-serve"
 
 
 def repo_root() -> Path:

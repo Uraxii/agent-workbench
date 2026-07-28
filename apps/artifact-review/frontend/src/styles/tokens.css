@@ -1,0 +1,30 @@
+@font-face{font-family:"Plex Local";src:url("/fonts/ibm-plex-sans-latin-400-normal.woff2") format("woff2");font-weight:400;font-style:normal;font-display:swap}
+@font-face{font-family:"Plex Local";src:url("/fonts/ibm-plex-sans-latin-500-normal.woff2") format("woff2");font-weight:500;font-style:normal;font-display:swap}
+@font-face{font-family:"Plex Local";src:url("/fonts/ibm-plex-sans-latin-600-normal.woff2") format("woff2");font-weight:600;font-style:normal;font-display:swap}
+@font-face{font-family:"JetBrains Local";src:url("/fonts/jetbrains-mono-latin-400-normal.woff2") format("woff2");font-weight:400;font-style:normal;font-display:swap}
+@font-face{font-family:"JetBrains Local";src:url("/fonts/jetbrains-mono-latin-500-normal.woff2") format("woff2");font-weight:500;font-style:normal;font-display:swap}
+@font-face{font-family:"JetBrains Local";src:url("/fonts/jetbrains-mono-latin-600-normal.woff2") format("woff2");font-weight:600;font-style:normal;font-display:swap}
+@font-face{font-family:"Source Serif Local";src:url("/fonts/source-serif-4-latin-400-normal.woff2") format("woff2");font-weight:400;font-style:normal;font-display:swap}
+@font-face{font-family:"Source Serif Local";src:url("/fonts/source-serif-4-latin-500-normal.woff2") format("woff2");font-weight:500;font-style:normal;font-display:swap}
+@font-face{font-family:"Source Serif Local";src:url("/fonts/source-serif-4-latin-600-normal.woff2") format("woff2");font-weight:600;font-style:normal;font-display:swap}
+:root{
+  --paper-0:oklch(98% .012 78); --paper-1:oklch(95% .014 78); --paper-2:oklch(91% .018 78); --paper-3:oklch(86% .020 78); --paper-4:oklch(76% .024 78);
+  --ink-0:oklch(17% .028 64); --ink-1:oklch(27% .026 64); --ink-2:oklch(39% .024 64); --ink-3:oklch(52% .021 64);
+  --accent:oklch(43% .078 34); --accent-soft:oklch(93% .035 34); --accent-rule:oklch(56% .065 34);
+  --open:oklch(39% .090 38); --open-soft:oklch(94% .032 38);
+  --resolved:oklch(36% .060 145); --resolved-soft:oklch(94% .030 145);
+  --draft:oklch(42% .052 88); --draft-soft:oklch(95% .028 88);
+  --focus:oklch(45% .090 42);
+  --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:24px; --s6:32px; --r1:2px; --r2:4px; --r3:7px;
+  --section-height:900px; --viewer-height:calc(var(--section-height) - 132px);
+  --sans:"Plex Local"; --mono:"JetBrains Local"; --serif:"Source Serif Local";
+}
+[data-theme="dark"]{
+  --paper-0:oklch(27% .006 60); --paper-1:oklch(23% .005 60); --paper-2:oklch(19% .004 60); --paper-3:oklch(36% .008 60); --paper-4:oklch(46% .010 60);
+  --ink-0:oklch(94% .004 60); --ink-1:oklch(84% .005 60); --ink-2:oklch(70% .006 60); --ink-3:oklch(58% .007 60);
+  --accent:oklch(72% .13 32); --accent-soft:oklch(34% .07 32); --accent-rule:oklch(66% .13 32);
+  --open:oklch(75% .13 36); --open-soft:oklch(33% .07 36);
+  --resolved:oklch(80% .13 152); --resolved-soft:oklch(33% .06 152);
+  --draft:oklch(82% .11 92); --draft-soft:oklch(34% .06 92);
+  --focus:oklch(80% .13 50);
+}

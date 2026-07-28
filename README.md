@@ -4,9 +4,9 @@ Standalone home for the local agent-workbench service stack. This repo owns the 
 
 - `bdui`
 - `kb-serve`
-- `artifact-serve`
+- `artifact-review`
 - `n8n`
-- the supporting `agent-workbench` and `artifact-serve` skills/CLI that drive them
+- the supporting `agent-workbench` CLI that drives them
 
 ## Install on a fresh machine
 
@@ -113,8 +113,8 @@ Live runtime data stays where it already lives. This split does **not** move or 
 
 - `~/.beads-hub/`
 - `~/.knowledgebase/`
-- `~/.local/share/claude-artifacts/`
-- `/tmp/claude-artifacts/`
+- `~/.local/share/artifacts/`
+- `/tmp/artifacts/`
 - `~/.local/share/n8n/`
 
 ## Repo layout
@@ -125,4 +125,12 @@ Live runtime data stays where it already lives. This split does **not** move or 
 - `scripts/n8n-container/` n8n helpers
 - `scripts/kb-serve.py` and sibling helpers for the knowledgebase service
 - `.claude/skills/agent-workbench/` CLI used for board, hub, kb, workspace, and deploy flows
-- `.claude/skills/artifact-serve/` review app service code and assets
+- `apps/artifact-review/` Django + React artifact review service
+
+## Quick checks
+
+```bash
+cd ~/Projects/agent-workbench
+rg -n 'Projects/agent-workbench|agent-workbench' scripts .claude docker-compose.yml
+python3 .claude/skills/agent-workbench/agent-workbench --help
+```

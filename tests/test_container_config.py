@@ -13,7 +13,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 
 _CONTAINERFILES = [
     _REPO_ROOT / "scripts" / "kb-container" / "Containerfile",
-    _REPO_ROOT / ".claude" / "skills" / "artifact-serve" / "container" / "Containerfile",
+    _REPO_ROOT / "apps" / "artifact-review" / "Containerfile",
 ]
 
 

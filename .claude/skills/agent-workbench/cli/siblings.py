@@ -2,16 +2,13 @@
 
 The `kb` subcommand is a thin facade over the existing, proven
 ``scripts/kb-serve.py`` (which itself facades kb-index.py / kb-clip.py /
-kb-atomize.py), and the `artifact` subcommand is the same shape over
-``.claude/skills/artifact-serve/scripts/artifact-serve.py``. Those files
-have hyphenated names a normal ``import`` cannot address, so this reuses
-kb-serve.py's own proven load-by-path pattern
+kb-atomize.py). Those files have hyphenated names a normal ``import`` cannot
+address, so this reuses kb-serve.py's own proven load-by-path pattern
 (importlib.util.spec_from_file_location, register in sys.modules BEFORE
 exec so dataclass annotation resolution works). This is deliberate reuse,
 not a rewrite: the deterministic clip/put/query/atomize logic and the
 http/https scheme allowlist (kb-clip.check_url_scheme) are inherited
-verbatim, never reimplemented here -- same for artifact-serve.py's push /
-feedback / start / run / status handlers.
+verbatim, never reimplemented here.
 """
 from __future__ import annotations
 
@@ -20,9 +17,9 @@ import sys
 import types
 from pathlib import Path
 
-from cli.paths import ARTIFACT_SKILL_DIR, SCRIPTS_DIR
+from cli.paths import SCRIPTS_DIR
 
-__all__ = ["load_script", "load_module_at", "load_kb_serve", "load_artifact_serve"]
+__all__ = ["load_script", "load_module_at", "load_kb_serve"]
 
 
 def load_module_at(path: Path, module_name: str) -> types.ModuleType:
@@ -75,19 +72,3 @@ def load_kb_serve() -> types.ModuleType:
         when the HTTP service is down.
     """
     return load_script("kb-serve")
-
-
-def load_artifact_serve() -> types.ModuleType:
-    """Load ``.claude/skills/artifact-serve/scripts/artifact-serve.py``.
-
-    Lives under the artifact-serve skill dir, not alongside the other
-    siblings in ``scripts/``, so it needs its own path rather than
-    ``load_script`` (which always resolves against SCRIPTS_DIR).
-
-    Returns:
-        The artifact-serve module, exposing cmd_push / cmd_feedback /
-        cmd_start / cmd_run / cmd_status the `artifact` port calls
-        in-process.
-    """
-    path = ARTIFACT_SKILL_DIR / "scripts" / "artifact-serve.py"
-    return load_module_at(path, "artifact_serve")

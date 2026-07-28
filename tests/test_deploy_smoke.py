@@ -38,11 +38,14 @@ KB_TEST_IMAGE = "localhost/kb-serve:hardened-test"
 KB_TEST_CONTAINER = "kb-serve-hardened-test"
 KB_TEST_PORT = 19100
 
-ARTIFACT_SERVE_TEST_IMAGE = "localhost/artifact-serve:hardened-test"
-ARTIFACT_SERVE_TEST_CONTAINER = "artifact-serve-hardened-test"
+ARTIFACT_SERVE_TEST_IMAGE = "localhost/artifact-review:hardened-test"
+ARTIFACT_SERVE_TEST_CONTAINER = "artifact-review-hardened-test"
 ARTIFACT_SERVE_TEST_PORT = 19099
 
 BUILD_TIMEOUT_SEC = 180
+# The artifact-review image builds the React SPA (npm ci + vitest + vite
+# build) before the Python stage, so a cold build is minutes, not seconds.
+ARTIFACT_BUILD_TIMEOUT_SEC = 900
 RUN_TIMEOUT_SEC = 30
 HEALTH_POLL_TRIES = 20
 HEALTH_POLL_DELAY_SEC = 0.5
@@ -144,24 +147,30 @@ def kb_serve_boundary(tmp_path: Path):
 
 @pytest.fixture()
 def artifact_serve_boundary(tmp_path: Path):
-    """Build + run the hardened artifact-serve image standalone, then tear down.
+    """Build + run the hardened artifact-review image standalone, then tear down.
 
     Isolated from the live stack: distinct image tag, container name, and
     host port. Never touches the real artifact-serve quadlet/systemd unit.
+    Builds the `runtime` target only -- the `test` stage on top of it runs
+    the backend suite, which belongs to the app's own build, not here.
     """
     _require_podman()
+    app_dir = REPO_ROOT / "apps/artifact-review"
     _run(
         [
             "podman", "build", "-t", ARTIFACT_SERVE_TEST_IMAGE,
-            "-f", str(REPO_ROOT / ".claude/skills/artifact-serve/container/Containerfile"),
-            str(REPO_ROOT / ".claude/skills/artifact-serve"),
+            "--target", "runtime",
+            "-f", str(app_dir / "Containerfile"),
+            str(app_dir),
         ],
-        timeout=BUILD_TIMEOUT_SEC,
+        timeout=ARTIFACT_BUILD_TIMEOUT_SEC,
     )
     fake_home = tmp_path / "home"
     fake_home.mkdir()
-    artifacts_root = tmp_path / "claude-artifacts"
+    artifacts_root = tmp_path / "artifacts"
     artifacts_root.mkdir()
+    feedback_root = tmp_path / "feedback"
+    feedback_root.mkdir()
     subprocess.run(
         ["podman", "rm", "-f", ARTIFACT_SERVE_TEST_CONTAINER], capture_output=True,
     )
@@ -172,11 +181,14 @@ def artifact_serve_boundary(tmp_path: Path):
             "--user", f"{os.getuid()}:{os.getgid()}", "--userns=keep-id",
             "-e", f"HOME={fake_home}",
             "-e", "ARTIFACT_SERVE_HOST=0.0.0.0", "-e", "ARTIFACT_SERVE_PORT=9099",
+            "-e", "ARTIFACT_SERVE_ALLOWED_HOSTS=127.0.0.1,localhost",
+            "-e", "ARTIFACT_SERVE_STAGE_ROOT=/tmp/artifacts",
+            "-e", f"ARTIFACT_SERVE_FEEDBACK_ROOT={feedback_root}",
             "--read-only", "--tmpfs", "/tmp", "--cap-drop=ALL",
             "--security-opt", "no-new-privileges",
             "--security-opt", "label=disable",
-            "-v", f"{artifacts_root}:/tmp/claude-artifacts:rw",
-            "-v", f"{fake_home}:{fake_home}:rw",
+            "-v", f"{artifacts_root}:/tmp/artifacts:rw",
+            "-v", f"{feedback_root}:{feedback_root}:rw",
             ARTIFACT_SERVE_TEST_IMAGE,
         ],
         timeout=RUN_TIMEOUT_SEC,
@@ -189,11 +201,32 @@ def artifact_serve_boundary(tmp_path: Path):
         )
 
 
+def _path_visible_in_container(container: str, path: Path) -> str:
+    """Report whether path exists from inside container, as 'True'/'False'."""
+    result = subprocess.run(
+        [
+            "podman", "exec", container, "python3", "-c",
+            f"import pathlib; print(pathlib.Path({str(path)!r}).exists())",
+        ],
+        capture_output=True, text=True, timeout=RUN_TIMEOUT_SEC, check=False,
+    )
+    if result.returncode != 0:
+        pytest.fail(f"podman exec failed: {result.stderr}")
+    return result.stdout.strip()
+
+
 def test_kb_serve_container_boundary(kb_serve_boundary: None) -> None:
     status = _wait_for_status(f"http://127.0.0.1:{KB_TEST_PORT}/health")
     assert status == 200
 
 
 def test_artifact_serve_container_boundary(artifact_serve_boundary: None) -> None:
-    status = _wait_for_status(f"http://127.0.0.1:{ARTIFACT_SERVE_TEST_PORT}/")
+    status = _wait_for_status(
+        f"http://127.0.0.1:{ARTIFACT_SERVE_TEST_PORT}/_/health"
+    )
     assert status == 200
+    # The repo itself is never mounted, so the container must not see it.
+    assert _path_visible_in_container(
+        ARTIFACT_SERVE_TEST_CONTAINER, REPO_ROOT,
+    ) == "False"
+

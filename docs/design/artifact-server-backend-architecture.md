@@ -4,7 +4,9 @@
 
 This document designs the Django backend that replaces the HTTP serving parts of `review-serve.py` while preserving the parity contract in `docs/design/artifact-server-parity-spec.md`.
 
-The first implementation target is server parity. The existing Python `push`, `feedback`, and deployment CLI paths keep working during migration because the Django backend reads and writes the same staging tree and SQLite database.
+The implementation target is the containerized HTTP service. The
+agent-workbench CLI calls the service for publish, feedback, and status; only
+the service reads or writes artifact storage.
 
 Non-goals for the first backend slice:
 
@@ -87,13 +89,13 @@ Use environment variables matching the current server:
 |---|---|---|
 | `REVIEW_SERVE_HOST` | `127.0.0.1` | Bind host for local run and gunicorn wrapper. |
 | `REVIEW_SERVE_PORT` | `9099` | Bind port for local run and gunicorn wrapper. |
-| `REVIEW_SERVE_STAGE_ROOT` | `/tmp/claude-artifacts` | Staged artifact symlink tree. |
-| `REVIEW_SERVE_FEEDBACK_ROOT` | `~/.local/share/claude-artifacts` | Durable DB and upload root. |
+| `REVIEW_SERVE_STAGE_ROOT` | `/tmp/artifacts` | Service-owned extracted artifact tree. |
+| `REVIEW_SERVE_FEEDBACK_ROOT` | `~/.local/share/artifacts` | Durable DB and upload root. |
 | `REVIEW_SERVE_SPA_ROOT` | frontend build directory | React SPA bundle root. |
 | `REVIEW_SERVE_ASSETS_ROOT` | bundled backend assets directory | Vendored OpenSeadragon, Annotorious, CSS, and images. |
-| `REVIEW_SERVE_PUBLISH_ENABLED` | `0` | HTTP publish route disabled unless deliberately enabled. |
+| `REVIEW_SERVE_PUBLISH_ENABLED` | `1` | HTTP publish route enabled for the CLI client. |
 
-`settings.py` sets `DATABASES['default']['ENGINE'] = 'django.db.backends.sqlite3'` and `DATABASES['default']['NAME']` to `~/.local/share/claude-artifacts/feedback.db` after expanding `~`. It does not point at an app-local development database.
+`settings.py` sets `DATABASES['default']['ENGINE'] = 'django.db.backends.sqlite3'` and `DATABASES['default']['NAME']` to `~/.local/share/artifacts/feedback.db` after expanding `~`. It does not point at an app-local development database.
 
 ## API contract
 
@@ -101,7 +103,7 @@ The Django backend must match the current HTTP contract exactly unless a row say
 
 | Method | Route | Django view | Request shape | Response shape | Status codes | Parity notes |
 |---|---|---|---|---|---|---|
-| GET | `/` | `root_index` | none | Root index HTML from `/tmp/claude-artifacts/index.html`, or SPA shell when the React entrypoint owns root after migration | 200, normal 404 | Keep this as the health route. If SPA owns `/`, it must still show the staged project grid behavior. |
+| GET | `/` | `root_index` | none | Root index HTML from `/tmp/artifacts/index.html`, or SPA shell when the React entrypoint owns root after migration | 200, normal 404 | Keep this as the health route. If SPA owns `/`, it must still show the staged project grid behavior. |
 | GET | `/_/assets/<path:rel>` | `vendored_asset` | route `rel` | Asset bytes | 200, 404 | Resolve under `REVIEW_SERVE_ASSETS_ROOT`; reject traversal after full path resolution. |
 | GET | `/_/api/settings` | `api_settings` | none | `{key: value}` from `setting` | 200, 500 `{error}` | Ensures schema exists, matching current route behavior. |
 | GET | `/_/api/uploads/<int:id>` | `api_upload` | route `id` | Upload bytes | 200, 404, 410, 500 | Preserve `Content-Type`, `Content-Length`, `X-Content-Type-Options: nosniff`, and disposition rules. |
@@ -113,7 +115,7 @@ The Django backend must match the current HTTP contract exactly unless a row say
 | POST | `/_/api/comments` | `api_create_comment` | legacy multipart form | `{id, thread_id, artifact_id, sub_path}` | 201, 400, 411, 413, 500 | Creates page-level thread and opening reply. Mirrors like `api_create_thread`. |
 | GET | `/_/review` | `review_page` | query `artifact`, optional `view`, `src`, `path` | HTML review page | 200, 400, 404 | No view renders gallery. `view=image` renders simple-image OpenSeadragon. `view=code` renders escaped line viewer. |
 | GET | `/_/tiles/<artifact>/<path:src>/<path:tile>` | `deep_zoom_tile` | reserved future route | tile bytes | 404 or 501 in parity slice | No dynamic DZI exists today. If implemented later, it must use staged-root guards and SSRF guard for any remote fetch. This addition would require a lockstep `artifact-serve` skill doc change. |
-| POST | `/_/api/publish` | `api_publish` | disabled by default | disabled by default | 404 or 501 while disabled | Not current parity. If enabled, it is restricted to non-active types and forces a lockstep skill-doc update. |
+| POST | `/_/api/publish` | `api_publish` | multipart form: `project`, `as`, optional `artifact_id`, `archive` tar file | publish result JSON | 201, 400, 409, 413, 500 | Extracts a safe tar into the service-owned artifact root. Reject absolute paths, `..`, symlinks, devices, and non-regular members. |
 | GET | `/_/app/assets/<path:rel>` | `spa_asset` | route `rel` | React bundle asset bytes | 200, 404 | Vite `base: '/_/app/'`. Placing hashed JS/CSS under the reserved `/_/` namespace means a pushed project literally named `assets` can never collide with the SPA's own asset paths. Resolve under `REVIEW_SERVE_SPA_ROOT`; traversal guard. |
 | GET | `/<project>/<subdir>/<path:rel>` | `static_artifact` | static URL path | raw bytes, rewritten HTML, or generated directory gallery | 200, 301, 404, normal static statuses | Serve staged files. HTML gets feedback widget and sandbox CSP. |
 | GET | `/<project>/<subdir>/` | `static_artifact` | directory URL | static index or generated gallery | 200, normal static statuses | Lists direct child dirs, images, code files, and raw fallback links. |
@@ -161,15 +163,12 @@ Use the same paths as `review-serve.py`:
 
 | Resource | Path |
 |---|---|
-| Stage root | `/tmp/claude-artifacts` |
-| Root index | `/tmp/claude-artifacts/index.html` |
-| Server pid | `/tmp/claude-artifacts/.serve.pid` |
-| Server port | `/tmp/claude-artifacts/.serve.port` |
-| Server log | `/tmp/claude-artifacts/.serve.log` |
-| Feedback DB | `~/.local/share/claude-artifacts/feedback.db` |
-| Upload files | `~/.local/share/claude-artifacts/uploads/<reply-id>/<filename>` |
+| Stage root | `/tmp/artifacts` |
+| Feedback DB | `~/.local/share/artifacts/feedback.db` |
+| Upload files | `~/.local/share/artifacts/uploads/<reply-id>/<filename>` |
 
-The backend must not move the database or restage artifacts. Existing Python `push` and `feedback` commands continue to work because they read and write these same locations.
+The backend must not move the database. Artifact publication happens through
+`POST /_/api/publish`; the CLI does not stage files locally.
 
 ### Django database configuration
 
@@ -290,20 +289,16 @@ For review pages, resolve the artifact location by `artifact_id`. `src` and `pat
 
 ### Staging path mapping
 
-The server serves from the existing symlink tree:
+The server serves from the service-owned artifact tree:
 
 ```text
-/tmp/claude-artifacts/<project>/<subdir> -> pushed source directory
+/tmp/artifacts/<project>/<subdir>/
 ```
 
-The server does not create or rewrite those symlinks in the backend parity slice. The existing push CLI keeps responsibility for staging and for updating `artifact_index`.
-
-Preserve these current footguns unless a later CLI migration deliberately fixes them with tests:
-
-- Push can destroy a self-referencing staging symlink target.
-- Symlink targets outside the container mounts serve 404 from the container.
-- Reachable files under pushed symlink targets are reachable.
-- `/tmp` staging wipes on reboot.
+The server creates or replaces entries from uploaded tar archives and updates
+`artifact_index`. Archive extraction rejects paths that are absolute, escape
+with `..`, or represent symlinks, devices, hard links, or other non-regular
+members. `/tmp` artifact data still wipes on reboot.
 
 ### Raw artifact responses
 
@@ -349,13 +344,12 @@ There is no dynamic DZI endpoint in current parity. The backend reserves `/_/til
 
 ## Publish safety and response headers
 
-The publish-safety decision is binding: do not expose a same-origin HTTP publish route that can write active browser content, and do not serve CLI-pushed active content without a sandbox on the no-auth review origin.
+The publish-safety decision is binding: HTTP publish must not allow active
+browser content to script the no-auth review origin.
 
 ### HTTP publish policy
 
-`POST /_/api/publish` is disabled by default with `REVIEW_SERVE_PUBLISH_ENABLED=0`. While disabled, the route returns 404 or 501 and has no side effects.
-
-When deliberately enabled, it must use this policy:
+`POST /_/api/publish` is the CLI publication path and must use this policy:
 
 | Control | Required behavior |
 |---|---|
@@ -366,7 +360,8 @@ When deliberately enabled, it must use this policy:
 | Response headers | Published file responses include `X-Content-Type-Options: nosniff`. Content-Disposition follows the upload route rule. |
 | Tests | Cover allowed extensions, blocked active extensions, MIME mismatch, traversal, oversized body, and same-origin script planting regression. |
 
-If the `artifact-serve` skill starts using HTTP publish, update the skill docs in lockstep to say HTTP publish is for non-active files only and CLI push remains required for HTML review pages.
+The CLI sends an uncompressed tar and never writes into the artifact store.
+The service validates every member again before extraction.
 
 ### Sandbox CSP for raw artifacts
 
@@ -413,8 +408,8 @@ From repo root, local development can use Django's server:
 
 ```bash
 cd apps/artifact-review/backend
-REVIEW_SERVE_STAGE_ROOT=/tmp/claude-artifacts \
-REVIEW_SERVE_FEEDBACK_ROOT="$HOME/.local/share/claude-artifacts" \
+REVIEW_SERVE_STAGE_ROOT=/tmp/artifacts \
+REVIEW_SERVE_FEEDBACK_ROOT="$HOME/.local/share/artifacts" \
 REVIEW_SERVE_HOST=127.0.0.1 \
 REVIEW_SERVE_PORT=9099 \
 python3 manage.py runserver 127.0.0.1:9099
@@ -468,8 +463,8 @@ Keep the current hardening controls:
 | Capabilities | `cap_drop: [ALL]` or Quadlet `DropCapability=ALL`. |
 | Privilege escalation | `no-new-privileges:true` or Quadlet `NoNewPrivileges=true`. |
 | User | Rootless user, `User=%U`, `Group=%U`, `UserNS=keep-id` for Quadlet, UID and GID mapping for compose. |
-| Tmpfs | `/tmp` tmpfs, with `/tmp/claude-artifacts` bind-mounted over the staging path when serving host-staged artifacts. |
-| Mounts | Only `/tmp/claude-artifacts:/tmp/claude-artifacts:rw` and `~/.local/share/claude-artifacts:~/.local/share/claude-artifacts:rw`. No `$HOME`-wide mount. |
+| Tmpfs | `/tmp` tmpfs, with `/tmp/artifacts` bind-mounted over the staging path when serving host-staged artifacts. |
+| Mounts | Only `/tmp/artifacts:/tmp/artifacts:rw` and `~/.local/share/artifacts:~/.local/share/artifacts:rw`. No `$HOME`-wide mount. |
 | Healthcheck | GET `http://127.0.0.1:9099/`. |
 | SELinux | Preserve the current narrow bind behavior. If label disabling is needed, scope it to this container only. |
 
@@ -505,10 +500,10 @@ python manage.py check
 pytest
 ```
 
-During migration, stage artifacts with the existing CLI:
+Publish artifacts with the agent-workbench CLI:
 
 ```bash
-python3 ~/.claude/skills/artifact-serve/scripts/review-serve.py push --project NAME --src /path/to/dir --id NAME/subdir
+$HOME/.claude/skills/agent-workbench/agent-workbench artifact publish --project NAME --src /path/to/dir --id NAME/subdir
 ```
 
 Then open:
@@ -531,7 +526,7 @@ Use Django's test client and temporary directories. Do not use the real user fee
 | SQLite schema | Managed Django migrations do not create or alter existing tables; `managed = False` models map all tables and columns. |
 | SQLite migration | v1 DB migrates to schema version 2, remaps uploads, and remains idempotent. |
 | Upload validation | Allowed and blocked extensions, filename sanitizer, body limits, missing `Content-Length`, and oversized uploads. |
-| Artifact paths | Traversal rejection, symlink staging lookup, unknown artifact fallback, and `url` to artifact resolution. |
+| Artifact paths | Traversal rejection, service-owned artifact lookup, unknown artifact fallback, and `url` to artifact resolution. |
 | bd mirror | With fake `agent-workbench` and `bd` commands, create, comment, close, and reopen calls are attempted and failures do not fail HTTP writes. |
 | Publish policy | HTTP publish is disabled by default and rejects active extensions and MIME types when enabled. |
 | SSRF guard | Initial URL and redirect hops reject protected address ranges. |

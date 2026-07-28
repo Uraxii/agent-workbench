@@ -6,11 +6,9 @@ Primary sources:
 
 | Source | Relevant lines |
 |---|---|
-| `.claude/skills/artifact-serve/scripts/review-serve.py` | 52-153 constants, 219-284 schema, 522-604 artifact resolution, 707-779 anchor validation, 846-1133 store and feedback JSON, 1139-1280 bd mirror, 2334-2896 HTTP routes, 3078-3483 CLI verbs |
-| `~/.claude/skills/artifact-serve/SKILL.md` | 18-29 viewer URL rule, 31-69 deploy and Tailscale warning, 71-93 push and feedback contract, 95-103 storage and security notes |
-| `~/.claude/skills/artifact-serve/REFERENCE.md` | 5-42 storage, 43-57 verbs, 84-116 legacy comments API, 117-152 legacy schema, 154-180 behavior and caveats |
-| `.claude/skills/artifact-serve/container/Containerfile` | 1 base image digest, 14-15 healthcheck, 17 entrypoint |
-| `.claude/skills/artifact-serve/container/review-serve.container` | 19-21 bind and publish port, 23-37 narrow mounts, 39-49 hardening |
+| `apps/artifact-review/` | Current service implementation. |
+| `.claude/skills/agent-workbench/cli/artifact.py` | Host HTTP client contract. |
+| `.claude/skills/agent-workbench/modes/artifact.md` | User-facing artifact mode contract. |
 | `docker-compose.yml` | 71-106 portable compose review-serve service |
 | `.claude/skills/agent-workbench/cli/deploy.py` | 188-227 build, install, start, healthcheck, 258-268 safe down behavior |
 | `tests/test_review_serve_bd_mirror.py` | 20-51 bd board resolution and missing CLI behavior |
@@ -23,7 +21,7 @@ Primary sources:
 
 ### 1.1 Reserved namespace
 
-`/_/` is reserved for the review app. `NAME_RE` requires project and subdir names to start with `[a-z0-9]`, so a pushed project cannot be named `_` and cannot collide with `/_/...` routes. Unknown `/_/...` paths fall through to static serving under `/tmp/claude-artifacts/_/...` and normally 404.
+`/_/` is reserved for the review app. `NAME_RE` requires project and subdir names to start with `[a-z0-9]`, so a pushed project cannot be named `_` and cannot collide with `/_/...` routes. Unknown `/_/...` paths fall through to static serving under `/tmp/artifacts/_/...` and normally 404.
 
 ### 1.2 Endpoint table
 
@@ -40,7 +38,7 @@ Primary sources:
 | GET | `/_/api/comments` | Either `artifact=<id>&sub_path=<path>` or `url=<page-url>`. | none | Legacy flattened page-comment shim: `{ "artifact_id": string, "sub_path": string, "comments": Comment[] }`. Only page-anchor threads are included. | 200, 404, 500. | None. |
 | POST | `/_/api/comments` | none | Legacy multipart shim: `artifact` plus optional `sub_path`, or `url`; required `body`; optional `author`; optional `files`. Always creates a page anchor. | 201 `{ "id": reply_id, "thread_id": thread_id, "artifact_id": string, "sub_path": string }`. | 201, 400, 411, 413, 500. | Creates a page-level thread and opening reply. Mirrors like `POST /_/api/threads`. |
 | GET | `/_/review` | Required `artifact=<id>`. Optional `view=image|code`, `src=<rel>`, `path=<rel-dir>`. | none | HTML review page. No `view`: gallery. `view=image`: OpenSeadragon plus Annotorious image viewer. `view=code`: per-line text/code viewer. | 200, 400 `artifact required`, 404 when `view` is image or code and `src` cannot be resolved under the staged root. | None. |
-| GET | `/<project>/<subdir>/<rel>` | static URL path | none | Static artifact bytes from `/tmp/claude-artifacts`. `text/html` responses are rewritten to inject the page feedback widget before `</body>` and omit `Content-Length`. Other files stream normally. | Standard `SimpleHTTPRequestHandler` statuses, usually 200, 301 for directory redirect, 404. | None. HTML injection adds client-side calls to settings, threads, uploads. |
+| GET | `/<project>/<subdir>/<rel>` | static URL path | none | Static artifact bytes from `/tmp/artifacts`. `text/html` responses are rewritten to inject the page feedback widget before `</body>` and omit `Content-Length`. Other files stream normally. | Standard `SimpleHTTPRequestHandler` statuses, usually 200, 301 for directory redirect, 404. | None. HTML injection adds client-side calls to settings, threads, uploads. |
 | GET | `/<project>/<subdir>/<dir>/` | static URL path to directory without `index.html` | none | Themed directory gallery HTML. Direct child dirs link to their own directory URL. Image files link to `/_/review?...&view=image`. Code extensions link to `/_/review?...&view=code`. Other files link raw. | 200. Static handler statuses when an `index.html` exists or path not a directory. | None. |
 | POST | `/_/api/publish` | held, not deployed | held | Held under `agent-workbench-wxh`. It is not present in the current deployed `review-serve.py` route table. | Not part of current parity surface. | Do not implement as a same-origin raw active-content write endpoint without mitigation. See security section. |
 
@@ -100,7 +98,7 @@ Upload:
 {
   "id": 789,
   "filename": "safe-name.png",
-  "stored_path": "~/.local/share/claude-artifacts/uploads/<reply-id>/safe-name.png",
+  "stored_path": "~/.local/share/artifacts/uploads/<reply-id>/safe-name.png",
   "mime": "image/png or null",
   "size": 12345,
   "created_at": 1720000000,
@@ -146,32 +144,31 @@ Legacy Comment:
 
 | Value | Rule |
 |---|---|
-| Project | Required for CLI push and clean. Must match `^[a-z0-9][a-z0-9_-]*$`. |
+| Project | Required for CLI publish. Must match `^[a-z0-9][a-z0-9_-]*$`. |
 | Subdir | Defaults to source basename, or `--as`. Same regex. |
 | Artifact ID | Defaults to `<project>/<subdir>`. `--id` must be one or two path segments, each matching the same regex. This is stricter than the older reference doc. |
 
-### 2.2 Staging layout
+### 2.2 Artifact layout
 
 ```text
-/tmp/claude-artifacts/
-  .serve.pid
-  .serve.port
-  .serve.log
-  index.html
+/tmp/artifacts/
   <project>/
-    <subdir>  symlink to the pushed source
+    <subdir>/
 ```
 
-`push` preserves the literal expanded absolute source path with `Path(args.src).expanduser().absolute()`. It does not call `.resolve()`, so it does not dereference intermediate symlinks. The staged entry is always a relative symlink from `/tmp/claude-artifacts/<project>/<subdir>` to the source.
+`agent-workbench artifact publish` reads a local file or directory, builds an
+uncompressed tar in memory, and posts it to `POST /_/api/publish`. The CLI
+does not write into `/tmp/artifacts` or any local staging directory.
 
-CLI `push` output shape:
+CLI publish request shape:
 
 ```text
-symlink /tmp/claude-artifacts/<project>/<subdir> → <relative-target>
-artifact_id: <artifact-id>
+multipart fields: project, as, optional artifact_id, archive
 ```
 
-The durable `artifact_index` row is upserted on `(project, subdir)` with `artifact_id`, `src_path`, and `last_pushed`.
+The service extracts safe regular files and directories under
+`/tmp/artifacts/<project>/<subdir>` and upserts the durable `artifact_index`
+row.
 
 ### 2.3 URL to artifact resolution
 
@@ -188,20 +185,20 @@ Resolution steps:
 
 `/_/review` image and code routes resolve with `_artifact_location(artifact_id)` and `staged_source_path(artifact_id, rel)`. The final path is `(root / rel).resolve()` and must be both under the staged root and a file, or the route returns 404.
 
-### 2.4 Staging footguns that parity must preserve or deliberately fix with tests
+### 2.4 Publish safety
 
-| Footgun | Current behavior |
+| Concern | Required behavior |
 |---|---|
-| Self-referencing symlink destruction | `push` deletes the destination entry before creating the new symlink. If the source is the destination or inside a staging path being replaced, that source can be destroyed. Operators must not push from the target staging tree to itself. |
-| Symlink targets outside container mounts | The container mounts `/tmp/claude-artifacts` and `~/.local/share/claude-artifacts`, not all of `$HOME`. A host-created symlink to a source outside mounted paths exists in `/tmp` but cannot be followed inside the container, so static routes serve 404. |
-| Symlink targets not sandboxed | When the target is reachable in the serving process namespace, anything under the pushed target tree is reachable. Push narrowly. |
+| Unsafe tar path | Reject absolute paths and paths containing `..`. |
+| Non-file members | Reject symlinks, hard links, devices, fifos, and special files. |
+| Active content | Apply the raw artifact sandbox CSP and publish policy. |
 | `/tmp` volatility | Staging, pid, port, log, and index wipe on reboot. Feedback DB and uploads survive. |
 
 ## 3. Database schema and persistence
 
-DB file: `~/.local/share/claude-artifacts/feedback.db`.
+DB file: `~/.local/share/artifacts/feedback.db`.
 
-Upload files: `~/.local/share/claude-artifacts/uploads/<reply-id>/<filename>`.
+Upload files: `~/.local/share/artifacts/uploads/<reply-id>/<filename>`.
 
 `db_connect()` creates the feedback root, opens SQLite with timeout 10 seconds, enables `PRAGMA foreign_keys = ON`, executes idempotent DDL, then runs the v1 to v2 migration. Current `setting['schema_version']` is `"2"`.
 
@@ -372,24 +369,23 @@ https://<tailnet-host>/_/review?artifact=<id>&src=<file>&view=code
 CLI publish path:
 
 ```bash
-python3 ~/.claude/skills/artifact-serve/scripts/review-serve.py push --project NAME --src /path/to/dir --id <artifact-id>
-python3 ~/.claude/skills/artifact-serve/scripts/review-serve.py start
+$HOME/.claude/skills/agent-workbench/agent-workbench artifact publish --project NAME --src /path/to/dir --id <artifact-id>
 ```
 
 CLI verbs that must remain available:
 
 ```text
-push unpush start run expose unexpose status stop clean feedback name
+publish feedback status
 ```
 
-`run` is the foreground container and systemd entry point. `start` is the daemonizing CLI path.
+Service lifecycle is owned by compose or deploy tooling, not the artifact CLI.
 
 ### 5.2 Feedback read-back contract
 
 Agents read feedback with:
 
 ```bash
-python3 ~/.claude/skills/artifact-serve/scripts/review-serve.py feedback --artifact <id>
+$HOME/.claude/skills/agent-workbench/agent-workbench artifact feedback --artifact <id>
 ```
 
 Exit behavior:
@@ -463,7 +459,7 @@ JSON shape:
 - Trusted tailnet model.
 - Anyone who can reach the service can read pushed artifacts and write comments, threads, resolve state, and uploads.
 - Bind locally on the host and put Tailscale Serve in front when sharing.
-- Push narrowly because symlink targets are the access boundary.
+- Publish narrowly because the service will make the uploaded tree reviewable.
 
 ### 6.2 Container hardening required for parity
 
@@ -475,7 +471,7 @@ JSON shape:
 | Tmpfs | Quadlet `Tmpfs=/tmp`; compose `tmpfs: /tmp`. |
 | Drop capabilities | Quadlet `DropCapability=ALL`; compose `cap_drop: [ALL]`. |
 | No new privileges | Quadlet `NoNewPrivileges=true`; compose `security_opt: no-new-privileges:true`. |
-| Narrow mounts | `/tmp/claude-artifacts:/tmp/claude-artifacts:rw` and `~/.local/share/claude-artifacts:~/.local/share/claude-artifacts:rw`. No `$HOME`-wide mount. |
+| Narrow mounts | `/tmp/artifacts:/tmp/artifacts:rw` and `~/.local/share/artifacts:~/.local/share/artifacts:rw`. No `$HOME`-wide mount. |
 | Loopback publish | App binds `REVIEW_SERVE_HOST=0.0.0.0` in-container. Podman publishes only `127.0.0.1:9099:9099`. Compose does the same. |
 | Healthcheck | Containerfile and compose GET `http://127.0.0.1:${REVIEW_SERVE_PORT:-9099}/`. |
 | SELinux note | Quadlet disables label check with `SecurityLabelDisable=true` for the narrow feedback bind. |
@@ -490,7 +486,8 @@ Host-level exposure command:
 tailscale serve --bg --https=443 http://127.0.0.1:9099
 ```
 
-Current CLI `expose` runs that command. Current CLI `stop` also runs `tailscale serve --https=443 off` after killing the daemon. For the container path, prefer `systemctl --user restart review-serve` and host-level Tailscale management.
+The artifact CLI no longer exposes or stops the service. Use host-level
+Tailscale management and deploy or compose lifecycle commands.
 
 Live-service footgun: do not add any app, deploy, or shutdown path that tears down host Tailscale Serve mappings unexpectedly. The deploy CLI `down` only stops bundle-owned quadlets and does not call `tailscale serve off`.
 
@@ -504,7 +501,7 @@ Problem:
 - Held publish accepted active content and served it raw as same-origin `text/html` or SVG/JS.
 - The review UI APIs are same-origin and unauthenticated.
 - Any tailnet peer with write reach could plant stored JS and script the review UI, comments, threads, and settings APIs.
-- CLI push is not an equivalent baseline because CLI push requires local shell access, while HTTP publish requires only network access.
+- The CLI is now an HTTP client, so the publish endpoint is part of the service trust boundary.
 
 Acceptable mitigations before any HTTP publish route ships:
 
@@ -539,17 +536,16 @@ The current review server does not fetch arbitrary remote URLs. If the rewrite a
 ## 7. Parity checklist
 
 - [ ] `GET /` returns 200 and root index HTML after server start or index regeneration.
-- [ ] CLI `push` stages by relative symlink under `/tmp/claude-artifacts/<project>/<subdir>` and upserts `artifact_index`.
-- [ ] CLI `push` preserves literal source path with `.absolute()`, not `.resolve()`.
-- [ ] CLI `push` prints `symlink ... → ...` and `artifact_id: ...`.
-- [ ] CLI `start` daemonizes, writes pid and port files, is idempotent on same port, refuses conflicting port.
-- [ ] CLI `run` stays foreground for container and systemd.
-- [ ] CLI `status`, `unpush`, `clean`, `stop`, `expose`, `unexpose`, `name`, and `feedback` keep their current behavior and exit codes.
+- [ ] CLI `publish` posts an uncompressed tar to `POST /_/api/publish` and prints service JSON.
+- [ ] CLI `publish` emits only safe regular file and directory tar members.
+- [ ] CLI `feedback` calls `GET /_/api/threads?artifact=<id>` and prints service JSON.
+- [ ] CLI `status` calls `GET /_/health` and `GET /_/api/artifacts`.
+- [ ] Service lifecycle is handled by deploy or compose, not by artifact CLI verbs.
 - [ ] Host bind defaults to `127.0.0.1:9099`; env `REVIEW_SERVE_HOST` and `REVIEW_SERVE_PORT` steer `start` and `run` defaults.
 - [ ] Container binds internally to `0.0.0.0:9099` and publishes only `127.0.0.1:9099:9099`.
 - [ ] Container keeps read-only rootfs, tmpfs `/tmp`, `cap_drop: ALL`, no-new-privileges, pinned base image digest, healthcheck, and narrow mounts only.
 - [ ] Host Tailscale Serve remains `tailscale serve --bg --https=443 http://127.0.0.1:9099`; app shutdown paths do not unexpectedly tear it down.
-- [ ] Static artifacts serve from pushed symlink targets when reachable.
+- [ ] Static artifacts serve from the service-owned artifact tree.
 - [ ] Static `text/html` artifacts get the page feedback widget injected before `</body>` and suppress `Content-Length`.
 - [ ] Directories without `index.html` render the themed directory gallery.
 - [ ] `/_/` remains reserved and cannot collide with pushed project names.
