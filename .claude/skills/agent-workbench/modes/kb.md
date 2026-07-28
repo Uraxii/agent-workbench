@@ -16,6 +16,17 @@ Service address: `KB_SVC_HOST` (default `127.0.0.1`) and
 AW=$HOME/.claude/skills/agent-workbench/agent-workbench
 ```
 
+When a request makes at least one model call, the response includes a `usage`
+key with `calls` (HTTP calls made), token counts (summed across calls),
+`generation_ids` (provider ids in call order, for billing reconciliation),
+and `models` (unique and sorted; a list because `clip`/`put`/`atomize` spend
+via `KB_ATOMIZE_MODEL` while `enrich` spends via `KB_LLM_MODEL`). The key's
+absence means the request was free. Verbs that can carry `usage`: `clip`,
+`put`, `atomize`, `enrich`. Not `decision record` (always already-atomic),
+nor `index`, `query`, `status`, `init`, `add`, `path`. This enables cost
+estimation: run `kb enrich` once, divide `total_tokens` by `enriched`, and
+multiply by notes remaining.
+
 ## init -- create the vault
 
 ```bash
@@ -64,12 +75,18 @@ rerunning this.
 $AW kb clip "https://example.com/article" --project gvn
 # -> {"path": "/home/nicole/.knowledgebase/gvn/sources/article.md",
 #     "children": ["/home/nicole/.knowledgebase/gvn/sources/article--intro.md"],
-#     "method": "deterministic", "indexed": 2371, "embedded": 2371}
+#     "method": "llm", "indexed": 2371, "embedded": 2371,
+#     "usage": {"calls": 1, "prompt_tokens": 284, "completion_tokens": 293,
+#               "total_tokens": 577,
+#               "generation_ids": ["gen-1785253583-u4apBDVzZObTHrRoRNcg"],
+#               "models": ["deepseek/deepseek-chat"]}}
 ```
 
-`--project` defaults to `inbox`. Every clip is atomized, indexed and
-embedded in the same call; there is no flag to skip any of that, because an
-opt-in index is an index that drifts.
+`--project` defaults to `inbox`. Every clip writes type `source`, which is
+splittable; with `KB_ENRICH=1` plus a resolvable key, the clip makes a model
+call and the response includes a `usage` key. There is no flag to skip
+enrichment, because an opt-in index is an index that drifts. Every clip is
+atomized, indexed and embedded in the same call.
 
 ## put -- write a note (body on stdin)
 
@@ -81,10 +98,14 @@ echo "Body text goes here." | $AW kb put gvn "My Note" --type note \
 #     "embedded": 2372}
 ```
 
-`--type` defaults to `note`, `--source` defaults to `""`. Notes and
-decisions are already-atomic types (splitting a single note or decision
-would manufacture children that contradict what the type means), so
-`method` reads `already-atomic` and `children` is empty for them.
+`--type` defaults to `note`, `--source` defaults to `""`. `--type decision`
+is not supported; use `kb decision record` instead. With `KB_ENRICH=1` plus
+a resolvable key, a splittable type (like `source`) makes a model call and
+the response includes a `usage` key; already-atomic types (`note`) never do.
+Notes are already-atomic (splitting a single note would manufacture children
+that contradict what the type means), so `method` reads `already-atomic` and
+`children` is empty for them. Repeated titles do not overwrite; the service
+appends `-2`, `-3` to the path, producing duplicate notes with both indexed.
 
 ## atomize -- ingest a URL or stdin content and split it
 
@@ -94,15 +115,20 @@ $AW kb atomize --url "https://example.com/article" --project gvn \
 # -> {"parent": "/home/nicole/.knowledgebase/gvn/sources/article.md",
 #     "path": "/home/nicole/.knowledgebase/gvn/sources/article.md",
 #     "children": ["/home/nicole/.knowledgebase/gvn/sources/article--intro.md"],
-#     "method": "deterministic", "indexed": 2373, "embedded": 2373}
+#     "method": "llm", "indexed": 2373, "embedded": 2373,
+#     "usage": {"calls": 1, "prompt_tokens": 284, "completion_tokens": 293,
+#               "total_tokens": 577,
+#               "generation_ids": ["gen-1785253583-u4apBDVzZObTHrRoRNcg"],
+#               "models": ["deepseek/deepseek-chat"]}}
 ```
 
 Give `--url` or pipe content on stdin (omit `--url` to read stdin).
 `--project` defaults to `inbox`, `--title` to `untitled`, `--type` to
-`source`. Splits with a strong model tier when `KB_ENRICH=1` plus a key are
-configured (`method: "llm"`), falling back to the deterministic heading
-split otherwise (`method: "deterministic"`) -- both are normal outcomes,
-never an error.
+`source`. `--type decision` is not supported; use `kb decision record`
+instead. Splittable types with `KB_ENRICH=1` plus a key configured make a
+model call with `method: "llm"` and include a `usage` key; deterministic
+splits have `method: "deterministic"` and no `usage` key -- both are normal
+outcomes, never an error.
 
 ## query -- hybrid keyword + vector search
 
@@ -136,7 +162,8 @@ $AW kb status
 ```bash
 $AW kb decision record --project gvn --topic base-body-slices \
   --title "<title>" --text "<decision statement>" \
-  [--rationale "<why>"] [--refs "<paths/tickets>"] [--tags "a, b"]
+  [--rationale "<why>"] [--refs "<paths/tickets>"] [--tags "a, b"] \
+  [--supersedes "<path>"]
 # -> {"path": "/home/nicole/.knowledgebase/gvn/decisions/base-body-slices__2026-07-22.md",
 #     "children": [], "method": "already-atomic", "indexed": 2374,
 #     "embedded": 2374, "supersedes": ""}
@@ -158,6 +185,11 @@ new note's `supersedes` field points at it -- exactly one `active` note per
 topic at any time, and the audit chain is the files plus their frontmatter,
 never a separate database.
 
+`--supersedes` optionally rewrites an existing decision note IN PLACE,
+setting its `status` to `superseded`. The target must be a note on the same
+topic or the service rejects it. Decision records are always free (already-atomic
+type making no model call).
+
 `audit` is read-only and scans every project's `decisions/` dir unless
 `--project` narrows it (topic keys are unique by convention, so a reader
 auditing a topic rarely knows which project holds it). Prints the bare
@@ -165,16 +197,33 @@ chain array by default (the service's own `GET /decision/audit` answers
 `{"chain": [...]}`; this verb unwraps it); add `--human` for a
 one-line-per-note table instead.
 
-Decision notes use a different frontmatter dialect from `kb put`'s notes:
-bare, unquoted scalars (`title/topic/date/status/supersedes/tags`), not
-`put`'s quoted `type/title/source/...` schema -- see
-`scripts/kb_decision.py`'s `render_decision` for the exact byte shape.
+Decision notes use a different frontmatter dialect from `kb put`'s notes.
+The decision frontmatter is six bare, unquoted fields in this order:
+
+```
+---
+title: <title>
+topic: <topic>
+date: <YYYY-MM-DD>
+status: active
+supersedes: <path or empty>
+tags: [a, b]
+---
+```
+
+Values are never quoted or escaped. An empty `supersedes` leaves a trailing
+space after the colon. This is the locked byte shape. By contrast, `kb put`
+writes quoted `type/title/source/...` frontmatter.
 
 ## enrich -- fill question/summary frontmatter via the LLM
 
 ```bash
 $AW kb enrich --project gvn
-# -> {"enriched": 3, "notes": ["/home/nicole/.knowledgebase/gvn/notes/foo.md", ...]}
+# -> {"enriched": 3, "notes": ["/home/nicole/.knowledgebase/gvn/notes/foo.md", ...],
+#     "usage": {"calls": 4, "prompt_tokens": 891, "completion_tokens": 325,
+#               "total_tokens": 1216,
+#               "generation_ids": ["gen-1785253601-bd4xKoLL1axNWEBasA4w", "..."],
+#               "models": ["openai/gpt-4o-mini"]}}
 
 $AW kb enrich
 # -> {"enriched": 0, "message": "KB_ENRICH is 0; enrichment disabled"}
@@ -189,6 +238,20 @@ exist.
 Off by default and degrades rather than fails: with `KB_ENRICH=0` (the
 default) or no LLM key resolved, the result reads `{"enriched": 0,
 "message": "..."}` explaining why, never an error. Opt in with
-`KB_ENRICH=1` plus a key in the real `$HOME/.knowledgebase/kb.env`
-(template: `scripts/kb-container/kb.env.example` -- never document or
-imply a real secret value there).
+`KB_ENRICH=1` plus a key configured at deploy time in kb.env (the real
+file is `$HOME/.knowledgebase/kb.env`; the repo ships an example template).
+Never document or imply a real secret value in deploy configuration.
+
+## deletion -- out-of-band human operation
+
+There is deliberately NO delete verb and NO delete route. Deletion is a
+human out-of-band operation.
+
+To remove a note:
+1. Remove the markdown file under
+   `$HOME/.knowledgebase/<project>/<dir>/<note>.md` (the note's `path` is in
+   every response that created it).
+2. Then rebuild the derived layer with `$AW kb index`.
+
+Removing the markdown WITHOUT rerunning `kb index` leaves a stale index: the
+note stays visible to `kb query` even though the file is gone.

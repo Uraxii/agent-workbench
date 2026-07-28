@@ -186,3 +186,14 @@ def test_a_symlinked_project_dir_cannot_be_written_through(
     with pytest.raises(ValueError, match="outside the vault"):
         kb_vault.project_init(vault, "proj1")
     assert list(outside.iterdir()) == []
+
+
+def test_write_note_rejects_decision_type(tmp_path: Path) -> None:
+    """Type 'decision' must be rejected with a message directing users to
+    'kb decision record' instead."""
+    with pytest.raises(ValueError, match="kb decision record"):
+        kb_vault.write_note(
+            tmp_path, "proj1", "decision", "Test", "", "body",
+        )
+    # Verify nothing was written
+    assert list(tmp_path.rglob("*.md")) == []

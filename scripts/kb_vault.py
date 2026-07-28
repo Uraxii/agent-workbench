@@ -234,6 +234,10 @@ def write_note(
     """Validate, render and write one note; returns the created path."""
     project = validate_project(project)
     note_type = validate_type(note_type)
+    if note_type == "decision":
+        raise ValueError(
+            "type 'decision' is not supported; use 'kb decision record' instead"
+        )
     title = validate_scalar(title, "title") or "untitled"
     source = validate_scalar(source, "source")
     if not isinstance(content, str) or not content.strip():

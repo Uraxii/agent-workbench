@@ -391,7 +391,7 @@ def test_put_uses_llm_atomize_when_enrichment_enabled(tmp_path: Path) -> None:
     llm_items = [{"title": "Child A", "body": "Body A content."}]
     with (
         _server_for_config(config) as base_url,
-        patch.object(kb_llm, "request_atomize_split", return_value=llm_items) as mock_split,
+        patch.object(kb_llm, "request_atomize_split", return_value=(llm_items, [])) as mock_split,
     ):
         status, body = _post(base_url, "/put", {
             "project": "proj1", "title": "Parent Note", "type": "source",
@@ -512,12 +512,14 @@ def test_enrich_success_rewrites_only_question_and_summary(tmp_path: Path) -> No
 
     with patch.object(
         kb_llm, "request_enrichment",
-        return_value={"question": "What does the widget do?", "summary": "The widget does things well."},
+        return_value=({"question": "What does the widget do?", "summary": "The widget does things well."}, {"id": "test", "model": "test", "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}),
     ) as mock_request:
         result = kb_serve.kb_enrich(config, {})
 
     mock_request.assert_called_once()
-    assert result == {"enriched": 1, "notes": [str(note_path)]}
+    assert result["enriched"] == 1
+    assert result["notes"] == [str(note_path)]
+    assert "usage" in result
     text_after = note_path.read_text(encoding="utf-8")
     assert 'question: "What does the widget do?"' in text_after
     assert 'summary: "The widget does things well."' in text_after
@@ -819,12 +821,13 @@ def test_request_atomize_split_small_body_makes_one_model_call(tmp_path: Path) -
     config = _config(tmp_path, enrich_enabled=True, llm_api_key="fake-key")
     with patch.object(
         kb_llm, "_chat_completion_json",
-        return_value={"notes": [{"title": "Only Child", "body": "Small body note."}]},
+        return_value=({"notes": [{"title": "Only Child", "body": "Small body note."}]}, {"id": "test1", "model": "test", "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}),
     ) as mock_chat:
-        result = kb_serve.request_atomize_split(config, "Small Parent", "Small parent body.")
+        notes, records = kb_serve.request_atomize_split(config, "Small Parent", "Small parent body.")
 
     mock_chat.assert_called_once()
-    assert result == [{"title": "Only Child", "body": "Small body note."}]
+    assert notes == [{"title": "Only Child", "body": "Small body note."}]
+    assert len(records) == 1
 
 
 def test_request_atomize_split_long_body_keeps_tail_content(tmp_path: Path) -> None:
@@ -836,17 +839,18 @@ def test_request_atomize_split_long_body_keeps_tail_content(tmp_path: Path) -> N
         f"# Tail Section\n\n{tail_marker}\n"
     )
 
-    def fake_chat(_config: KbServeConfig, _model: str, prompt: str) -> dict[str, object]:
+    def fake_chat(_config: KbServeConfig, _model: str, prompt: str) -> tuple[dict[str, object], dict[str, object]]:
+        record = {"id": "test", "model": "test", "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
         if tail_marker in prompt:
-            return {"notes": [{"title": "Tail Child", "body": f"Saw {tail_marker}."}]}
-        return {"notes": [{"title": "Earlier Child", "body": "Earlier chunk."}]}
+            return ({"notes": [{"title": "Tail Child", "body": f"Saw {tail_marker}."}]}, record)
+        return ({"notes": [{"title": "Earlier Child", "body": "Earlier chunk."}]}, record)
 
     with patch.object(kb_llm, "_chat_completion_json", side_effect=fake_chat) as mock_chat:
-        result = kb_serve.request_atomize_split(config, "Long Parent", body)
+        notes, records = kb_serve.request_atomize_split(config, "Long Parent", body)
 
     assert mock_chat.call_count > 1
-    assert {item["title"] for item in result} >= {"Earlier Child", "Tail Child"}
-    assert any(tail_marker in item["body"] for item in result)
+    assert {item["title"] for item in notes} >= {"Earlier Child", "Tail Child"}
+    assert any(tail_marker in item["body"] for item in notes)
 
 
 def test_atomize_degrades_to_deterministic_when_later_chunk_fails(tmp_path: Path) -> None:
@@ -857,7 +861,7 @@ def test_atomize_degrades_to_deterministic_when_later_chunk_fails(tmp_path: Path
         patch.object(
             kb_llm, "_chat_completion_json",
             side_effect=[
-                {"notes": [{"title": "First LLM Child", "body": "First chunk."}]},
+                ({"notes": [{"title": "First LLM Child", "body": "First chunk."}]}, {"id": "test", "model": "test", "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}),
                 json.JSONDecodeError("bad json", "doc", 0),
             ],
         ) as mock_chat,
@@ -896,7 +900,7 @@ def test_atomize_content_happy_path_returns_llm_children_with_parent_ref(tmp_pat
     ]
     with (
         _server_for_config(config) as base_url,
-        patch.object(kb_llm, "request_atomize_split", return_value=llm_items) as mock_split,
+        patch.object(kb_llm, "request_atomize_split", return_value=(llm_items, [])) as mock_split,
     ):
         status, body = _post(base_url, "/atomize", {
             "project": "proj1", "title": "Parent Note", "content": "Some parent content.",
@@ -924,7 +928,7 @@ def test_atomize_url_happy_path_returns_llm_children(tmp_path: Path) -> None:
     with (
         _server_for_config(config) as base_url,
         patch("urllib.request.build_opener", return_value=_fake_opener(html=_CANNED_HTML)),
-        patch.object(kb_llm, "request_atomize_split", return_value=llm_items) as mock_split,
+        patch.object(kb_llm, "request_atomize_split", return_value=(llm_items, [])) as mock_split,
         # example.invalid never resolves via real DNS; the SSRF guard is
         # exercised on its own in test_kb_clip.py, not re-derived here.
         patch.object(kb_serve.kb_clip_module(), "check_destination_is_public"),
@@ -1094,3 +1098,81 @@ def test_a_symlinked_index_dir_is_refused_rather_than_written_to(
     with pytest.raises(ValueError, match="outside the vault"):
         kb_serve.rebuild_derived(_config(vault))
     assert list(outside.iterdir()) == []
+
+
+# New tests for usage tracking
+
+def test_usage_aggregates_across_atomize_chunks(tmp_path: Path) -> None:
+    config = _config(tmp_path, enrich_enabled=True, llm_api_key="fake-key")
+    body = f"## Section One\n\n{'A' * 7000}\n\n## Section Two\n\n{'B' * 7000}\n"
+    
+    def fake_chat(_config: KbServeConfig, _model: str, prompt: str) -> tuple[dict[str, object], dict[str, object]]:
+        if "Section One" in prompt:
+            return ({"notes": [{"title": "First", "body": "First chunk."}]}, {"id": "gen-001", "model": "claude-3.5-sonnet", "prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150})
+        else:
+            return ({"notes": [{"title": "Second", "body": "Second chunk."}]}, {"id": "gen-002", "model": "claude-3.5-sonnet", "prompt_tokens": 200, "completion_tokens": 75, "total_tokens": 275})
+    
+    with (_server_for_config(config) as base_url, patch.object(kb_llm, "_chat_completion_json", side_effect=fake_chat)):
+        status, body = _post(base_url, "/atomize", {"project": "proj1", "title": "Long Parent", "content": body})
+    
+    assert status == 201
+    assert body["method"] == "llm"
+    assert "usage" in body
+    usage = body["usage"]
+    assert usage["calls"] == 2
+    assert usage["prompt_tokens"] == 300
+    assert usage["completion_tokens"] == 125
+    assert usage["total_tokens"] == 425
+    assert usage["generation_ids"] == ["gen-001", "gen-002"]
+    assert usage["models"] == ["claude-3.5-sonnet"]
+
+
+def test_usage_absent_for_already_atomic_type(tmp_path: Path) -> None:
+    config = _config(tmp_path, enrich_enabled=True, llm_api_key="fake-key")
+    with (_server_for_config(config) as base_url, patch.object(kb_llm, "_chat_completion_json") as mock_chat):
+        status, body = _post(base_url, "/put", {"project": "proj1", "title": "Atomic Note", "type": "note", "content": "One idea, stated once."})
+    assert status == 201
+    assert body["method"] == "already-atomic"
+    assert body["children"] == []
+    assert "usage" not in body
+    mock_chat.assert_not_called()
+
+
+def test_usage_absent_when_enrich_disabled(tmp_path: Path) -> None:
+    config = _config(tmp_path, enrich_enabled=False)
+    with (_server_for_config(config) as base_url, patch.object(kb_llm, "request_enrichment") as mock_request):
+        status, body = _post(base_url, "/enrich", {})
+    assert status == 200
+    assert body["enriched"] == 0
+    assert "usage" not in body
+    mock_request.assert_not_called()
+
+
+def test_usage_absent_when_enrich_has_no_key(tmp_path: Path) -> None:
+    config = _config(tmp_path, enrich_enabled=True, llm_api_key=None)
+    with (_server_for_config(config) as base_url, patch.object(kb_llm, "request_enrichment") as mock_request):
+        status, body = _post(base_url, "/enrich", {})
+    assert status == 200
+    assert body["enriched"] == 0
+    assert "usage" not in body
+    mock_request.assert_not_called()
+
+
+def test_usage_tolerates_missing_usage_field_in_envelope(tmp_path: Path) -> None:
+    config = _config(tmp_path, enrich_enabled=True, llm_api_key="fake-key")
+    body = f"## Section One\n\n{'A' * 7000}\n\n## Section Two\n\n{'B' * 7000}\n"
+    
+    def fake_chat(_config: KbServeConfig, _model: str, prompt: str) -> tuple[dict[str, object], dict[str, object]]:
+        return ({"notes": [{"title": "Result", "body": "Content."}]}, {"id": "gen-001", "model": "claude-3.5-sonnet"})
+    
+    with (_server_for_config(config) as base_url, patch.object(kb_llm, "_chat_completion_json", side_effect=fake_chat)):
+        status, body = _post(base_url, "/atomize", {"project": "proj1", "title": "Test", "content": body})
+    
+    assert status == 201
+    assert body["method"] == "llm"
+    assert "usage" in body
+    usage = body["usage"]
+    assert usage["calls"] == 2
+    assert usage["prompt_tokens"] == 0
+    assert usage["completion_tokens"] == 0
+    assert usage["total_tokens"] == 0
