@@ -74,9 +74,12 @@ python3 .claude/skills/agent-workbench/agent-workbench install --link
 ```
 
 This symlinks `~/.claude/skills/agent-workbench` at this checkout. Use
-`--copy` instead if you want a snapshot rather than a live link, and
-`--uninstall` to reverse it (it refuses to remove anything that is not its own
-symlink).
+`--copy` instead if you want a snapshot rather than a live link -- re-running
+`--copy` always produces exactly this repo's current tree (any file the
+source no longer has is removed, not left behind), and it refuses to
+overwrite a real dir at the target that it did not itself install (move it
+aside yourself first). `--uninstall` reverses either install (it refuses to
+remove anything that is not its own symlink or its own stamped copy).
 
 ### 7. Verify
 

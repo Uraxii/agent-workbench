@@ -203,16 +203,27 @@ def _copy_reinstall_hint() -> str:
     return f"{skill_dir}/agent-workbench install --copy"
 
 
+def _plausible_repo_root(path: Path) -> bool:
+    """True if `path` looks like a real source repo root -- the same "has
+    a scripts/ dir" plausibility test `paths._compute_root` uses. Guards
+    against a marker source too shallow to have 3 real parents, or one
+    that resolves somewhere implausible (e.g. $HOME) landing a false
+    match/mismatch against an unrelated git repo."""
+    return (path / "scripts").is_dir()
+
+
 def check_skill_install() -> Check:
     """Optional: report the installed skill's provenance.
 
     Distinguishes: not installed, a dev symlink (the defect -- tracks
     whatever branch that working tree has checked out), a pinned copy
     matching the source repo's current HEAD, a stale pinned copy, a legacy
-    copy with no recorded commit, a copy whose source repo cannot be
-    reached from here (the normal state for a production install), and a
-    real dir this repo did not install. Never required: this reports, it
-    does not gate.
+    copy with no recorded commit, a pinned copy whose marker source no
+    longer exists on disk (moved or deleted after install), and a real
+    dir this repo did not install. Never required: this reports, it does
+    not gate -- but an unreachable source renders WARN, not OK, because a
+    staleness check that silently declines must never look identical to a
+    verified match.
     """
     name = "skill install"
     target = install.install_target()
@@ -257,34 +268,61 @@ def check_skill_install() -> Check:
         )
 
     short = str(commit)[:12]
-    try:
-        repo_root = paths.repo_root()
-    except RuntimeError:
+
+    # The marker already records the source repo's skill dir -- trust that
+    # directly rather than re-deriving a root from this file's own on-disk
+    # location, which is wrong on a --copy install (paths._compute_root
+    # walks up from cli/doctor.py itself, landing under $HOME with no
+    # scripts/ dir). Trusting the recorded source is also strictly better
+    # at answering "is the repo I can see the repo this came from" than an
+    # independently-resolved root ever was.
+    marker_source = marker.get("source")
+    if not marker_source:
         return Check(
-            name, False, True,
-            f"pinned at {short} (source repo unreachable from here; "
-            "staleness could not be checked)",
+            name, False, False,
+            f"pinned at {short}; marker has no recorded source, staleness "
+            "could not be checked",
             "",
         )
 
-    # A repo root resolves here (e.g. this machine has an unrelated
-    # ~/scripts dir) but it may not be the repo this copy came FROM --
-    # including the degenerate case where it resolves to `target` itself.
-    # Only compare HEAD when the marker's recorded source still matches.
-    marker_source = marker.get("source")
-    resolved_source = install.source_dir().resolve()
-    if marker_source is None or Path(str(marker_source)).resolve() != resolved_source:
+    source_path = Path(str(marker_source))
+    if not source_path.is_dir():
         return Check(
-            name, False, True,
-            f"pinned at {short}, installed from {marker_source or 'unknown source'}; "
-            "that source is not reachable from here, staleness not checked",
+            name, False, False,
+            f"pinned at {short}, installed from {marker_source} which no "
+            "longer exists; staleness could not be checked",
+            "",
+        )
+
+    # source_path is <repo>/.claude/skills/agent-workbench, so its
+    # grandparent's parent is the repo root -- but two degenerate cases
+    # must not fall through to a HEAD comparison: the source resolving to
+    # the install target itself (a stray $HOME that happens to look like
+    # a repo), and a source too shallow to even have 3 parents (would
+    # IndexError). Either way, treat it the same as "not a usable repo
+    # root" and just like paths._compute_root(), require a scripts/ dir
+    # as the plausibility test before trusting it -- a false STALE against
+    # an unrelated repo (e.g. a dotfiles repo living at $HOME) would be
+    # exactly the false report this check exists to stop.
+    resolved_source = source_path.resolve()
+    parents = resolved_source.parents
+    repo_root = parents[2] if len(parents) >= 3 else None
+    if (
+        resolved_source == target.resolve()
+        or repo_root is None
+        or not _plausible_repo_root(repo_root)
+    ):
+        return Check(
+            name, False, False,
+            f"pinned at {short}, installed from {marker_source}; that is "
+            "not a usable repo root, staleness could not be checked",
             "",
         )
 
     head = paths.git_head(repo_root)
     if head is None:
         return Check(
-            name, False, True,
+            name, False, False,
             f"pinned at {short}, repo HEAD could not be read (staleness "
             "not checked)",
             "",

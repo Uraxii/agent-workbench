@@ -2,9 +2,13 @@
 """scratch -- repo dev/test harness: run a command against a throwaway
 service instance instead of the live stack.
 
-    scripts/scratch.py <kb|bd|artifact> -- <command...>
+    scripts/scratch.py <kb|bd|artifact> [--no-build] -- <command...>
 
 e.g. ``scripts/scratch.py kb -- "$AW" kb status``
+
+Builds the scratch image from the working tree by default on every run
+(pass ``--no-build`` to skip it) -- see ``_bring_up`` for why this can't
+default off.
 
 This is repo tooling, not a CLI verb -- it is NOT part of the shipped
 agent-workbench skill (see ../.claude/skills/agent-workbench/cli/), which
@@ -66,20 +70,29 @@ class ServiceSpec(NamedTuple):
     host_env: str
     port_env: str
     data_subdirs: tuple[str, ...]  # relative to the scratch dir; "" = root
+    image_repo: str  # local image repo name, e.g. "kb-svc"
 
 
 SERVICES: dict[str, ServiceSpec] = {
     "kb": ServiceSpec(
         "kb-svc", 9100, "/health", "KB_SVC_HOST", "KB_SVC_PORT", ("",),
+        "kb-svc",
     ),
     "bd": ServiceSpec(
         "bd-svc", 9101, "/health", "BD_SVC_HOST", "BD_SVC_PORT", ("",),
+        "bd-svc",
     ),
     "artifact": ServiceSpec(
         "artifact-svc", 9099, "/_/health",
         "ARTIFACT_SVC_HOST", "ARTIFACT_SVC_PORT", ("stage", "feedback"),
+        "artifact-review",
     ),
 }
+
+
+def _scratch_image(spec: ServiceSpec) -> str:
+    """The scratch overlay's own tag for this service -- never :latest."""
+    return f"localhost/{spec.image_repo}:scratch"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -91,11 +104,30 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("service", choices=sorted(SERVICES))
     parser.add_argument(
-        "command", nargs=argparse.REMAINDER,
-        help="command to run against the scratch instance, e.g. "
-             "-- kb query 'foo'",
+        "--no-build", dest="build", action="store_false", default=True,
+        help="skip the default rebuild of the scratch image from the "
+             "working tree before `up` (opt out only when you already "
+             "know the :scratch tag is current -- podman-compose's own "
+             "`up` build-if-missing only triggers when the tag is "
+             "entirely absent, so without a rebuild a stale :scratch tag "
+             "from an earlier branch is reused forever)",
     )
     return parser
+
+
+def _split_argv(argv: list[str]) -> tuple[list[str], list[str]]:
+    """Split argv on the first literal `--`: scratch's own flags before it,
+    the wrapped command after.
+
+    Done by hand rather than via argparse `nargs=REMAINDER` on a trailing
+    `command` argument: REMAINDER swallows any later recognized flag (e.g.
+    `--build`) into the wrapped command once positional matching begins,
+    breaking `scratch.py kb --build -- true` (--build after the service).
+    """
+    if "--" in argv:
+        idx = argv.index("--")
+        return argv[:idx], argv[idx + 1:]
+    return argv, []
 
 
 def _command_args(raw: list[str], service: str) -> list[str]:
@@ -164,31 +196,75 @@ def _host_port(base: Path, override: Path, project: str, spec: ServiceSpec) -> i
     return int(result.stdout.strip().rsplit(":", 1)[-1])
 
 
-def _bring_up(
+def _build(
     base: Path, override: Path, project: str, spec: ServiceSpec,
+) -> None:
+    """Build the scratch image from the working tree."""
+    subprocess.run(
+        [
+            "podman-compose", "-p", project, "-f", str(base), "-f", str(override),
+            "build", spec.compose_name,
+        ],
+        stdout=sys.stderr, check=True,
+    )
+
+
+def _print_image_identity(spec: ServiceSpec) -> None:
+    """Print the image tag/id/created timestamp actually running, to
+    stderr -- the tripwire that makes a stale scratch image diagnosable
+    from the transcript instead of silently passing.
+    """
+    tag = _scratch_image(spec)
+    try:
+        result = subprocess.run(
+            ["podman", "image", "inspect", tag, "--format", "{{.Id}} {{.Created}}"],
+            capture_output=True, text=True, check=True,
+        )
+        image_id, created = result.stdout.strip().split(" ", 1)
+        print(
+            f"scratch: {spec.compose_name} image {tag} id {image_id} "
+            f"created {created}",
+            file=sys.stderr,
+        )
+    except (subprocess.CalledProcessError, ValueError) as exc:
+        print(
+            f"scratch: warning: could not inspect image {tag}: {exc}",
+            file=sys.stderr,
+        )
+
+
+def _bring_up(
+    base: Path, override: Path, project: str, spec: ServiceSpec, build: bool,
 ) -> int:
-    """`up -d` the service, wait for health, return its host port."""
+    """Build (unless `--no-build`), then `up -d` the service, wait for
+    health, return its host port.
+
+    Build defaults ON. podman-compose (1.6.0) only builds automatically
+    inside `up` when the tag is entirely absent (its own source:
+    ``if_not_exists=(not args.build)``) -- a `:scratch` tag left over from
+    an earlier branch is otherwise reused forever, silently verifying a
+    stale image. `--no-build` waives this only when the caller already
+    knows the tag is current.
+    """
+    if build:
+        _build(base, override, project, spec)
+    up_cmd = [
+        "podman-compose", "-p", project, "-f", str(base), "-f", str(override),
+        "up", "-d", spec.compose_name,
+    ]
     # stdout=sys.stderr: podman-compose writes container IDs / project
     # lines to stdout. The wrapped command's stdout must be the ONLY
     # thing on scratch's own stdout (agents pipe it to `jq`), so
     # podman-compose's own chatter goes to stderr instead.
-    subprocess.run(
-        [
-            "podman-compose", "-p", project, "-f", str(base), "-f", str(override),
-            "up", "-d", spec.compose_name,
-        ],
-        stdout=sys.stderr, check=True,
-    )
+    subprocess.run(up_cmd, stdout=sys.stderr, check=True)
     port = _host_port(base, override, project, spec)
     print(
         f"scratch: {spec.compose_name} up at 127.0.0.1:{port}",
         file=sys.stderr,
     )
+    _print_image_identity(spec)
     _wait_healthy(port, spec)
     return port
-
-
-ACTIVE_ENV = "AW_SCRATCH_ACTIVE"
 
 
 def _sentinel_host(spec: ServiceSpec) -> str:
@@ -201,23 +277,20 @@ def _scratch_env(spec: ServiceSpec, port: int, service: str) -> dict[str, str]:
 
     The target service gets the scratch port. The other two get a
     `.invalid` sentinel host so a cross-service call fails immediately
-    instead of silently reaching the live stack -- UNLESS an enclosing
-    `scratch` run already redirected them (tracked via ``AW_SCRATCH_ACTIVE``,
-    comma-joined service names), which lets nested
-    ``scratch.py kb -- scratch.py bd -- ...`` runs cover two services at
-    once.
+    instead of silently reaching the live stack. Chain multi-step probes
+    inside the single wrapped command instead of nesting `scratch` runs
+    (see the module docstring) -- a nested run now fails loudly on this
+    same `.invalid` DNS error, the correct failure mode for an
+    unsupported workflow.
     """
     env = os.environ.copy()
-    active = set(filter(None, env.get(ACTIVE_ENV, "").split(",")))
     for name, other in SERVICES.items():
-        if name == service or name in active:
+        if name == service:
             continue
         env[other.host_env] = _sentinel_host(other)
     env[spec.host_env] = "127.0.0.1"
     env[spec.port_env] = str(port)
     env.pop("ARTIFACT_SVC_URL", None)  # would otherwise outrank host/port
-    active.add(service)
-    env[ACTIVE_ENV] = ",".join(sorted(active))
     return env
 
 
@@ -249,7 +322,7 @@ def cmd_scratch(args: argparse.Namespace) -> int:
     # it, leaking the container + tmpdir. Add a signal handler if scratch
     # ever runs somewhere it gets killed rather than Ctrl-C'd.
     try:
-        port = _bring_up(base, override, project, spec)
+        port = _bring_up(base, override, project, spec, args.build)
         env = _scratch_env(spec, port, args.service)
         result = subprocess.run(command, env=env, check=False)
         return result.returncode
@@ -264,7 +337,9 @@ def cmd_scratch(args: argparse.Namespace) -> int:
 
 def main(argv: list[str]) -> int:
     """Parse argv and run `scratch`. Never falls back to the live stack."""
-    args = build_parser().parse_args(argv)
+    scratch_argv, command_argv = _split_argv(argv)
+    args = build_parser().parse_args(scratch_argv)
+    args.command = command_argv
     try:
         return cmd_scratch(args)
     except (RuntimeError, ValueError, OSError, subprocess.CalledProcessError) as exc:

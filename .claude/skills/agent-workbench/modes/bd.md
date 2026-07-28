@@ -30,16 +30,18 @@ down when it returns:
 AW=$HOME/.claude/skills/agent-workbench/agent-workbench
 scripts/scratch.py bd -- $AW bd status
 # -> scratch: bd-svc up at 127.0.0.1:<random port>
+# -> scratch: bd-svc image localhost/bd-svc:scratch id <sha> created <timestamp>
 # -> {"hub_root": "/tmp/aw-scratch-XXXXXXXX", "initialized": false, "repos": []}
 ```
 
 Same response shape as a live `bd status`, except `hub_root` points at the
 scratch dir instead of the real hub. `scratch bd` isolates ONLY bd-svc: a
 `kb`/`artifact` call made inside the wrapped command still fails loudly
-(sentinel `.invalid` host), never reaches the live stack. See `SKILL.md`
-for the full `scratch` contract (any `bd` verb works the same way inside
-it, and nesting `scripts/scratch.py kb -- scripts/scratch.py bd -- ...`
-covers two services).
+(sentinel `.invalid` host), never reaches the live stack. `scratch`
+rebuilds the image from the working tree by default on every run; pass
+`--no-build` before `--` only when you already know `:scratch` is
+current. See `SKILL.md` for the full `scratch` contract (any `bd` verb
+works the same way inside it).
 
 ## Hub verbs
 

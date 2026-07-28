@@ -46,7 +46,7 @@ copy-installed skill has no repo beside it and should not be verifying
 services at all:
 
 ```bash
-scripts/scratch.py <kb|bd|artifact> -- <command...>
+scripts/scratch.py <kb|bd|artifact> [--no-build] -- <command...>
 ```
 
 This brings up ONE throwaway container for that service against a fresh
@@ -57,18 +57,33 @@ instance, runs it, and tears the container + temp dir down in a `finally`
 -- self-cleaning even on failure or Ctrl-C. Exit code is the command's
 exit code. There is no separate up/down mode.
 
+Scratch runs its own `localhost/<service>:scratch` image tag, never
+`:latest` -- a scratch verification can never silently run whatever the
+live stack happens to have pinned, and there's no reason to retag
+`:latest` just to get a fresh one. That tag alone does NOT guarantee
+freshness: `podman-compose up -d` only builds a missing image, so a
+`:scratch` tag left over from an earlier branch would otherwise be
+reused forever. Freshness instead comes from scratch building the image
+from the working tree by default on EVERY run; pass `--no-build` only
+when you already know the tag is current (a no-change rebuild is a
+layer-cache hit, seconds, not the multi-minute cost of a cold build).
+Every run prints the image actually used to stderr as a tripwire:
+
+```
+scratch: kb-svc image localhost/kb-svc:scratch id <sha> created <timestamp>
+```
+
 **`scratch` isolates only the ONE service named at invocation.** The
 other two services are pointed at a `.invalid` sentinel host, so a call
 to them fails immediately with a DNS error naming the cause (e.g.
 `bd-svc-not-started-by-this-scratch-run.invalid`) instead of silently
 reaching the live stack. Do NOT chain a call to a different service
 inside the wrapped command (`scratch.py bd -- ... && $AW kb ...` will
-fail loudly, by design). To verify two services at once, nest `scratch`
-calls -- the outer service stays live inside the inner one:
-
-```bash
-scripts/scratch.py kb -- scripts/scratch.py bd -- $AW kb status
-```
+fail loudly, by design), and do not nest `scratch` runs -- there is no
+bookkeeping to keep an outer run's service live inside an inner one, so a
+nested call re-sentinels it and fails loudly on the `.invalid` DNS error.
+To probe two services, chain multi-step calls inside the single wrapped
+command instead, e.g. `-- bash -c 'first && second'`.
 
 Requires a repo checkout (it reuses `docker-compose.yml` +
 `docker-compose.scratch.yml` at the repo root) and `podman-compose` on
