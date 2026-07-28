@@ -1,23 +1,4 @@
-"""API views for the artifact review backend.
-
-Public endpoints (always available):
-- api_settings: GET /_/api/settings
-- api_artifacts: GET /_/api/artifacts
-- api_upload: GET /_/api/uploads/<id>
-- api_threads: GET/POST /_/api/threads (list/create feedback)
-- api_create_reply: POST /_/api/threads/<id>/replies
-- api_resolve_thread: POST /_/api/threads/<id>/resolve
-- api_publish: POST /_/api/publish (publish artifacts)
-
-Test-only endpoints (dev-gated, namespace-scoped):
-- api_test_clean_artifact: DELETE /_/api/test/artifacts/test/<subdir>
-
-Test endpoints are only enabled when ARTIFACT_SVC_TEST_ROUTES=1.
-They are structurally absent from the URLconf when disabled, not mounted with 403.
-Only artifacts in the 'test/' project namespace can be cleaned.
-These endpoints are deliberately NOT exposed in the CLI or agent-facing docs.
-See apps/artifact-review/backend/artifact_review/views_api.py for implementation.
-"""
+"""API views for the artifact review backend."""
 
 from __future__ import annotations
 
@@ -430,7 +411,6 @@ def _now() -> int:
 
 
 __all__ = [
-    "api_test_clean_artifact",
     "api_artifacts",
     "api_create_reply",
     "api_create_thread",
@@ -440,70 +420,3 @@ __all__ = [
     "api_threads",
     "api_upload",
 ]
-
-
-# Test-only endpoints (dev-gated, namespace-scoped)
-# These are disabled by default and only enabled when ARTIFACT_SVC_TEST_ROUTES=1
-
-def api_test_clean_artifact(request: HttpRequest, project: str, subdir: str) -> JsonResponse:
-    """Test-only endpoint: clean up a test artifact and its feedback.
-    
-    Only works for artifacts in the 'test/' project namespace.
-    Requires ARTIFACT_SVC_TEST_ROUTES=1 environment variable.
-    Deletes the artifact directory and removes the ArtifactIndex entry.
-    
-    Args:
-        project: Project name (must be "test" for safety)
-        subdir: Subdirectory name
-    
-    Returns:
-        404 if artifact not found or not in test namespace
-        403 if project is not "test"
-        200 with cleanup details on success
-    """
-    from django.conf import settings
-    
-    # This should only be reachable if TEST_ROUTES is enabled,
-    # but check again for defense in depth
-    if not settings.ARTIFACT_SVC_TEST_ROUTES:
-        return _json_error("test_routes_disabled", 403)
-    
-    # Structural safety: only allow cleanup in test/ namespace
-    if project != "test":
-        return _json_error("not_in_test_namespace", 403)
-    
-    ensure_feedback_schema()
-    artifact_id = f"{project}/{subdir}"
-    
-    # Get the artifact from index
-    artifact = ArtifactIndex.objects.filter(artifact_id=artifact_id).first()
-    if artifact is None:
-        return _json_error("unknown_artifact", 404)
-    
-    # Delete artifact files
-    try:
-        artifact_path = Path(artifact.src_path)
-        if artifact_path.exists():
-            shutil.rmtree(artifact_path)
-    except Exception as exc:
-        logger.error("Failed to delete test artifact files for %s: %s", artifact_id, exc)
-        return _json_error("cleanup_failed", 500)
-    
-    # Delete artifact index entry
-    with transaction.atomic():
-        # Delete all related threads and their replies/uploads
-        for thread in Thread.objects.filter(artifact_id=artifact_id):
-            Reply.objects.filter(thread=thread).delete()
-        Thread.objects.filter(artifact_id=artifact_id).delete()
-        
-        # Delete the index entry
-        artifact.delete()
-    
-    return apply_app_headers(
-        JsonResponse(
-            {
-                "artifact_id": artifact_id,
-                "cleaned": True,
-            }
-        )
-    )

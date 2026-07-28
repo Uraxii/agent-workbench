@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 
-from django.conf import settings
 from django.http import HttpRequest, HttpResponse, HttpResponseNotAllowed
 from django.urls import path
 
@@ -45,17 +44,5 @@ urlpatterns = [
     path("<str:project>/<str:subdir>/<path:rel>", views_static.static_artifact, name="static_artifact"),
     path("<path:rel>", views_static.spa_index, name="spa_index"),
 ]
-
-# Test-only routes: only included when ARTIFACT_SVC_TEST_ROUTES=1
-# These routes are structurally absent when disabled, not just refusing requests
-if settings.ARTIFACT_SVC_TEST_ROUTES:
-    urlpatterns.insert(
-        0,
-        path(
-            "_/api/test/artifacts/<str:project>/<str:subdir>",
-            views_api.api_test_clean_artifact,
-            name="api_test_clean_artifact",
-        ),
-    )
 
 __all__ = ["route_by_method", "urlpatterns"]

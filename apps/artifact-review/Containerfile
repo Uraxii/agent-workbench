@@ -29,7 +29,4 @@ ENTRYPOINT ["gunicorn", "-c", "/app/backend/gunicorn.conf.py", "artifact_review_
 
 FROM runtime AS test
 
-# Enable test routes for the test build
-ENV ARTIFACT_SVC_TEST_ROUTES=1
-
 RUN pip install --no-cache-dir ".[test]" && python -m pytest -q
