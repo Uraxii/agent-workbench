@@ -47,8 +47,11 @@ def install_target() -> Path:
 
 
 def source_dir() -> Path:
-    """This repo's own agent-workbench skill dir (the thing being installed)."""
-    return paths.REPO_ROOT / ".claude" / "skills" / "agent-workbench"
+    """This repo's own agent-workbench skill dir (the thing being installed).
+    
+    Raises RuntimeError if the repo root cannot be found.
+    """
+    return paths.repo_root() / ".claude" / "skills" / "agent-workbench"
 
 
 def _ignore_pycache(_dir: str, names: list[str]) -> set[str]:
@@ -117,13 +120,36 @@ def _uninstall(target: Path, source: Path) -> bool:
 
 
 def cmd_install(args: argparse.Namespace) -> int:
-    """Dispatch to link/copy/uninstall per the chosen mutually exclusive flag."""
-    target, source = install_target(), source_dir()
+    """Dispatch to link/copy/uninstall per the chosen mutually exclusive flag.
+    
+    Returns 0 on success, 1 on failure.
+    """
+    target = install_target()
+    
     if args.link:
+        try:
+            source = source_dir()
+        except RuntimeError as e:
+            print(f"agent-workbench: {e}")
+            return 1
         _install_link(target, source)
         return 0
+    
     elif args.copy:
+        try:
+            source = source_dir()
+        except RuntimeError as e:
+            print(f"agent-workbench: {e}")
+            return 1
         _install_copy(target, source)
         return 0
+    
     else:  # args.uninstall
+        try:
+            source = source_dir()
+        except RuntimeError:
+            # For uninstall, if we can't find the repo root, use a dummy source
+            # so we can still check if target is a stamped copy install
+            source = Path("/nonexistent/repo")
+        
         return 0 if _uninstall(target, source) else 1
