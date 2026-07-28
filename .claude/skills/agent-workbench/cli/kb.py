@@ -18,6 +18,8 @@ Subcommands:
     query Q [--project P ...]  hybrid search               GET  /query
     status                     vault root + projects       GET  /status
     decision record|audit      dated decision notes        [cli/kb_decision.py]
+    enrich [--project P]       fill question/summary       POST /enrich
+           [--note N]
 
 The service address comes from ``KB_SVC_HOST`` (default 127.0.0.1) and
 ``KB_SVC_PORT`` (default 9100).
@@ -102,6 +104,13 @@ def register(subparsers: argparse._SubParsersAction) -> None:
 
     status_cmd = sub.add_parser("status", help="vault root and projects")
     status_cmd.set_defaults(func=cmd_status)
+
+    enrich_cmd = sub.add_parser(
+        "enrich", help="fill question/summary frontmatter via the LLM",
+    )
+    enrich_cmd.add_argument("--project", default=None)
+    enrich_cmd.add_argument("--note", default=None)
+    enrich_cmd.set_defaults(func=cmd_enrich)
 
 
 # ── HTTP client ───────────────────────────────────────────────────────
@@ -238,4 +247,15 @@ def cmd_query(args: argparse.Namespace) -> int:
 def cmd_status(_args: argparse.Namespace) -> int:
     """Print the vault root, whether it is initialized, and its projects."""
     print(json.dumps(get_json("/status")))
+    return 0
+
+
+def cmd_enrich(args: argparse.Namespace) -> int:
+    """Fill question/summary frontmatter on unenriched notes via the LLM."""
+    payload: dict[str, object] = {}
+    if args.project:
+        payload["project"] = args.project
+    if args.note:
+        payload["note"] = args.note
+    print(json.dumps(post_json("/enrich", payload)))
     return 0

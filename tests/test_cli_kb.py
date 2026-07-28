@@ -137,6 +137,7 @@ def test_a_failed_verb_never_falls_back_to_touching_the_vault(
         (["status"], "GET", "/status"),
         (["path", "proj1"], "GET", "/project?project=proj1"),
         (["query", "widgets"], "GET", "/query?q=widgets"),
+        (["enrich"], "POST", "/enrich"),
     ],
 )
 def test_verb_calls_its_endpoint(
@@ -180,6 +181,33 @@ def test_query_passes_every_filter_through(
     assert request.full_url == (
         "http://127.0.0.1:9100/query?q=widgets&project=proj1&type=note&all=1"
     )
+    capsys.readouterr()
+
+
+def test_enrich_passes_project_and_note_through(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    patcher, seen = _capture_request({"enriched": 0, "message": "disabled"})
+    args = _run(["enrich", "--project", "proj1", "--note", "proj1/notes/a.md"])
+    with patcher:
+        assert args.func(args) == 0
+    [request] = seen
+    assert request.full_url == "http://127.0.0.1:9100/enrich"
+    assert json.loads(request.data) == {
+        "project": "proj1", "note": "proj1/notes/a.md",
+    }
+    capsys.readouterr()
+
+
+def test_enrich_with_no_flags_sends_an_empty_payload(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    patcher, seen = _capture_request({"enriched": 0, "message": "disabled"})
+    args = _run(["enrich"])
+    with patcher:
+        assert args.func(args) == 0
+    [request] = seen
+    assert json.loads(request.data) == {}
     capsys.readouterr()
 
 
