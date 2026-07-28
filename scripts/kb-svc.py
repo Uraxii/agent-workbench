@@ -19,7 +19,7 @@ Endpoints (all JSON):
     GET  /query?q=&project=&type=&all=1
                                      hybrid keyword + vector search
     GET  /decision/audit?topic=&project=
-                                     a topic's supersession chain
+                                     a topic's revision chain
     POST /vault/init                 create the vault dirs (idempotent)
     POST /project/init {project}     create a project's note dirs
     POST /put   {project,title,type,source,content}
@@ -29,7 +29,7 @@ Endpoints (all JSON):
                                      ingest either shape, atomize, reindex
     POST /reindex                    rebuild every derived artifact
     POST /decision {project,topic,title,text,...}
-                                     record a decision, supersede the prior
+                                     record a decision, revise the prior
     POST /enrich {project?,note?}    fill question/summary via the LLM
 
 CLI:
@@ -227,7 +227,7 @@ def search(
     """Hybrid retrieval: FTS5 keyword hits, reranked by vector similarity.
 
     The keyword half decides WHICH notes match (and applies the project,
-    type and superseded filters); the vector half only reorders them, so
+    type and revised filters); the vector half only reorders them, so
     an unavailable or unconfigured embedding backend degrades to plain
     keyword ranking instead of changing what is visible.
     """
@@ -345,13 +345,13 @@ def record_decision(
     """
     result = kb_decision.record(config.kb_home, payload)
     finished = _finish_ingest(config, Path(result["path"]))
-    return {**finished, "supersedes": result["supersedes"]}
+    return {**finished, "revises": result["revises"]}
 
 
 def audit_decisions(
     kb_home: Path, topic: str, project: str | None,
 ) -> list[dict[str, str]]:
-    """A topic's supersession chain as plain JSON rows, oldest first."""
+    """A topic's revision chain as plain JSON rows, oldest first."""
     dirs = kb_decision.find_decision_dirs(kb_home, project)
     return [
         {
@@ -359,7 +359,7 @@ def audit_decisions(
             "status": note.status,
             "title": note.title,
             "path": str(note.path),
-            "supersedes": note.supersedes,
+            "revises": note.revises,
         }
         for note in kb_decision.audit(dirs, topic)
     ]

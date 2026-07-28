@@ -3,7 +3,7 @@ title: Infer legacy review rounds from last push boundary
 topic: artifact-review-round-migration
 date: 2026-07-26
 status: active
-supersedes: 
+revises: 
 tags: []
 ---
 

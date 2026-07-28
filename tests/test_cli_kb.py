@@ -227,7 +227,7 @@ def test_path_prints_only_the_path_the_service_reports(
 def test_decision_record_posts_every_field(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    patcher, seen = _capture_request({"path": "/vault/d.md", "supersedes": ""})
+    patcher, seen = _capture_request({"path": "/vault/d.md", "revises": ""})
     args = _run([
         "decision", "record", "--project", "proj1", "--topic", "shape",
         "--title", "Round", "--text", "Widgets are round", "--tags", "a, b",
@@ -247,10 +247,10 @@ def test_decision_audit_human_prints_one_line_per_note(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     chain = {"chain": [
-        {"date": "2026-07-01", "status": "superseded", "title": "Round",
-         "path": "/vault/a.md", "supersedes": ""},
+        {"date": "2026-07-01", "status": "revised", "title": "Round",
+         "path": "/vault/a.md", "revises": ""},
         {"date": "2026-07-02", "status": "active", "title": "Square",
-         "path": "/vault/b.md", "supersedes": "/vault/a.md"},
+         "path": "/vault/b.md", "revises": "/vault/a.md"},
     ]}
     patcher, seen = _capture_request(chain)
     args = _run(["decision", "audit", "shape", "--human"])
@@ -259,15 +259,15 @@ def test_decision_audit_human_prints_one_line_per_note(
     [request] = seen
     assert request.full_url == "http://127.0.0.1:9100/decision/audit?topic=shape"
     lines = capsys.readouterr().out.strip().splitlines()
-    assert lines[0].startswith("2026-07-01  superseded   Round")
-    assert lines[1].endswith("(supersedes: /vault/a.md)")
+    assert lines[0].startswith("2026-07-01  revised      Round")
+    assert lines[1].endswith("(revises: /vault/a.md)")
 
 
 def test_decision_audit_json_prints_the_chain_rows(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     rows = [{"date": "2026-07-01", "status": "active", "title": "Round",
-             "path": "/vault/a.md", "supersedes": ""}]
+             "path": "/vault/a.md", "revises": ""}]
     patcher, _ = _capture_request({"chain": rows})
     args = _run(["decision", "audit", "shape", "--project", "proj1"])
     with patcher:

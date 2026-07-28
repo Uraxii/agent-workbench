@@ -241,12 +241,12 @@ def build_query(
     return sql, params
 
 
-def score_rows(rows: list[sqlite3.Row], include_superseded: bool) -> list[dict]:
+def score_rows(rows: list[sqlite3.Row], include_revised: bool) -> list[dict]:
     """Blend each row's bm25 relevance with a recency bonus, drop
-    superseded notes unless asked for, and rank highest-score first."""
+    revised notes unless asked for, and rank highest-score first."""
     results = []
     for row in rows:
-        if not include_superseded and row["status"] == "superseded":
+        if not include_revised and row["status"] == "revised":
             continue
         relevance = -row["bm25_rank"]
         recency_bonus = day_ordinal(row["date"]) / RECENCY_DIVISOR
@@ -271,7 +271,7 @@ def query_index(
     query: str,
     project: str | None,
     note_type: str | None,
-    include_superseded: bool,
+    include_revised: bool,
 ) -> list[dict]:
     """Search kb.db, ranked by bm25 relevance blended with recency."""
     sql, params = build_query(query, project, note_type)
@@ -279,7 +279,7 @@ def query_index(
     con.row_factory = sqlite3.Row
     rows = con.execute(sql, params).fetchall()
     con.close()
-    return score_rows(rows, include_superseded)
+    return score_rows(rows, include_revised)
 
 
 def resolve_kb_home(cli_value: str | None) -> Path:
@@ -306,7 +306,7 @@ def build_parser() -> argparse.ArgumentParser:
     query_cmd.add_argument("--project", default=None)
     query_cmd.add_argument("--type", default=None)
     query_cmd.add_argument(
-        "--all", action="store_true", help="include superseded notes",
+        "--all", action="store_true", help="include revised notes",
     )
 
     return parser

@@ -2,8 +2,8 @@
 title: Use Lodestar theming as unified UI baseline
 topic: artifact-service-ui-theming
 date: 2026-07-25
-status: superseded
-supersedes: 
+status: revised
+revises: 
 tags: [artifact-service-ui, lodestar, theme]
 ---
 

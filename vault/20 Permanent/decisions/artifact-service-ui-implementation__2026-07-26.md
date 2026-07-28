@@ -3,7 +3,7 @@ title: Implement approved Lodestar unified UI
 topic: artifact-service-ui-implementation
 date: 2026-07-26
 status: active
-supersedes: 
+revises: 
 tags: [artifact-service-ui, implementation, lodestar]
 ---
 

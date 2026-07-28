@@ -2,7 +2,7 @@
 
 A decision is one markdown file under ``<kb_home>/<project>/decisions/``,
 grouped by a stable ``topic`` key, and the knowledgebase service writes
-it. All the logic -- the frontmatter dialect, the supersession flip and
+it. All the logic -- the frontmatter dialect, the revision flip and
 the chain walk that orders an audit -- lives in ``scripts/kb_decision.py``
 inside that service. This module only parses arguments, calls the
 endpoint, and formats the answer.
@@ -41,9 +41,9 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     record_cmd.add_argument("--refs", default="")
     record_cmd.add_argument("--tags", default="", help="comma-separated")
     record_cmd.add_argument(
-        "--supersedes",
+        "--revises",
         default=None,
-        help="path of the note to supersede; default is the topic's "
+        help="path of the note to revise; default is the topic's "
              "current active note",
     )
     record_cmd.set_defaults(func=cmd_record)
@@ -64,7 +64,7 @@ def register(subparsers: argparse._SubParsersAction) -> None:
 def cmd_record(args: argparse.Namespace) -> int:
     """Record a decision through the service and print the result JSON.
 
-    The service supersedes the topic's prior active note and reindexes in
+    The service revises the topic's prior active note and reindexes in
     the same call, so a just-recorded decision is immediately findable by
     `kb query`.
     """
@@ -79,8 +79,8 @@ def cmd_record(args: argparse.Namespace) -> int:
         "refs": args.refs,
         "tags": args.tags,
     }
-    if args.supersedes:
-        payload["supersedes"] = args.supersedes
+    if args.revises:
+        payload["revises"] = args.revises
     print(json.dumps(kb.post_json("/decision", payload)))
     return 0
 
@@ -102,7 +102,7 @@ def cmd_audit(args: argparse.Namespace) -> int:
         for note in chain:
             print(
                 f"{note['date']}  {note['status']:12} {note['title']}"
-                f"  (supersedes: {note['supersedes'] or '-'})"
+                f"  (revises: {note['revises'] or '-'})"
             )
         return 0
     print(json.dumps(chain, indent=2))

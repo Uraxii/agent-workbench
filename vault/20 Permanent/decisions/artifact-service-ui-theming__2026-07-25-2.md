@@ -3,7 +3,7 @@ title: Use Lodestar theming across mock and shared UI without layout changes
 topic: artifact-service-ui-theming
 date: 2026-07-25
 status: active
-supersedes: /var/home/nicole/Projects/agent-workbench/vault/20 Permanent/decisions/artifact-service-ui-theming__2026-07-25.md
+revises: /var/home/nicole/Projects/agent-workbench/vault/20 Permanent/decisions/artifact-service-ui-theming__2026-07-25.md
 tags: [artifact-service-ui, lodestar, theme, layout]
 ---
 

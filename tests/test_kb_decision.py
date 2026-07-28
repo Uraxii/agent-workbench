@@ -7,18 +7,18 @@ tmp_path vaults, never the real ~/.knowledgebase, and the service
 modules are imported with scripts/ on sys.path.
 
 Covers the skeptic-gate fold-in fixes:
-* Bug 2 -- audit() orders a topic's chain by walking the `supersedes`
-  links, not by sorting on `decision_date` (same-day record+supersede
+* Bug 2 -- audit() orders a topic's chain by walking the `revises`
+  links, not by sorting on `decision_date` (same-day record+revise
   is normal and ties under a date-only sort).
-* Bug 2 re-review -- the chain walk matches `supersedes` by resolved
+* Bug 2 re-review -- the chain walk matches `revises` by resolved
   path, not raw string equality, so an aliased/symlinked path or a
-  relative `--supersedes` flag still walks correctly, and any fallback
+  relative `--revises` flag still walks correctly, and any fallback
   that still can't fully walk the chain warns on stderr instead of
   silently reverting to the known-wrong date sort.
 * render_decision/load_decision's LOCKED byte shape.
-* The supersede flip on `record()`.
+* The revise flip on `record()`.
 * build_note_path's same-day collision suffix.
-* resolve_supersedes_path never crossing project boundaries.
+* resolve_revises_path never crossing project boundaries.
 """
 
 from __future__ import annotations
@@ -46,13 +46,13 @@ def _record_args(
     rationale: str = "",
     refs: str = "",
     tags: str = "",
-    supersedes: str | None = None,
+    revises: str | None = None,
 ) -> dict[str, object]:
     """A `POST /decision` payload, shaped like the endpoint's own."""
     return {
         "project": project, "topic": topic, "title": title, "text": text,
         "rationale": rationale, "refs": refs, "tags": tags,
-        "supersedes": supersedes,
+        "revises": revises,
     }
 
 
@@ -66,7 +66,7 @@ def test_render_decision_matches_locked_byte_shape() -> None:
         topic="my-topic",
         decision_date="2026-07-27",
         status="active",
-        supersedes="",
+        revises="",
         tags=["a", "b"],
         body="Body text.",
     )
@@ -76,7 +76,7 @@ def test_render_decision_matches_locked_byte_shape() -> None:
         "topic: my-topic\n"
         "date: 2026-07-27\n"
         "status: active\n"
-        "supersedes: \n"  # trailing space after an empty supersedes: LOCKED
+        "revises: \n"  # trailing space after an empty revises: LOCKED
         "tags: [a, b]\n"
         "---\n\n"
         "Body text.\n"
@@ -89,8 +89,8 @@ def test_render_decision_load_decision_round_trip(tmp_path: Path) -> None:
         title="[H3] a title that looks bracketed",
         topic="my-topic",
         decision_date="2026-07-27",
-        status="superseded",
-        supersedes=str(tmp_path / "prior.md"),
+        status="revised",
+        revises=str(tmp_path / "prior.md"),
         tags=["alpha", "beta"],
         body="Some body text.\n\n## Rationale\n\nBecause reasons.",
     )
@@ -101,10 +101,10 @@ def test_render_decision_load_decision_round_trip(tmp_path: Path) -> None:
     assert loaded == decision
 
 
-# ── record(): the supersede flip ─────────────────────────────────────────
+# ── record(): the revise flip ─────────────────────────────────────────
 
 
-def test_record_second_decision_supersedes_the_prior_note(tmp_path: Path) -> None:
+def test_record_second_decision_revises_the_prior_note(tmp_path: Path) -> None:
     first = kb_decision.record(tmp_path, _record_args(
         project="proj", topic="my-topic", title="First", text="first text",
     ))
@@ -114,12 +114,12 @@ def test_record_second_decision_supersedes_the_prior_note(tmp_path: Path) -> Non
 
     prior_path = Path(first["path"])
     prior = kb_decision.load_decision(prior_path)
-    assert prior.status == kb_decision.SUPERSEDED
+    assert prior.status == kb_decision.REVISED
 
     new_note = kb_decision.load_decision(Path(second["path"]))
     assert new_note.status == kb_decision.ACTIVE
-    assert new_note.supersedes == str(prior_path)
-    assert second["supersedes"] == str(prior_path)
+    assert new_note.revises == str(prior_path)
+    assert second["revises"] == str(prior_path)
 
 
 # ── build_note_path: same-day collision suffix ───────────────────────────
@@ -140,10 +140,10 @@ def test_build_note_path_suffixes_on_same_day_collision(tmp_path: Path) -> None:
     assert third == tmp_path / "topic-x__2026-07-27-3.md"
 
 
-# ── resolve_supersedes_path: never crosses project boundaries ───────────
+# ── resolve_revises_path: never crosses project boundaries ───────────
 
 
-def test_resolve_supersedes_path_ignores_another_projects_same_named_topic(
+def test_resolve_revises_path_ignores_another_projects_same_named_topic(
     tmp_path: Path,
 ) -> None:
     dir_a = tmp_path / "proj-a" / "decisions"
@@ -158,12 +158,12 @@ def test_resolve_supersedes_path_ignores_another_projects_same_named_topic(
     # Project B has no note at all for this topic yet; scoping the lookup
     # to dir_b alone must find nothing, even though project A's note for
     # the identical topic string exists right next door.
-    supersedes_in_b = kb_decision.resolve_supersedes_path(None, [dir_b], "shared-topic")
-    assert supersedes_in_b is None
+    revises_in_b = kb_decision.resolve_revises_path(None, [dir_b], "shared-topic")
+    assert revises_in_b is None
 
-    supersedes_in_a = kb_decision.resolve_supersedes_path(None, [dir_a], "shared-topic")
-    assert supersedes_in_a is not None
-    assert supersedes_in_a.parent == dir_a
+    revises_in_a = kb_decision.resolve_revises_path(None, [dir_a], "shared-topic")
+    assert revises_in_a is not None
+    assert revises_in_a.parent == dir_a
 
 
 def test_record_in_one_project_never_touches_another_projects_note(
@@ -188,7 +188,7 @@ def test_record_in_one_project_never_touches_another_projects_note(
     assert b_note.status == kb_decision.ACTIVE
 
 
-# ── audit(): supersedes-chain ordering fix (Bug 2) ───────────────────────
+# ── audit(): revises-chain ordering fix (Bug 2) ───────────────────────
 
 
 def test_audit_single_note_topic_returns_that_note(tmp_path: Path) -> None:
@@ -205,18 +205,18 @@ def test_audit_single_note_topic_returns_that_note(tmp_path: Path) -> None:
 def test_audit_orders_same_day_chain_oldest_first_despite_reversed_glob_order(
     tmp_path: Path,
 ) -> None:
-    """Base + same-day supersede is the normal case this fix targets: both
+    """Base + same-day revise is the normal case this fix targets: both
     notes share a decision_date, so a naive date sort ties and falls back
     to whatever order Path.glob happens to return -- not guaranteed
     chronological. Patching find_notes_for_topic to hand audit() the
     notes in the wrong (newest-first) order proves the ordering comes
-    from walking the supersedes chain, not from the input order or any
+    from walking the revises chain, not from the input order or any
     filename tiebreak."""
     kb_decision.record(tmp_path, _record_args(
         project="proj", topic="same-day-topic", title="Base", text="base text",
     ))
     kb_decision.record(tmp_path, _record_args(
-        project="proj", topic="same-day-topic", title="Supersede", text="new text",
+        project="proj", topic="same-day-topic", title="Revise", text="new text",
     ))
     decision_dir = kb_decision.decisions_dir(tmp_path, "proj")
     notes = kb_decision.find_notes_for_topic([decision_dir], "same-day-topic")
@@ -228,8 +228,8 @@ def test_audit_orders_same_day_chain_oldest_first_despite_reversed_glob_order(
     with patch.object(kb_decision, "find_notes_for_topic", return_value=wrong_order):
         chain = kb_decision.audit([decision_dir], "same-day-topic")
 
-    assert [n.title for n in chain] == ["Base", "Supersede"]
-    assert chain[0].status == kb_decision.SUPERSEDED
+    assert [n.title for n in chain] == ["Base", "Revise"]
+    assert chain[0].status == kb_decision.REVISED
     assert chain[1].status == kb_decision.ACTIVE
 
 
@@ -237,19 +237,19 @@ def test_audit_falls_back_to_date_sort_when_no_unreferenced_root(
     tmp_path: Path,
 ) -> None:
     """Not-yet-possible-but-be-safe case: corrupted data where every note
-    claims to supersede another (no root to start the walk from). Must
+    claims to revise another (no root to start the walk from). Must
     degrade to a stable decision_date sort, never raise."""
     decision_dir = tmp_path / "decisions"
     decision_dir.mkdir()
     note_a = kb_decision.Decision(
         path=decision_dir / "a.md", title="A", topic="corrupt-topic",
-        decision_date="2026-07-01", status=kb_decision.SUPERSEDED,
-        supersedes=str(decision_dir / "b.md"), tags=[], body="a",
+        decision_date="2026-07-01", status=kb_decision.REVISED,
+        revises=str(decision_dir / "b.md"), tags=[], body="a",
     )
     note_b = kb_decision.Decision(
         path=decision_dir / "b.md", title="B", topic="corrupt-topic",
         decision_date="2026-07-02", status=kb_decision.ACTIVE,
-        supersedes=str(decision_dir / "a.md"), tags=[], body="b",
+        revises=str(decision_dir / "a.md"), tags=[], body="b",
     )
     note_a.path.write_text(kb_decision.render_decision(note_a), encoding="utf-8")
     note_b.path.write_text(kb_decision.render_decision(note_b), encoding="utf-8")
@@ -262,15 +262,15 @@ def test_audit_falls_back_to_date_sort_when_no_unreferenced_root(
 # ── audit(): chain-walk resolved-path match (skeptic-gate re-review) ────
 
 
-def test_audit_chain_walk_matches_supersedes_through_an_aliased_path(
+def test_audit_chain_walk_matches_revises_through_an_aliased_path(
     tmp_path: Path,
 ) -> None:
     """Reproduces the re-review repro without needing this machine's own
     /home -> /var/home symlink: a tmp_path directory standing in for the
     real vault, plus a second symlinked directory standing in for the
-    alias, so `supersedes` and `path` name the same file through two
+    alias, so `revises` and `path` name the same file through two
     genuinely different raw strings. Also stands in for the relative
-    `--supersedes` flag case, since a relative path has exactly the same
+    `--revises` flag case, since a relative path has exactly the same
     "differs as a string, same file once resolved" shape.
 
     Before the fix this raw-string mismatch made the chain walk think
@@ -285,29 +285,29 @@ def test_audit_chain_walk_matches_supersedes_through_an_aliased_path(
 
     note_a = kb_decision.Decision(
         path=real_dir / "a.md", title="A", topic="alias-topic",
-        decision_date="2026-07-01", status=kb_decision.SUPERSEDED,
-        supersedes="", tags=[], body="a",
+        decision_date="2026-07-01", status=kb_decision.REVISED,
+        revises="", tags=[], body="a",
     )
-    aliased_supersedes = str(alias_root / "decisions" / "a.md")
+    aliased_revises = str(alias_root / "decisions" / "a.md")
     note_b = kb_decision.Decision(
         path=real_dir / "b.md", title="B", topic="alias-topic",
         decision_date="2026-07-02", status=kb_decision.ACTIVE,
-        supersedes=aliased_supersedes, tags=[], body="b",
+        revises=aliased_revises, tags=[], body="b",
     )
     note_a.path.write_text(kb_decision.render_decision(note_a), encoding="utf-8")
     note_b.path.write_text(kb_decision.render_decision(note_b), encoding="utf-8")
 
-    assert aliased_supersedes != str(note_a.path)  # raw strings genuinely differ
+    assert aliased_revises != str(note_a.path)  # raw strings genuinely differ
 
     chain = kb_decision.audit([real_dir], "alias-topic")
 
     assert [n.title for n in chain] == ["A", "B"]
 
 
-def test_audit_falls_back_and_warns_on_dangling_supersedes_link(
+def test_audit_falls_back_and_warns_on_dangling_revises_link(
     tmp_path: Path, caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A `supersedes` string that resolves to no real note (corrupt data,
+    """A `revises` string that resolves to no real note (corrupt data,
     or a note copied in from elsewhere without its target) must still
     degrade to the date-sort fallback rather than raise -- and, unlike
     the pre-fix behaviour, must say so in the log instead of silently
@@ -316,13 +316,13 @@ def test_audit_falls_back_and_warns_on_dangling_supersedes_link(
     decision_dir.mkdir()
     note_a = kb_decision.Decision(
         path=decision_dir / "a.md", title="A", topic="dangling-topic",
-        decision_date="2026-07-01", status=kb_decision.SUPERSEDED,
-        supersedes="", tags=[], body="a",
+        decision_date="2026-07-01", status=kb_decision.REVISED,
+        revises="", tags=[], body="a",
     )
     note_b = kb_decision.Decision(
         path=decision_dir / "b.md", title="B", topic="dangling-topic",
         decision_date="2026-07-02", status=kb_decision.ACTIVE,
-        supersedes=str(decision_dir / "does-not-exist.md"), tags=[], body="b",
+        revises=str(decision_dir / "does-not-exist.md"), tags=[], body="b",
     )
     note_a.path.write_text(kb_decision.render_decision(note_a), encoding="utf-8")
     note_b.path.write_text(kb_decision.render_decision(note_b), encoding="utf-8")
@@ -344,7 +344,7 @@ def test_audit_fallback_orders_same_day_notes_by_recording_suffix(
     date-blind `-\\d+\\.md` pattern misreads the UN-suffixed note's date
     tail as a fake large suffix and sorts it last instead of first. Two
     real `build_note_path`-named same-day notes, with a dangling
-    supersedes link forcing the fallback, must still land in recording
+    revises link forcing the fallback, must still land in recording
     order: the plain `__DATE.md` note before its `__DATE-2.md` sibling.
     """
     decision_dir = tmp_path / "decisions"
@@ -353,14 +353,14 @@ def test_audit_fallback_orders_same_day_notes_by_recording_suffix(
     note_a = kb_decision.Decision(
         path=kb_decision.build_note_path(decision_dir, "topic-x", today),
         title="A", topic="topic-x", decision_date=today,
-        status=kb_decision.SUPERSEDED, supersedes="", tags=[], body="a",
+        status=kb_decision.REVISED, revises="", tags=[], body="a",
     )
     note_a.path.write_text(kb_decision.render_decision(note_a), encoding="utf-8")
     note_b = kb_decision.Decision(
         path=kb_decision.build_note_path(decision_dir, "topic-x", today),
         title="B", topic="topic-x", decision_date=today,
         status=kb_decision.ACTIVE,
-        supersedes=str(tmp_path / "nowhere.md"), tags=[], body="b",
+        revises=str(tmp_path / "nowhere.md"), tags=[], body="b",
     )
     note_b.path.write_text(kb_decision.render_decision(note_b), encoding="utf-8")
     assert note_a.path.name == "topic-x__2026-07-22.md"
@@ -421,7 +421,7 @@ def test_find_notes_for_topic_skips_a_symlinked_note(tmp_path: Path) -> None:
     outside = tmp_path / "outside.md"
     outside.write_text(
         "---\ntitle: Secret\ntopic: leak-topic\ndate: 2026-07-01\n"
-        "status: active\nsupersedes: \ntags: []\n---\n\nsecret body\n",
+        "status: active\nrevises: \ntags: []\n---\n\nsecret body\n",
         encoding="utf-8",
     )
     (decision_dir / "link.md").symlink_to(outside)
@@ -429,13 +429,13 @@ def test_find_notes_for_topic_skips_a_symlinked_note(tmp_path: Path) -> None:
     assert kb_decision.find_notes_for_topic([decision_dir], "leak-topic") == []
 
 
-# ── resolve_supersedes_path: topic matching validation ──────────────────
+# ── resolve_revises_path: topic matching validation ──────────────────
 
-def test_resolve_supersedes_path_rejects_mismatched_topic(
+def test_resolve_revises_path_rejects_mismatched_topic(
     tmp_path: Path,
 ) -> None:
-    """When an explicit supersedes path is given, the target note's topic
-    must match the topic being recorded. A cross-topic supersession is
+    """When an explicit revises path is given, the target note's topic
+    must match the topic being recorded. A cross-topic revision is
     silently prevented."""
     # Create a note on topic "alpha"
     first = kb_decision.record(tmp_path, _record_args(
@@ -446,18 +446,18 @@ def test_resolve_supersedes_path_rejects_mismatched_topic(
 
     dir_a = alpha_note_path.parent
 
-    # Try to record a decision on topic "beta" with --supersedes pointing
+    # Try to record a decision on topic "beta" with --revises pointing
     # at the "alpha" note. This must be rejected.
     with pytest.raises(ValueError, match="belongs to topic"):
-        kb_decision.resolve_supersedes_path(
+        kb_decision.resolve_revises_path(
             str(alpha_note_path), [dir_a], "beta",
         )
 
 
-def test_record_rejects_supersedes_with_mismatched_topic_and_leaves_file_unmodified(
+def test_record_rejects_revises_with_mismatched_topic_and_leaves_file_unmodified(
     tmp_path: Path,
 ) -> None:
-    """Recording a decision on topic B with --supersedes pointing at a note
+    """Recording a decision on topic B with --revises pointing at a note
     on topic A must fail and the target note must remain byte-for-byte
     unmodified."""
     dir_a = tmp_path / "proj" / "decisions"
@@ -470,7 +470,7 @@ def test_record_rejects_supersedes_with_mismatched_topic_and_leaves_file_unmodif
     alpha_note_path = Path(first["path"])
     original_content = alpha_note_path.read_text(encoding="utf-8")
 
-    # Try to record a decision on topic "beta" with --supersedes pointing
+    # Try to record a decision on topic "beta" with --revises pointing
     # at the "alpha" note. This must fail.
     with pytest.raises(ValueError, match="belongs to topic"):
         kb_decision.record(tmp_path, _record_args(
@@ -478,22 +478,22 @@ def test_record_rejects_supersedes_with_mismatched_topic_and_leaves_file_unmodif
             topic="beta",
             title="Beta Note",
             text="beta text",
-            supersedes=str(alpha_note_path),
+            revises=str(alpha_note_path),
         ))
 
     # Verify the alpha note is completely unmodified
     current_content = alpha_note_path.read_text(encoding="utf-8")
     assert current_content == original_content
-    # And it's still active (not flipped to superseded)
+    # And it's still active (not flipped to revised)
     alpha_note = kb_decision.load_decision(alpha_note_path)
     assert alpha_note.status == kb_decision.ACTIVE
 
 
-def test_record_with_matching_topic_still_supersedes_successfully(
+def test_record_with_matching_topic_still_revises_successfully(
     tmp_path: Path,
 ) -> None:
-    """Verify the happy path still works: when an explicit supersedes path
-    is given pointing at a note on the same topic, supersession happens
+    """Verify the happy path still works: when an explicit revises path
+    is given pointing at a note on the same topic, revision happens
     normally (regression guard)."""
     # Create a note on topic "shared-topic"
     first = kb_decision.record(tmp_path, _record_args(
@@ -501,21 +501,21 @@ def test_record_with_matching_topic_still_supersedes_successfully(
     ))
     first_path = Path(first["path"])
 
-    # Record a second decision on the same topic, explicitly superseding the first
+    # Record a second decision on the same topic, explicitly revising the first
     second = kb_decision.record(tmp_path, _record_args(
         project="proj",
         topic="shared-topic",
         title="Second",
         text="second text",
-        supersedes=str(first_path),
+        revises=str(first_path),
     ))
     second_path = Path(second["path"])
 
-    # Verify the first note is now superseded
+    # Verify the first note is now revised
     first_note = kb_decision.load_decision(first_path)
-    assert first_note.status == kb_decision.SUPERSEDED
+    assert first_note.status == kb_decision.REVISED
 
     # Verify the second note is active and points to the first
     second_note = kb_decision.load_decision(second_path)
     assert second_note.status == kb_decision.ACTIVE
-    assert second_note.supersedes == str(first_path)
+    assert second_note.revises == str(first_path)

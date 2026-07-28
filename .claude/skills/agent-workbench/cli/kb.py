@@ -89,7 +89,7 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     query_cmd.add_argument("--project", default=None)
     query_cmd.add_argument("--type", default=None)
     query_cmd.add_argument(
-        "--all", action="store_true", help="include superseded notes",
+        "--all", action="store_true", help="include revised notes",
     )
     query_cmd.set_defaults(func=cmd_query)
 

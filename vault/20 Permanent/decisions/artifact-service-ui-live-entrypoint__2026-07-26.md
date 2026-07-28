@@ -3,7 +3,7 @@ title: Use artifact-serve.py as the live 9099 UI entrypoint
 topic: artifact-service-ui-live-entrypoint
 date: 2026-07-26
 status: active
-supersedes: 
+revises: 
 tags: []
 ---
 
