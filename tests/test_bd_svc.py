@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-_SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "bd-serve.py"
+_SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "bd-svc.py"
 
 
 def _load_bd_serve():
@@ -259,7 +259,7 @@ def test_no_shell_true_or_os_system() -> None:
 
 @pytest.fixture
 def live_service(service_env: tuple[Path, Path]) -> Iterator[tuple[str, Path, Path]]:
-    """A real bd-serve HTTP server on an ephemeral loopback port."""
+    """A real bd-svc HTTP server on an ephemeral loopback port."""
     hub, argv_path = service_env
     server = ThreadingHTTPServer(("127.0.0.1", 0), bd_serve.BdRequestHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)

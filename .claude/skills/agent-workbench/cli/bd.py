@@ -1,7 +1,7 @@
-"""`bd` subcommand -- HTTP client for the bd-serve board service.
+"""`bd` subcommand -- HTTP client for the bd-svc board service.
 
-Carries no board logic of its own. Every verb is one POST to bd-serve
-(``scripts/bd-serve.py``), which owns ``~/.beads-hub`` and is the only thing
+Carries no board logic of its own. Every verb is one POST to bd-svc
+(``scripts/bd-svc.py``), which owns ``~/.beads-hub`` and is the only thing
 that runs the ``bd`` binary. There is deliberately NO in-process fallback: if
 the service is down, the verb fails loudly naming the endpoint URL and the
 underlying error, rather than quietly touching the board on disk.
@@ -41,14 +41,14 @@ __all__ = [
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 9101
-# Comfortably above bd-serve's own 30s subprocess timeout, so a slow `bd`
+# Comfortably above bd-svc's own 30s subprocess timeout, so a slow `bd`
 # surfaces as the service's 502 rather than as a client-side timeout.
 REQUEST_TIMEOUT_SEC = 60.0
 
 
 def service_base_url() -> str:
-    host = os.environ.get("BD_SERVE_HOST", DEFAULT_HOST)
-    port = os.environ.get("BD_SERVE_PORT", str(DEFAULT_PORT))
+    host = os.environ.get("BD_SVC_HOST", DEFAULT_HOST)
+    port = os.environ.get("BD_SVC_PORT", str(DEFAULT_PORT))
     return f"http://{host}:{port}"
 
 
@@ -66,12 +66,12 @@ def _post_json(endpoint: str, payload: dict[str, object]) -> dict[str, object]:
             return json.loads(response.read())
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"bd-serve POST {endpoint} failed ({exc.code}): {body}") from exc
+        raise RuntimeError(f"bd-svc POST {endpoint} failed ({exc.code}): {body}") from exc
     except urllib.error.URLError as exc:
         reason = exc.reason
-        raise RuntimeError(f"bd-serve unreachable at {url}: {reason}") from exc
+        raise RuntimeError(f"bd-svc unreachable at {url}: {reason}") from exc
     except OSError as exc:
-        raise RuntimeError(f"bd-serve unreachable at {url}: {exc}") from exc
+        raise RuntimeError(f"bd-svc unreachable at {url}: {exc}") from exc
 
 
 def _print_result(endpoint: str, payload: dict[str, object]) -> int:

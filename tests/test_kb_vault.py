@@ -1,6 +1,6 @@
 """Tests for scripts/kb_vault.py -- the service's trust boundary.
 
-kb-serve binds loopback with no authentication, so every value that
+kb-svc binds loopback with no authentication, so every value that
 reaches the filesystem has to be validated before it gets there. These
 tests are the check on that: a project name that is not a plain directory
 name, a note path that resolves outside the vault, and a frontmatter

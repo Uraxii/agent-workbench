@@ -7,7 +7,7 @@ The vault lives at `$KB_HOME` (default `~/.knowledgebase`) and the
 knowledgebase service is the only thing that opens it. Every verb below is
 one HTTP call to that service. There is no filesystem fallback: if the
 service is down, the command fails and says which endpoint it tried and
-why it failed. Start it with `docker compose up -d kb-serve`.
+why it failed. Start it with `docker compose up -d kb-svc`.
 
 ```bash
 AW=$HOME/.claude/skills/agent-workbench/agent-workbench
@@ -27,8 +27,8 @@ the vault markdown alone. That is the recovery path: the index is never
 something to back up, and editing the vault outside the service is
 repaired by rerunning it.
 
-Service address: `KB_SERVE_HOST` (default `127.0.0.1`) and
-`KB_SERVE_PORT` (default `9100`).
+Service address: `KB_SVC_HOST` (default `127.0.0.1`) and
+`KB_SVC_PORT` (default `9100`).
 
 ## decision -- dated, auditable decision notes
 

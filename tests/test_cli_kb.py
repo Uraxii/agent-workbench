@@ -7,7 +7,7 @@ the endpoint and the error, never a silent fallback -- a fallback would
 be a second way into the vault, which is the one thing the service layer
 exists to prevent.
 
-Every test mocks urllib, so nothing here reaches a real kb-serve.
+Every test mocks urllib, so nothing here reaches a real kb-svc.
 """
 
 from __future__ import annotations
@@ -72,16 +72,16 @@ def _run(argv: list[str]) -> argparse.Namespace:
 def test_service_base_url_honors_host_and_port_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("KB_SERVE_HOST", "10.0.0.7")
-    monkeypatch.setenv("KB_SERVE_PORT", "9999")
+    monkeypatch.setenv("KB_SVC_HOST", "10.0.0.7")
+    monkeypatch.setenv("KB_SVC_PORT", "9999")
     assert kb.service_base_url() == "http://10.0.0.7:9999"
 
 
 def test_service_base_url_defaults_to_loopback_9100(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("KB_SERVE_HOST", raising=False)
-    monkeypatch.delenv("KB_SERVE_PORT", raising=False)
+    monkeypatch.delenv("KB_SVC_HOST", raising=False)
+    monkeypatch.delenv("KB_SVC_PORT", raising=False)
     assert kb.service_base_url() == "http://127.0.0.1:9100"
 
 

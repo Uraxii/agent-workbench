@@ -19,12 +19,12 @@ def validate_name(name: str) -> str:
 
 def stage_root() -> Path:
     """Return the configured staged artifact root."""
-    return settings.ARTIFACT_SERVE_STAGE_ROOT
+    return settings.ARTIFACT_SVC_STAGE_ROOT
 
 
 def feedback_root() -> Path:
     """Return the configured feedback storage root."""
-    return settings.ARTIFACT_SERVE_FEEDBACK_ROOT
+    return settings.ARTIFACT_SVC_FEEDBACK_ROOT
 
 
 def safe_join(root: Path, relative: str) -> Path:

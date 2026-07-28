@@ -2,12 +2,12 @@
 
 Two kinds of coverage:
 
-- test_kb_serve_health / test_artifact_serve_health: assert the LIVE stack
+- test_kb_svc_health / test_artifact_svc_health: assert the LIVE stack
   answers HTTP 200 when it is already up (via `podman-compose up -d`, the
   one supported deploy path). Skip cleanly whenever the runtime or the
   service itself is not present -- these never start, stop, or otherwise
   mutate either service.
-- test_kb_serve_container_boundary / test_artifact_serve_container_boundary:
+- test_kb_svc_container_boundary / test_artifact_svc_container_boundary:
   ALWAYS run (skip only if podman itself is missing), independent of
   whether the live stack is up. They build the two hardened images under
   distinct test tags on alternate host ports, run them standalone via
@@ -29,18 +29,18 @@ from pathlib import Path
 import pytest
 
 KB_HEALTH_URL = "http://127.0.0.1:9100/health"
-ARTIFACT_SERVE_URL = "http://127.0.0.1:9099/"
+ARTIFACT_SVC_URL = "http://127.0.0.1:9099/"
 REQUEST_TIMEOUT_SEC = 3
 
 REPO_ROOT = Path(__file__).parent.parent
 
-KB_TEST_IMAGE = "localhost/kb-serve:hardened-test"
-KB_TEST_CONTAINER = "kb-serve-hardened-test"
+KB_TEST_IMAGE = "localhost/kb-svc:hardened-test"
+KB_TEST_CONTAINER = "kb-svc-hardened-test"
 KB_TEST_PORT = 19100
 
-ARTIFACT_SERVE_TEST_IMAGE = "localhost/artifact-review:hardened-test"
-ARTIFACT_SERVE_TEST_CONTAINER = "artifact-review-hardened-test"
-ARTIFACT_SERVE_TEST_PORT = 19099
+ARTIFACT_SVC_TEST_IMAGE = "localhost/artifact-review:hardened-test"
+ARTIFACT_SVC_TEST_CONTAINER = "artifact-review-hardened-test"
+ARTIFACT_SVC_TEST_PORT = 19099
 
 BUILD_TIMEOUT_SEC = 180
 # The artifact-review image builds the React SPA (npm ci + vitest + vite
@@ -89,28 +89,28 @@ def _run(cmd: list[str], timeout: float) -> None:
         pytest.fail(f"command failed: {' '.join(cmd)}\n{result.stderr}")
 
 
-def test_kb_serve_health() -> None:
+def test_kb_svc_health() -> None:
     _require_podman()
     status = _http_status(KB_HEALTH_URL)
     if status is None:
-        pytest.skip("kb-serve not reachable at 127.0.0.1:9100 -- stack not up")
+        pytest.skip("kb-svc not reachable at 127.0.0.1:9100 -- stack not up")
     assert status == 200
 
 
-def test_artifact_serve_health() -> None:
+def test_artifact_svc_health() -> None:
     _require_podman()
-    status = _http_status(ARTIFACT_SERVE_URL)
+    status = _http_status(ARTIFACT_SVC_URL)
     if status is None:
-        pytest.skip("artifact-serve not reachable at 127.0.0.1:9099 -- stack not up")
+        pytest.skip("artifact-svc not reachable at 127.0.0.1:9099 -- stack not up")
     assert status == 200
 
 
 @pytest.fixture()
-def kb_serve_boundary(tmp_path: Path):
-    """Build + run the hardened kb-serve image standalone, then tear down.
+def kb_svc_boundary(tmp_path: Path):
+    """Build + run the hardened kb-svc image standalone, then tear down.
 
     Isolated from the live stack: distinct image tag, container name, and
-    host port. Never touches the real kb-serve quadlet/systemd unit.
+    host port. Never touches the real kb-svc quadlet/systemd unit.
     """
     _require_podman()
     _run(
@@ -129,7 +129,7 @@ def kb_serve_boundary(tmp_path: Path):
             "podman", "run", "--rm", "-d", "--name", KB_TEST_CONTAINER,
             "-p", f"{KB_TEST_PORT}:9100",
             "--user", f"{os.getuid()}:{os.getgid()}", "--userns=keep-id",
-            "-e", f"KB_HOME={kb_home}", "-e", "KB_SERVE_HOST=0.0.0.0",
+            "-e", f"KB_HOME={kb_home}", "-e", "KB_SVC_HOST=0.0.0.0",
             "--read-only", "--tmpfs", "/tmp", "--cap-drop=ALL",
             "--security-opt", "no-new-privileges",
             "--security-opt", "label=disable",
@@ -145,11 +145,11 @@ def kb_serve_boundary(tmp_path: Path):
 
 
 @pytest.fixture()
-def artifact_serve_boundary(tmp_path: Path):
+def artifact_svc_boundary(tmp_path: Path):
     """Build + run the hardened artifact-review image standalone, then tear down.
 
     Isolated from the live stack: distinct image tag, container name, and
-    host port. Never touches the real artifact-serve quadlet/systemd unit.
+    host port. Never touches the real artifact-svc quadlet/systemd unit.
     Builds the `runtime` target only -- the `test` stage on top of it runs
     the backend suite, which belongs to the app's own build, not here.
     """
@@ -157,7 +157,7 @@ def artifact_serve_boundary(tmp_path: Path):
     app_dir = REPO_ROOT / "apps/artifact-review"
     _run(
         [
-            "podman", "build", "-t", ARTIFACT_SERVE_TEST_IMAGE,
+            "podman", "build", "-t", ARTIFACT_SVC_TEST_IMAGE,
             "--target", "runtime",
             "-f", str(app_dir / "Containerfile"),
             str(app_dir),
@@ -171,24 +171,24 @@ def artifact_serve_boundary(tmp_path: Path):
     feedback_root = tmp_path / "feedback"
     feedback_root.mkdir()
     subprocess.run(
-        ["podman", "rm", "-f", ARTIFACT_SERVE_TEST_CONTAINER], capture_output=True,
+        ["podman", "rm", "-f", ARTIFACT_SVC_TEST_CONTAINER], capture_output=True,
     )
     _run(
         [
-            "podman", "run", "--rm", "-d", "--name", ARTIFACT_SERVE_TEST_CONTAINER,
-            "-p", f"{ARTIFACT_SERVE_TEST_PORT}:9099",
+            "podman", "run", "--rm", "-d", "--name", ARTIFACT_SVC_TEST_CONTAINER,
+            "-p", f"{ARTIFACT_SVC_TEST_PORT}:9099",
             "--user", f"{os.getuid()}:{os.getgid()}", "--userns=keep-id",
             "-e", f"HOME={fake_home}",
-            "-e", "ARTIFACT_SERVE_HOST=0.0.0.0", "-e", "ARTIFACT_SERVE_PORT=9099",
-            "-e", "ARTIFACT_SERVE_ALLOWED_HOSTS=127.0.0.1,localhost",
-            "-e", "ARTIFACT_SERVE_STAGE_ROOT=/tmp/artifacts",
-            "-e", f"ARTIFACT_SERVE_FEEDBACK_ROOT={feedback_root}",
+            "-e", "ARTIFACT_SVC_HOST=0.0.0.0", "-e", "ARTIFACT_SVC_PORT=9099",
+            "-e", "ARTIFACT_SVC_ALLOWED_HOSTS=127.0.0.1,localhost",
+            "-e", "ARTIFACT_SVC_STAGE_ROOT=/tmp/artifacts",
+            "-e", f"ARTIFACT_SVC_FEEDBACK_ROOT={feedback_root}",
             "--read-only", "--tmpfs", "/tmp", "--cap-drop=ALL",
             "--security-opt", "no-new-privileges",
             "--security-opt", "label=disable",
             "-v", f"{artifacts_root}:/tmp/artifacts:rw",
             "-v", f"{feedback_root}:{feedback_root}:rw",
-            ARTIFACT_SERVE_TEST_IMAGE,
+            ARTIFACT_SVC_TEST_IMAGE,
         ],
         timeout=RUN_TIMEOUT_SEC,
     )
@@ -196,7 +196,7 @@ def artifact_serve_boundary(tmp_path: Path):
         yield
     finally:
         subprocess.run(
-            ["podman", "rm", "-f", ARTIFACT_SERVE_TEST_CONTAINER], capture_output=True,
+            ["podman", "rm", "-f", ARTIFACT_SVC_TEST_CONTAINER], capture_output=True,
         )
 
 
@@ -214,18 +214,18 @@ def _path_visible_in_container(container: str, path: Path) -> str:
     return result.stdout.strip()
 
 
-def test_kb_serve_container_boundary(kb_serve_boundary: None) -> None:
+def test_kb_svc_container_boundary(kb_svc_boundary: None) -> None:
     status = _wait_for_status(f"http://127.0.0.1:{KB_TEST_PORT}/health")
     assert status == 200
 
 
-def test_artifact_serve_container_boundary(artifact_serve_boundary: None) -> None:
+def test_artifact_svc_container_boundary(artifact_svc_boundary: None) -> None:
     status = _wait_for_status(
-        f"http://127.0.0.1:{ARTIFACT_SERVE_TEST_PORT}/_/health"
+        f"http://127.0.0.1:{ARTIFACT_SVC_TEST_PORT}/_/health"
     )
     assert status == 200
     # The repo itself is never mounted, so the container must not see it.
     assert _path_visible_in_container(
-        ARTIFACT_SERVE_TEST_CONTAINER, REPO_ROOT,
+        ARTIFACT_SVC_TEST_CONTAINER, REPO_ROOT,
     ) == "False"
 

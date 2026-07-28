@@ -1,6 +1,6 @@
 ---
 name: agent-workbench
-description: Locally deployable agent workbench (knowledgebase vault + bd board hub + bdui web front end + hardened kb-serve/artifact-review containers) driven by ONE pure-Python CLI. Use to run knowledgebase clip/put/query, manage bd boards under the central hub, launch the board web UI, scaffold a repo's agent workspace, or record/audit an architectural or scope decision the moment it's settled ("record decision", "we decided", "log this decision").
+description: Locally deployable agent workbench (knowledgebase vault + bd board hub + bdui web front end + hardened kb-svc/artifact-review containers) driven by ONE pure-Python CLI. Use to run knowledgebase clip/put/query, manage bd boards under the central hub, launch the board web UI, scaffold a repo's agent workspace, or record/audit an architectural or scope decision the moment it's settled ("record decision", "we decided", "log this decision").
 ---
 
 # agent-workbench
@@ -31,7 +31,7 @@ $AW <subcommand> [ARGS]
   `ui-up` vs the always-on hub-aggregator `bdui` service).
 - `artifact` -- see `modes/artifact.md` for the artifact review app
   (publish/feedback/serve/status), which now also carries everything the
-  retired standalone `artifact-serve` skill used to document.
+  retired standalone `artifact-svc` skill used to document.
 
 ### install / init-workspace
 
@@ -65,7 +65,7 @@ the stack up. There is no `deploy` subcommand and no systemd quadlet
 layer: the CLI never starts, stops, or builds a container.
 
 ```bash
-podman-compose -f docker-compose.yml up -d               # kb-serve + bd-serve + artifact-serve + bdui
+podman-compose -f docker-compose.yml up -d               # kb-svc + bd-svc + artifact-svc + bdui
 podman-compose --profile n8n -f docker-compose.yml up -d # adds n8n
 docker compose -f docker-compose.yml up -d               # same file, docker host
 ```
@@ -89,9 +89,9 @@ containers are running (compose binds the paths at container start); only
 `BEADS_HUB_DIR` is read directly by the Python code. See the env.example
 comments.
 
-**artifact-serve's network artifact-publish endpoint is NOT shipped.** It
+**artifact-svc's network artifact-publish endpoint is NOT shipped.** It
 is held back pending an XSS lockdown (tracked as `agent-workbench-wxh`).
-artifact-serve is local/loopback-only (127.0.0.1-bound) -- do not assume
+artifact-svc is local/loopback-only (127.0.0.1-bound) -- do not assume
 or rely on a network publish path. See `modes/artifact.md` for the full
 detail on this holdback.
 

@@ -1,6 +1,6 @@
 """Tests for scripts/n8n-container/n8n-secret.py -- the standalone n8n
 secret resolver (encryption key + Public API key), symmetric to
-kb-serve.py's load_kb_env / resolve_api_key / cmd_resolve_secret trio.
+kb-svc.py's load_kb_env / resolve_api_key / cmd_resolve_secret trio.
 
 Everything runs offline: subprocess.run is monkeypatched wherever a vault
 CLI command would otherwise be shelled out to, and every config lives

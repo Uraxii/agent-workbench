@@ -41,13 +41,13 @@ HEADING_RE = re.compile(r"^(#{2,3})[ \t]+(.+?)\s*$", re.MULTILINE)
 PARENT_FIELD = "parent"
 
 # Every vault note ends with a "## Refs" footer (the LOCKED schema, see
-# kb-clip.py's render_note and kb-serve.py's own render_note). That's
+# kb-clip.py's render_note and kb-svc.py's own render_note). That's
 # structural boilerplate, not content, so it never becomes its own child.
 REFS_HEADING = "refs"
 
 
 def _load_sibling(name: str) -> types.ModuleType:
-    """Import a hyphenated sibling script by path (see kb-serve.py's
+    """Import a hyphenated sibling script by path (see kb-svc.py's
     identical helper -- duplicated here rather than shared, since each
     script must stay independently runnable as its own CLI)."""
     path = SCRIPT_DIR / f"{name}.py"
@@ -56,7 +56,7 @@ def _load_sibling(name: str) -> types.ModuleType:
     if spec is None or spec.loader is None:
         raise ImportError(f"cannot load sibling module {path}")
     module = importlib.util.module_from_spec(spec)
-    # See kb-serve.py's identical helper: dataclasses needs the module
+    # See kb-svc.py's identical helper: dataclasses needs the module
     # registered in sys.modules before exec_module runs its decorators.
     sys.modules[module_name] = module
     spec.loader.exec_module(module)

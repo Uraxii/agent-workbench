@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""kb-serve.py -- the knowledgebase service.
+"""kb-svc.py -- the knowledgebase service.
 
 Endpoints only, no UI: Obsidian already opens the vault. This process is
 the ONLY thing that opens ``$KB_HOME``; the agent-workbench CLI is an
@@ -33,10 +33,10 @@ Endpoints (all JSON):
     POST /enrich {project?,note?}    fill question/summary via the LLM
 
 CLI:
-    kb-serve.py run [--host H] [--port P] [--kb-home DIR]
-    kb-serve.py resolve-secret [--kb-home DIR]
+    kb-svc.py run [--host H] [--port P] [--kb-home DIR]
+    kb-svc.py resolve-secret [--kb-home DIR]
         prints "KB_LLM_API_KEY=<value>" for an EnvironmentFile to consume;
-        never logs the value. Exists only for the kb-serve quadlet's
+        never logs the value. Exists only for the kb-svc quadlet's
         ExecStartPre and retires with it.
 
 Config (env, optionally from the gitignored ``<kb_home>/kb.env``) is
@@ -108,7 +108,7 @@ __all__ = [
     "search",
 ]
 
-log = logging.getLogger("kb-serve")
+log = logging.getLogger("kb-svc")
 
 INDEX_DIR = "index"
 INDEX_DB_NAME = "kb.db"
@@ -420,7 +420,7 @@ class KbRequestHandler(BaseHTTPRequestHandler):
         Host headers let the value this check reads differ from the value
         anything in front of it reads.
 
-        Kept deliberately identical in effect to bd-serve's own guard --
+        Kept deliberately identical in effect to bd-svc's own guard --
         the baseline is workbench-wide, so the two services must not
         diverge on which requests they refuse.
         """
@@ -617,7 +617,7 @@ def serve_forever(config: KbServeConfig, host: str, port: int) -> None:
     """Bind and serve until interrupted."""
     server = KbHTTPServer((host, port), KbRequestHandler, config)
     log.info(
-        "kb-serve listening on %s:%s (kb_home=%s)", host, port, config.kb_home,
+        "kb-svc listening on %s:%s (kb_home=%s)", host, port, config.kb_home,
     )
     try:
         server.serve_forever()
@@ -671,12 +671,12 @@ def build_parser() -> argparse.ArgumentParser:
     secret_cmd.add_argument("--kb-home", default=None)
     run_cmd = sub.add_parser("run", help="serve the knowledgebase service")
     run_cmd.add_argument(
-        "--host", default=os.environ.get("KB_SERVE_HOST", "127.0.0.1"),
+        "--host", default=os.environ.get("KB_SVC_HOST", "127.0.0.1"),
     )
     run_cmd.add_argument(
         "--port",
         type=int,
-        default=int(os.environ.get("KB_SERVE_PORT", DEFAULT_PORT)),
+        default=int(os.environ.get("KB_SVC_PORT", DEFAULT_PORT)),
     )
     run_cmd.add_argument("--kb-home", default=None)
     return parser

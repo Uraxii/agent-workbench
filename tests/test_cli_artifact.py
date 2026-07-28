@@ -120,7 +120,7 @@ def artifact_server() -> Iterator[tuple[str, type[RecordingArtifactHandler]]]:
 
 def run_cli(*args: str, base_url: str) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
-    env["ARTIFACT_SERVE_URL"] = base_url
+    env["ARTIFACT_SVC_URL"] = base_url
     return subprocess.run(
         [sys.executable, str(EXECUTABLE), "artifact", *args],
         capture_output=True, text=True, check=False, env=env,
@@ -169,7 +169,7 @@ def run_publish(
     if base_url != "mock://artifact":
         return run_cli(*args, base_url=base_url)
     module = load_artifact_module()
-    monkeypatch.setenv("ARTIFACT_SERVE_URL", base_url)
+    monkeypatch.setenv("ARTIFACT_SVC_URL", base_url)
     monkeypatch.setattr(module, "urlopen", fake_urlopen(handler))
     monkeypatch.setattr(module, "_csrf_opener", lambda base, post: (FakeCsrfOpener(handler), "mock-csrf-token"))
     namespace = argparse.Namespace(project=args[2], src=args[4], as_name=None, artifact_id=None)
@@ -351,7 +351,7 @@ def test_status_flattens_artifact_list(monkeypatch: pytest.MonkeyPatch, capsys: 
             return {"artifacts": [{"artifact_id": "proj/item"}]}
         raise AssertionError(url)
 
-    monkeypatch.setenv("ARTIFACT_SERVE_URL", "http://artifact.test")
+    monkeypatch.setenv("ARTIFACT_SVC_URL", "http://artifact.test")
     monkeypatch.setattr(module, "_json_request", fake_json_request)
 
     result = module.cmd_status(argparse.Namespace())

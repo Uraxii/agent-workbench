@@ -2,7 +2,7 @@
 
 Builds one parent parser, lets each subcommand module register its own
 subparser (setting ``func``), then routes ``args.func(args)``. Mirrors the
-build_parser/dispatch shape scripts/kb-serve.py already uses, so the two
+build_parser/dispatch shape scripts/kb-svc.py already uses, so the two
 stay stylistically consistent.
 """
 from __future__ import annotations

@@ -111,8 +111,8 @@ def test_unreachable_service_error_names_endpoint(
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
 
-    monkeypatch.setenv("BD_SERVE_HOST", "127.0.0.1")
-    monkeypatch.setenv("BD_SERVE_PORT", str(port))
+    monkeypatch.setenv("BD_SVC_HOST", "127.0.0.1")
+    monkeypatch.setenv("BD_SVC_PORT", str(port))
     with pytest.raises(RuntimeError) as excinfo:
         bd.cmd_list(argparse.Namespace(board="hub", status=None, assignee=None, label=[],
                                        limit=None, all=False))

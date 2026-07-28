@@ -1,6 +1,6 @@
 """Regression check for the H2 container env-surface change: neither
-Containerfile's ENTRYPOINT bakes a --port flag (only KB_SERVE_PORT /
-ARTIFACT_SERVE_PORT env vars, set by the quadlet, may steer the bound port).
+Containerfile's ENTRYPOINT bakes a --port flag (only KB_SVC_PORT /
+ARTIFACT_SVC_PORT env vars, set by the quadlet, may steer the bound port).
 A baked --port would override the env var and silently defeat H2.
 """
 from __future__ import annotations

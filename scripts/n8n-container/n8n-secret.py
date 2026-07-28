@@ -6,7 +6,7 @@ sqlite DB. It is REQUIRED and must PERSIST across restarts -- losing or
 changing it orphans every credential already stored. ``N8N_API_KEY`` is
 OPTIONAL: it authenticates agent calls to n8n's Public REST API and has no
 effect on n8n's own startup. This script is the standalone equivalent of
-kb-serve.py's load_kb_env / resolve_api_key / cmd_resolve_secret trio,
+kb-svc.py's load_kb_env / resolve_api_key / cmd_resolve_secret trio,
 mirrored here because the official n8n image is not our source (there is
 no n8n app of ours to hang this off of).
 
@@ -63,7 +63,7 @@ def load_n8n_env(data_dir: Path) -> dict[str, str]:
     Missing file, blank lines, and '#' comments are silently skipped;
     never raises. Not a shell parser -- values may be optionally wrapped
     in matching quotes, nothing fancier (matches n8n.env.example's shape,
-    identical to kb-serve.py's load_kb_env).
+    identical to kb-svc.py's load_kb_env).
 
     Postcondition: returns a dict of the KEY=VALUE pairs found (possibly
     empty); never raises for a missing or malformed file.

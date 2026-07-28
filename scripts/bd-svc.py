@@ -28,7 +28,7 @@ __all__ = [
     "serve_forever",
 ]
 
-log = logging.getLogger("bd-serve")
+log = logging.getLogger("bd-svc")
 
 BD_BIN = "bd"
 DEFAULT_HOST = "127.0.0.1"
@@ -571,7 +571,7 @@ class BdRequestHandler(BaseHTTPRequestHandler):
 
 def serve_forever(host: str, port: int) -> None:
     server = ThreadingHTTPServer((host, port), BdRequestHandler)
-    log.info("bd-serve listening on %s:%s (hub_root=%s)", host, port, hub_root())
+    log.info("bd-svc listening on %s:%s (hub_root=%s)", host, port, hub_root())
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -589,9 +589,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     run_cmd = sub.add_parser("run", help="serve the HTTP facade in the foreground")
-    run_cmd.add_argument("--host", default=os.environ.get("BD_SERVE_HOST", DEFAULT_HOST))
+    run_cmd.add_argument("--host", default=os.environ.get("BD_SVC_HOST", DEFAULT_HOST))
     run_cmd.add_argument(
-        "--port", type=int, default=int(os.environ.get("BD_SERVE_PORT", DEFAULT_PORT)),
+        "--port", type=int, default=int(os.environ.get("BD_SVC_PORT", DEFAULT_PORT)),
     )
     run_cmd.set_defaults(func=cmd_run)
     return parser

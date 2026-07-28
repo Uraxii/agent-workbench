@@ -58,7 +58,7 @@ def test_bracket_leading_non_tags_value_stays_a_plain_string() -> None:
 
 
 def test_quoted_tags_still_parse_as_before() -> None:
-    """Regression guard for kb-serve's existing notes: render_note's
+    """Regression guard for kb-svc's existing notes: render_note's
     quoted tag-list schema (`tags: ["alpha", "beta"]`) must keep parsing
     the same way after gating on the key instead of the leading bracket."""
     text = (

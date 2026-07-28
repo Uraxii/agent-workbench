@@ -37,7 +37,7 @@ __all__ = [
     "search_ranking",
 ]
 
-log = logging.getLogger("kb-serve")
+log = logging.getLogger("kb-svc")
 
 VECTOR_TABLE = "kb_vector"
 EMBED_TIMEOUT_SEC = 30.0

@@ -74,8 +74,8 @@ def enable_sqlite_foreign_keys(sender: object, connection: object, **kwargs: obj
 
 def ensure_feedback_schema(using: str = "default") -> None:
     """Create the v2 feedback schema from scratch if needed."""
-    settings.ARTIFACT_SERVE_FEEDBACK_ROOT.mkdir(parents=True, exist_ok=True)
-    (settings.ARTIFACT_SERVE_FEEDBACK_ROOT / "uploads").mkdir(parents=True, exist_ok=True)
+    settings.ARTIFACT_SVC_FEEDBACK_ROOT.mkdir(parents=True, exist_ok=True)
+    (settings.ARTIFACT_SVC_FEEDBACK_ROOT / "uploads").mkdir(parents=True, exist_ok=True)
 
     django_connection = connections[using]
     django_connection.ensure_connection()

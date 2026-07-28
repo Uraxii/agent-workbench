@@ -30,7 +30,7 @@ __all__ = [
     "request_enrichment",
 ]
 
-log = logging.getLogger("kb-serve")
+log = logging.getLogger("kb-svc")
 
 LLM_TIMEOUT_SEC = 30.0
 # Atomizing needs the whole document to find its section boundaries, hence

@@ -29,10 +29,10 @@ def roots(tmp_path: Path) -> Iterator[tuple[Path, Path, Path]]:
     feedback_root.mkdir()
     spa_root.mkdir()
     with override_settings(
-        ARTIFACT_SERVE_STAGE_ROOT=stage_root,
-        ARTIFACT_SERVE_FEEDBACK_ROOT=feedback_root,
-        ARTIFACT_SERVE_SPA_ROOT=spa_root,
-        ARTIFACT_SERVE_PUBLISH_ENABLED="1",
+        ARTIFACT_SVC_STAGE_ROOT=stage_root,
+        ARTIFACT_SVC_FEEDBACK_ROOT=feedback_root,
+        ARTIFACT_SVC_SPA_ROOT=spa_root,
+        ARTIFACT_SVC_PUBLISH_ENABLED="1",
         DATABASES={
             "default": {
                 "ENGINE": "django.db.backends.sqlite3",

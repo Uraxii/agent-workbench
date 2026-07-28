@@ -19,8 +19,8 @@ Subcommands:
     status                     vault root + projects       GET  /status
     decision record|audit      dated decision notes        [cli/kb_decision.py]
 
-The service address comes from ``KB_SERVE_HOST`` (default 127.0.0.1) and
-``KB_SERVE_PORT`` (default 9100).
+The service address comes from ``KB_SVC_HOST`` (default 127.0.0.1) and
+``KB_SVC_PORT`` (default 9100).
 """
 from __future__ import annotations
 
@@ -108,9 +108,9 @@ def register(subparsers: argparse._SubParsersAction) -> None:
 
 
 def service_base_url() -> str:
-    """Return ``http://<KB_SERVE_HOST>:<KB_SERVE_PORT>``."""
-    host = os.environ.get("KB_SERVE_HOST", DEFAULT_HOST)
-    port = os.environ.get("KB_SERVE_PORT", str(DEFAULT_PORT))
+    """Return ``http://<KB_SVC_HOST>:<KB_SVC_PORT>``."""
+    host = os.environ.get("KB_SVC_HOST", DEFAULT_HOST)
+    port = os.environ.get("KB_SVC_PORT", str(DEFAULT_PORT))
     return f"http://{host}:{port}"
 
 
@@ -142,7 +142,7 @@ def _request(
     except (urllib.error.URLError, OSError) as exc:
         raise RuntimeError(
             f"kb service unreachable: {method} {url} failed ({exc}). "
-            "Start it with `docker compose up -d kb-serve`."
+            "Start it with `docker compose up -d kb-svc`."
         ) from exc
 
 

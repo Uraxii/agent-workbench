@@ -6,8 +6,8 @@ dispatcher; the kb HTTP client's own tests live in
 tests/test_cli_kb.py). Every test keeps KB_HOME / BEADS_HUB_DIR /
 XDG_RUNTIME_DIR / HOME pinned under tmp_path (or mocks the subprocess /
 urllib calls a real host would otherwise receive), so nothing here ever
-touches the real ~/.knowledgebase, ~/.beads-hub, or a live kb-serve /
-artifact-serve / bdui process. Mirrors tests/test_kb_serve.py's style:
+touches the real ~/.knowledgebase, ~/.beads-hub, or a live kb-svc /
+artifact-svc / bdui process. Mirrors tests/test_kb_serve.py's style:
 tmp_path per vault, mocked urllib for anything that would hit the
 network, real subprocess only where it is provably read-only.
 

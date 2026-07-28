@@ -3,8 +3,8 @@
 Standalone home for the local agent-workbench service stack. This repo owns the code and deploy files for:
 
 - `bdui`
-- `kb-serve`
-- `bd-serve`
+- `kb-svc`
+- `bd-svc`
 - `artifact-review`
 - `n8n`
 - the supporting `agent-workbench` CLI that drives them
@@ -62,8 +62,8 @@ object for scripts and agents.
 podman-compose up -d    # or: docker compose up -d
 ```
 
-That starts `kb-serve` (127.0.0.1:9100), `bd-serve` (127.0.0.1:9101),
-`artifact-serve` (127.0.0.1:9099) and `bdui` (127.0.0.1:3100). `n8n` is
+That starts `kb-svc` (127.0.0.1:9100), `bd-svc` (127.0.0.1:9101),
+`artifact-svc` (127.0.0.1:9099) and `bdui` (127.0.0.1:3100). `n8n` is
 opt-in: add `--profile n8n` and create `~/.local/share/n8n/n8n.env` with an
 `N8N_ENCRYPTION_KEY` first.
 
@@ -123,12 +123,12 @@ Live runtime data stays where it already lives. This split does **not** move or 
 ## Repo layout
 
 - `docker-compose.yml` the deploy for the stack
-- `scripts/kb-container/` kb-serve container files
-- `scripts/bd-container/` bd-serve container files
+- `scripts/kb-container/` kb-svc container files
+- `scripts/bd-container/` bd-svc container files
 - `scripts/bdui-container/` beads-ui container files
 - `scripts/n8n-container/` n8n helpers
-- `scripts/kb-serve.py` and sibling helpers for the knowledgebase service
-- `scripts/bd-serve.py` the board service
+- `scripts/kb-svc.py` and sibling helpers for the knowledgebase service
+- `scripts/bd-svc.py` the board service
 - `.claude/skills/agent-workbench/` CLI used for board, hub, kb, and workspace flows
 - `apps/artifact-review/` Django + React artifact review service
 

@@ -1,13 +1,13 @@
-# bd-serve
+# bd-svc
 
-`bd-serve` is the local HTTP service that owns the bd board hub under
+`bd-svc` is the local HTTP service that owns the bd board hub under
 `$BEADS_HUB_DIR` or `$HOME/.beads-hub`. The host CLI talks to this service;
 the service is the only component that runs the `bd` binary.
 
 ## Build
 
 ```bash
-podman build -f scripts/bd-container/Containerfile -t localhost/bd-serve:latest scripts
+podman build -f scripts/bd-container/Containerfile -t localhost/bd-svc:latest scripts
 ```
 
 ## Run
@@ -15,18 +15,18 @@ podman build -f scripts/bd-container/Containerfile -t localhost/bd-serve:latest 
 ```bash
 podman run --rm \
   -p 127.0.0.1:9101:9101 \
-  -e BD_SERVE_HOST=0.0.0.0 \
-  -e BD_SERVE_PORT=9101 \
+  -e BD_SVC_HOST=0.0.0.0 \
+  -e BD_SVC_PORT=9101 \
   -e HOME=/tmp \
   -e BEADS_HUB_DIR="$HOME/.beads-hub" \
   -v "$HOME/.beads-hub:$HOME/.beads-hub:rw" \
-  localhost/bd-serve:latest
+  localhost/bd-svc:latest
 ```
 
 ## Environment
 
-- `BD_SERVE_HOST`: bind host, default `127.0.0.1`
-- `BD_SERVE_PORT`: bind port, default `9101`
+- `BD_SVC_HOST`: bind host, default `127.0.0.1`
+- `BD_SVC_PORT`: bind port, default `9101`
 - `BEADS_HUB_DIR`: board hub root, default `$HOME/.beads-hub`. Set it to the
   HOST path and bind-mount that same path, so absolute board paths stored in
   the aggregator resolve identically inside and outside the container.

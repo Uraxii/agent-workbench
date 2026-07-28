@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import IO
 
 # lxml and readability are imported inside the three functions that parse
-# HTML, not here. They ship in the kb-serve image, but scripts/kb-serve.py
+# HTML, not here. They ship in the kb-svc image, but scripts/kb-svc.py
 # also loads this module just to reach slugify()/build_note_path(), which are
 # pure stdlib -- an eager import made those two helpers unreachable anywhere
 # the parsing libraries are absent. Annotations below name lxml types and
@@ -134,7 +134,7 @@ class _DestinationCheckingRedirectHandler(urllib.request.HTTPRedirectHandler):
 
 def fetch_html(url: str) -> str:
     """Plain GET via stdlib urllib. Static pages only. Sole choke point
-    for both /clip and /atomize (kb-serve.py routes both through
+    for both /clip and /atomize (kb-svc.py routes both through
     kb_clip.clip -> fetch_html), so the SSRF guard here covers both.
 
     # ponytail: DNS-rebinding TOCTOU remains -- the guard resolves and

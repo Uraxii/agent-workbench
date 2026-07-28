@@ -1,4 +1,4 @@
-"""Tests for scripts/kb-serve.py -- the stdlib-only HTTP facade over the
+"""Tests for scripts/kb-svc.py -- the stdlib-only HTTP facade over the
 personal knowledgebase vault.
 
 Covers the four HTTP endpoints (via a real ephemeral-port server, so the
@@ -28,14 +28,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-_SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "kb-serve.py"
+_SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "kb-svc.py"
 
 # The clip and atomize-from-url paths are the only ones that parse HTML, so
-# they are the only ones needing lxml. It ships in the kb-serve image, not on
+# they are the only ones needing lxml. It ships in the kb-svc image, not on
 # the host, so a fresh clone skips these four rather than failing them.
 needs_lxml = pytest.mark.skipif(
     importlib.util.find_spec("lxml") is None,
-    reason="lxml ships in the kb-serve image, not on the host",
+    reason="lxml ships in the kb-svc image, not on the host",
 )
 
 
@@ -55,7 +55,7 @@ def _load_kb_serve():
 
 
 kb_serve = _load_kb_serve()
-# The model-backed passes live in scripts/kb_llm.py; kb-serve.py only
+# The model-backed passes live in scripts/kb_llm.py; kb-svc.py only
 # re-exports them, so a patch must target the defining module.
 kb_llm = sys.modules["kb_llm"]
 KbServeConfig = kb_serve.KbServeConfig
@@ -73,7 +73,7 @@ def _config(kb_home: Path, *, enrich_enabled: bool = False, llm_api_key: str | N
 
 @pytest.fixture
 def live_server(tmp_path: Path) -> Iterator[tuple[str, KbServeConfig]]:
-    """A real kb-serve HTTP server on an ephemeral 127.0.0.1 port, backed
+    """A real kb-svc HTTP server on an ephemeral 127.0.0.1 port, backed
     by an empty vault under tmp_path."""
     config = _config(tmp_path)
     server = kb_serve.KbHTTPServer(("127.0.0.1", 0), kb_serve.KbRequestHandler, config)
@@ -295,7 +295,7 @@ def test_a_case_folded_json_content_type_is_accepted(
 def test_kb_and_bd_enforce_the_same_security_baseline() -> None:
     """The baseline is workbench-wide. If one service gains a guard the
     other does not, this is what says so before it ships."""
-    bd_serve = _load_module("bd_serve_under_test", "bd-serve.py")
+    bd_serve = _load_module("bd_serve_under_test", "bd-svc.py")
     assert kb_serve.SECURITY_HEADERS == bd_serve.SECURITY_HEADERS
     assert kb_serve.ALLOWED_HOST_NAMES == bd_serve.LOOPBACK_HOSTS
     assert "end_headers" in vars(kb_serve.KbRequestHandler)
@@ -358,7 +358,7 @@ def test_clip_rejects_a_project_dir_symlinked_out_of_the_vault(tmp_path: Path) -
 def test_assert_inside_vault_rejects_a_join_that_escapes_the_root(
     tmp_path: Path,
 ) -> None:
-    """kb_vault owns path containment now; kb-serve carries no join of
+    """kb_vault owns path containment now; kb-svc carries no join of
     its own, so this is the one place the rule is checked."""
     with pytest.raises(ValueError, match="resolves outside the vault"):
         kb_serve.kb_vault.assert_inside_vault(
@@ -586,7 +586,7 @@ def test_resolve_api_key_never_logs_secret_on_command_failure(
     # invocation string, never leaks.
     cmd = f"cat {secret_file}; exit 1"
 
-    with caplog.at_level(logging.WARNING, logger="kb-serve"):
+    with caplog.at_level(logging.WARNING, logger="kb-svc"):
         result = kb_serve.resolve_api_key({"KB_LLM_API_KEY_CMD": cmd})
 
     assert result is None

@@ -56,7 +56,7 @@ def static_artifact(
 def spa_asset(request: HttpRequest, rel: str) -> HttpResponse:
     """Return a React SPA asset."""
     try:
-        target_path = artifact_paths.safe_join(settings.ARTIFACT_SERVE_SPA_ROOT, rel)
+        target_path = artifact_paths.safe_join(settings.ARTIFACT_SVC_SPA_ROOT, rel)
     except ValueError:
         return apply_app_headers(JsonResponse({"error": "not found"}, status=404))
     if not target_path.is_file():
@@ -81,7 +81,7 @@ def spa_index(request: HttpRequest, rel: str) -> HttpResponse:
 
 
 def _spa_shell_response() -> HttpResponse:
-    index_path = artifact_paths.safe_join(settings.ARTIFACT_SERVE_SPA_ROOT, "index.html")
+    index_path = artifact_paths.safe_join(settings.ARTIFACT_SVC_SPA_ROOT, "index.html")
     if not index_path.is_file():
         return apply_app_headers(JsonResponse({"error": "spa bundle missing", "path": str(index_path)}, status=500))
     return _file_response(index_path, artifact=False)

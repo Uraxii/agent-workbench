@@ -341,7 +341,7 @@ Every `text/html` static artifact response is rewritten to include `PAGE_COMMENT
 - Shows uploads as links to `/_/api/uploads/<id>`.
 - Toggles resolved state with `POST /_/api/threads/<id>/resolve`.
 
-## 5. artifact-serve skill contract
+## 5. artifact-svc skill contract
 
 ### 5.1 Publish contract used by agents
 

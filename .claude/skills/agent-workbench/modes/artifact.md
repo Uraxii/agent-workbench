@@ -15,8 +15,8 @@ $HOME/.claude/skills/agent-workbench/agent-workbench deploy status
 
 The artifact client talks to:
 
-- `ARTIFACT_SERVE_URL`, when set.
-- Otherwise `http://$ARTIFACT_SERVE_HOST:$ARTIFACT_SERVE_PORT`.
+- `ARTIFACT_SVC_URL`, when set.
+- Otherwise `http://$ARTIFACT_SVC_HOST:$ARTIFACT_SVC_PORT`.
 - Defaults: `127.0.0.1` and `9099`.
 
 If the service is down or returns bad data, the command exits non-zero and

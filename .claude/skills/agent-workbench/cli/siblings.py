@@ -5,7 +5,7 @@ statement cannot address, so this loads them by path
 (importlib.util.spec_from_file_location, registered in sys.modules BEFORE
 exec so dataclass annotation resolution works).
 
-Note what is NOT here: the `kb` subcommand does not load kb-serve.py, and
+Note what is NOT here: the `kb` subcommand does not load kb-svc.py, and
 the `artifact` subcommand does not load an artifact server. Each service
 owns its own data and the CLI reaches it over HTTP, so an in-process
 loader would be a second way into the same files.

@@ -1,6 +1,6 @@
-# kb-serve container
+# kb-svc container
 
-Container packaging of `kb-serve.py`, the knowledgebase service. The
+Container packaging of `kb-svc.py`, the knowledgebase service. The
 service is the only thing that opens `$KB_HOME`; the agent-workbench CLI
 reaches it over HTTP.
 
@@ -12,7 +12,7 @@ work on any host with a container runtime.
 
 - `Containerfile` — builds the image (`python:3.13-slim` + `pip install
   lxml readability-lxml`, the two pre-existing deps `kb-clip.py` needs;
-  everything kb-serve.py adds itself is stdlib-only).
+  everything kb-svc.py adds itself is stdlib-only).
 - `kb.env.example` — placeholder config/secret file. Copy it to
   `~/.knowledgebase/kb.env` and edit (see Config below). The real
   `kb.env` is gitignored and never committed.
@@ -21,7 +21,7 @@ work on any host with a container runtime.
 
 ```bash
 cd ~/Projects/agent-workbench/scripts
-podman build -t localhost/kb-serve:latest -f kb-container/Containerfile .
+podman build -t localhost/kb-svc:latest -f kb-container/Containerfile .
 ```
 
 ## Config: `~/.knowledgebase/kb.env`
@@ -47,7 +47,7 @@ Keys (all optional, see `kb.env.example` for full comments):
 1. **Static** — `KB_LLM_API_KEY=<raw>` directly in `kb.env`. Simplest, but
    the raw key sits in a plaintext file (gitignored, `chmod 600`, but
    still on disk).
-2. **Vault command** (preferred) — `KB_LLM_API_KEY_CMD="<command>"`. kb-serve
+2. **Vault command** (preferred) — `KB_LLM_API_KEY_CMD="<command>"`. kb-svc
    runs this exact shell command and uses its stdout as the key. Works
    with any vault CLI, provider-agnostic: `pass show ...`, `op read
    op://...`, `gopass show ...`, or Proton Pass's `pass-cli` (see
@@ -62,14 +62,14 @@ Keys (all optional, see `kb.env.example` for full comments):
 file.** Resolution happens at start time:
 
 - **Container**: compose passes `~/.knowledgebase/kb.env` straight through
-  as an `env_file`, and `kb-serve.py`'s own `resolve_api_key()` runs
+  as an `env_file`, and `kb-svc.py`'s own `resolve_api_key()` runs
   `KB_LLM_API_KEY_CMD` in-process at startup, inside the container. The
   resolved key is held in memory and never logged or written. If the vault
   CLI named by `_CMD` is not present in the image, resolution logs one
   warning and returns no key — a safe no-op, since `KB_ENRICH` defaults to
   `0`. Compose refuses to start when `kb.env` is missing, which is why the
   fresh-machine install copies `kb.env.example` into place first.
-- **Bare `kb-serve.py run`** (no container): the same resolution runs
+- **Bare `kb-svc.py run`** (no container): the same resolution runs
   in-process at startup (`build_config`); the key is held in memory only,
   never written anywhere.
 
@@ -81,7 +81,7 @@ put/clip/query/atomize path never depends on any of this.
 
 ```bash
 cd ~/Projects/agent-workbench
-podman-compose up -d kb-serve    # or: docker compose up -d kb-serve
+podman-compose up -d kb-svc    # or: docker compose up -d kb-svc
 ```
 
 `restart: unless-stopped` in `docker-compose.yml` is what survives a
@@ -89,9 +89,9 @@ reboot, so there is no unit to enable and no lingering to configure.
 
 ## Networking
 
-The container keeps its own network namespace. `kb-serve.py`'s own bind
+The container keeps its own network namespace. `kb-svc.py`'s own bind
 address defaults to `127.0.0.1` (correct for a bare host run), but compose
-overrides it to `0.0.0.0` via `KB_SERVE_HOST` so the container listens on
+overrides it to `0.0.0.0` via `KB_SVC_HOST` so the container listens on
 the interface the runtime's NAT path (pasta/slirp4netns) can actually
 reach. The `127.0.0.1:9100:9100` port mapping then restricts the HOST-side
 socket to loopback only. Net effect: the service is reachable at
@@ -114,11 +114,11 @@ tailscale serve --bg --https=443 http://127.0.0.1:9100
 |---|---|---|---|
 | vault | `~/.knowledgebase` | rw | notes, index, kb.env |
 
-One mount, deliberately: kb-serve never symlinks or reads arbitrary host
+One mount, deliberately: kb-svc never symlinks or reads arbitrary host
 paths outside `KB_HOME`, so only the vault itself needs to be visible.
 
 ## Foreground mode (`run` verb)
 
-`kb-serve.py run` blocks in the foreground (no fork, no pidfile), logging
-to stdout (`podman logs kb-serve`), so the container runtime is the
+`kb-svc.py run` blocks in the foreground (no fork, no pidfile), logging
+to stdout (`podman logs kb-svc`), so the container runtime is the
 process supervisor.

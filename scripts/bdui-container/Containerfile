@@ -25,7 +25,7 @@ RUN curl -fsSL -o /tmp/${BD_ARCHIVE} ${BD_BASE_URL}/${BD_ARCHIVE} \
 
 WORKDIR /app
 # package-lock.json exists -- npm ci for a reproducible, lockfile-exact
-# install (matches kb-serve's pip install pattern of trusting pinned deps).
+# install (matches kb-svc's pip install pattern of trusting pinned deps).
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
@@ -37,7 +37,7 @@ RUN npm ci --omit=dev
 EXPOSE 3000
 
 # No curl/wget guaranteed in node:22-slim; a plain node http GET mirrors
-# kb-serve/artifact-serve's python3-urllib healthcheck pattern.
+# kb-svc/artifact-svc's python3-urllib healthcheck pattern.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
   CMD ["node", "-e", "require('http').get({host:'127.0.0.1',port:process.env.PORT||3000,path:'/'},res=>process.exit(res.statusCode<400?0:1)).on('error',()=>process.exit(1))"]
 

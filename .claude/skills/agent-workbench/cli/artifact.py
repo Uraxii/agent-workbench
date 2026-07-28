@@ -57,11 +57,11 @@ def register(subparsers: argparse._SubParsersAction) -> None:
 
 
 def _base_url() -> str:
-    env_url = os.environ.get("ARTIFACT_SERVE_URL")
+    env_url = os.environ.get("ARTIFACT_SVC_URL")
     if env_url:
         return env_url.rstrip("/")
-    host = os.environ.get("ARTIFACT_SERVE_HOST", DEFAULT_HOST)
-    port = os.environ.get("ARTIFACT_SERVE_PORT", str(DEFAULT_PORT))
+    host = os.environ.get("ARTIFACT_SVC_HOST", DEFAULT_HOST)
+    port = os.environ.get("ARTIFACT_SVC_PORT", str(DEFAULT_PORT))
     return f"http://{host}:{port}"
 
 

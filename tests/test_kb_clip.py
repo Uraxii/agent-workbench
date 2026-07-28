@@ -3,7 +3,7 @@ destination guard in fetch_html.
 
 Verifies the H1 fix: file:// (and any non-http(s) scheme) is rejected
 before urlopen is ever called, closing the local-file-read reachable via
-the kb-serve /clip endpoint.
+the kb-svc /clip endpoint.
 
 Also verifies the SSRF fix (ticket agent-workbench-h5u): fetch_html
 resolves the hostname via DNS and rejects any URL whose resolved IP is

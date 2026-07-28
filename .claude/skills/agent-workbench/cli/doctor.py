@@ -177,7 +177,7 @@ def check_bd() -> Check:
 def check_kb_env() -> Check:
     """Required: ``~/.knowledgebase/kb.env`` exists.
 
-    docker-compose.yml declares it as kb-serve's ``env_file``, and compose
+    docker-compose.yml declares it as kb-svc's ``env_file``, and compose
     refuses to start the stack when a declared env_file is missing.
     """
     if KB_ENV_PATH.is_file():

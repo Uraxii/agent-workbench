@@ -21,7 +21,7 @@ class PublishPolicyError(Exception):
 
 def check(request: HttpRequest) -> None:
     """Validate publish request metadata before artifact bytes are written."""
-    if settings.ARTIFACT_SERVE_PUBLISH_ENABLED != "1":
+    if settings.ARTIFACT_SVC_PUBLISH_ENABLED != "1":
         raise PublishPolicyError(403, "publish_disabled")
     if request.method != "POST":
         raise PublishPolicyError(405, "method_not_allowed")

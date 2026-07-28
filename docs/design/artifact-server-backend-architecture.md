@@ -23,7 +23,7 @@ Non-goals for the first backend slice:
 
 Use plain Django views plus `JsonResponse`, `FileResponse`, `StreamingHttpResponse`, and form parsing. Do not use Django REST Framework for the parity rewrite.
 
-Plain Django fits this server because the route surface is small, explicit, and mostly compatibility glue around an existing SQLite file and staged filesystem. DRF would add serializers, viewsets, authentication defaults, and content negotiation behavior that the current `artifact-serve` skill does not need. Avoiding it keeps dependencies minimal and makes exact status codes, multipart limits, and headers easier to preserve.
+Plain Django fits this server because the route surface is small, explicit, and mostly compatibility glue around an existing SQLite file and staged filesystem. DRF would add serializers, viewsets, authentication defaults, and content negotiation behavior that the current `artifact-svc` skill does not need. Avoiding it keeps dependencies minimal and makes exact status codes, multipart limits, and headers easier to preserve.
 
 ### Python and dependencies
 
@@ -114,7 +114,7 @@ The Django backend must match the current HTTP contract exactly unless a row say
 | GET | `/_/api/comments` | `api_comments` | query `artifact` plus optional `sub_path`, or `url` | `{artifact_id, sub_path, comments}` | 200, 404, 500 | Legacy flattened page-anchor shim only. |
 | POST | `/_/api/comments` | `api_create_comment` | legacy multipart form | `{id, thread_id, artifact_id, sub_path}` | 201, 400, 411, 413, 500 | Creates page-level thread and opening reply. Mirrors like `api_create_thread`. |
 | GET | `/_/review` | `review_page` | query `artifact`, optional `view`, `src`, `path` | HTML review page | 200, 400, 404 | No view renders gallery. `view=image` renders simple-image OpenSeadragon. `view=code` renders escaped line viewer. |
-| GET | `/_/tiles/<artifact>/<path:src>/<path:tile>` | `deep_zoom_tile` | reserved future route | tile bytes | 404 or 501 in parity slice | No dynamic DZI exists today. If implemented later, it must use staged-root guards and SSRF guard for any remote fetch. This addition would require a lockstep `artifact-serve` skill doc change. |
+| GET | `/_/tiles/<artifact>/<path:src>/<path:tile>` | `deep_zoom_tile` | reserved future route | tile bytes | 404 or 501 in parity slice | No dynamic DZI exists today. If implemented later, it must use staged-root guards and SSRF guard for any remote fetch. This addition would require a lockstep `artifact-svc` skill doc change. |
 | POST | `/_/api/publish` | `api_publish` | multipart form: `project`, `as`, optional `artifact_id`, `archive` tar file | publish result JSON | 201, 400, 409, 413, 500 | Extracts a safe tar into the service-owned artifact root. Reject absolute paths, `..`, symlinks, devices, and non-regular members. |
 | GET | `/_/app/assets/<path:rel>` | `spa_asset` | route `rel` | React bundle asset bytes | 200, 404 | Vite `base: '/_/app/'`. Placing hashed JS/CSS under the reserved `/_/` namespace means a pushed project literally named `assets` can never collide with the SPA's own asset paths. Resolve under `REVIEW_SERVE_SPA_ROOT`; traversal guard. |
 | GET | `/<project>/<subdir>/<path:rel>` | `static_artifact` | static URL path | raw bytes, rewritten HTML, or generated directory gallery | 200, 301, 404, normal static statuses | Serve staged files. HTML gets feedback widget and sandbox CSP. |

@@ -1,4 +1,4 @@
-# The deploy for the agent-workbench stack (kb-serve, artifact-serve, bdui,
+# The deploy for the agent-workbench stack (kb-svc, artifact-svc, bdui,
 # n8n), run with `podman-compose up -d` or `docker compose up -d`.
 #
 # Compose is the ONLY deploy path. The systemd quadlet units this file used
@@ -8,13 +8,13 @@
 # See README.md for the fresh-machine install steps.
 
 services:
-  kb-serve:
+  kb-svc:
     build:
       context: ./scripts
       dockerfile: kb-container/Containerfile
-    image: localhost/kb-serve:latest
+    image: localhost/kb-svc:latest
     # No `user:` override -- PROVEN broken, not just a cosmetic gap, same
-    # as artifact-serve/bdui below. `user: "${UID:-1000}:${GID:-1000}"`
+    # as artifact-svc/bdui below. `user: "${UID:-1000}:${GID:-1000}"`
     # sets the container-internal uid, but plain compose has no real
     # UserNS=keep-id remap: verified via `podman unshare cat
     # /proc/self/uid_map` that container uid 1000 lands on an unrelated
@@ -32,8 +32,8 @@ services:
     # purposes -- cap_drop ALL + no-new-privileges + read_only rootfs
     # still apply, so this isn't a meaningfully weaker container.
     environment:
-      KB_SERVE_HOST: "0.0.0.0"
-      KB_SERVE_PORT: "9100"
+      KB_SVC_HOST: "0.0.0.0"
+      KB_SVC_PORT: "9100"
       HOME: "${HOME}"
       KB_HOME: "${HOME}/.knowledgebase"
     # Real, gitignored env file (not the tracked kb.env.example) -- may not
@@ -44,7 +44,7 @@ services:
     # Nuance vs. the quadlet: the quadlet resolves KB_LLM_API_KEY_CMD
     # host-side via ExecStartPre before the container ever starts, so the
     # container itself never needs the vault CLI. Compose has no
-    # pre-start hook, so here kb-serve.py's own resolve_api_key() runs the
+    # pre-start hook, so here kb-svc.py's own resolve_api_key() runs the
     # _CMD in-process INSIDE the container instead. If the vault CLI
     # isn't available in-container, it just logs a warning and returns no
     # key -- a safe no-op, since KB_ENRICH defaults to 0 anyway.
@@ -59,7 +59,7 @@ services:
       # container's PermissionError plus the DAC perms being otherwise
       # sufficient), not the private-MCS-category case `:Z` applies instead.
       # Combined with dropping `user:` above (the DAC half of the same
-      # class of problem bd-serve/bdui already hit), this is the narrower
+      # class of problem bd-svc/bdui already hit), this is the narrower
       # sibling of their `security_opt: label:disable` fix: only this one
       # mount gets relabeled rather than disabling SELinux confinement for
       # the whole container.
@@ -78,23 +78,23 @@ services:
         - CMD
         - python3
         - -c
-        - "import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('KB_SERVE_PORT','9100')+'/health', timeout=3)"
+        - "import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('KB_SVC_PORT','9100')+'/health', timeout=3)"
       interval: 30s
       timeout: 5s
       start_period: 5s
       retries: 3
 
-  bd-serve:
+  bd-svc:
     build:
       context: ./scripts
       dockerfile: bd-container/Containerfile
-    image: localhost/bd-serve:latest
+    image: localhost/bd-svc:latest
     # Mirrors bdui's proven bind-mount security stance: no `user:`
     # override, and SELinux labeling disabled because bd board dirs are
     # 0700/0600 on this enforcing host.
     environment:
-      BD_SERVE_HOST: "0.0.0.0"
-      BD_SERVE_PORT: "9101"
+      BD_SVC_HOST: "0.0.0.0"
+      BD_SVC_PORT: "9101"
       # Container-internal HOME, NOT the host's -- same gotcha bdui hit:
       # `bd` wants a writable home for its own config/cache, and the
       # read_only rootfs would reject it. /tmp is the tmpfs below. The
@@ -120,13 +120,13 @@ services:
         - CMD
         - python3
         - -c
-        - "import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('BD_SERVE_PORT','9101')+'/health', timeout=3)"
+        - "import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('BD_SVC_PORT','9101')+'/health', timeout=3)"
       interval: 30s
       timeout: 5s
       start_period: 5s
       retries: 3
 
-  artifact-serve:
+  artifact-svc:
     build:
       context: ./apps/artifact-review
       dockerfile: Containerfile
@@ -141,11 +141,11 @@ services:
     # cap_drop ALL + no-new-privileges + read_only rootfs still apply, so this
     # is not a meaningfully weaker container despite the nominal root label.
     environment:
-      ARTIFACT_SERVE_HOST: "0.0.0.0"
-      ARTIFACT_SERVE_PORT: "9099"
-      ARTIFACT_SERVE_ALLOWED_HOSTS: "127.0.0.1,localhost"
-      ARTIFACT_SERVE_STAGE_ROOT: "/tmp/artifacts"
-      ARTIFACT_SERVE_FEEDBACK_ROOT: "${HOME}/.local/share/artifacts"
+      ARTIFACT_SVC_HOST: "0.0.0.0"
+      ARTIFACT_SVC_PORT: "9099"
+      ARTIFACT_SVC_ALLOWED_HOSTS: "127.0.0.1,localhost"
+      ARTIFACT_SVC_STAGE_ROOT: "/tmp/artifacts"
+      ARTIFACT_SVC_FEEDBACK_ROOT: "${HOME}/.local/share/artifacts"
       DJANGO_DEBUG: "0"
       HOME: "${HOME}"
     ports:
@@ -171,7 +171,7 @@ services:
         - CMD
         - python3
         - -c
-        - "import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('ARTIFACT_SERVE_PORT','9099')+'/_/health', timeout=3)"
+        - "import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('ARTIFACT_SVC_PORT','9099')+'/_/health', timeout=3)"
       interval: 30s
       timeout: 5s
       start_period: 5s
@@ -182,7 +182,7 @@ services:
       context: ./scripts/bdui-container
       dockerfile: Containerfile
     image: localhost/bdui:latest
-    # No `user:` override here, unlike kb-serve/artifact-serve -- PROVEN
+    # No `user:` override here, unlike kb-svc/artifact-svc -- PROVEN
     # broken for this service, not just a cosmetic approximation gap (their
     # own `user:` comment already says "drop it if it doesn't translate
     # cleanly"). Verified two-part failure and two-part fix:
@@ -269,13 +269,13 @@ services:
     # how to re-pin on upgrade).
     image: "docker.io/n8nio/n8n@sha256:cda6bafc7bb4873533e7affb82d1bd47282a7614bdf83242c2293f8ff281261a"
     # n8n is opt-in: `docker-compose up` / `podman-compose up` with no
-    # profile brings up only kb-serve + artifact-serve. n8n is intentionally
+    # profile brings up only kb-svc + artifact-svc. n8n is intentionally
     # down right now by user choice; run with `--profile n8n` to include it.
     profiles:
       - n8n
     # ponytail: best-effort approximation of the quadlet's
-    # User/Group/UserNS=keep-id -- unlike kb-serve, which had to drop this
-    # override (see kb-serve's own comment above: plain compose has no
+    # User/Group/UserNS=keep-id -- unlike kb-svc, which had to drop this
+    # override (see kb-svc's own comment above: plain compose has no
     # real UserNS=keep-id remap, so this maps to an unrelated host subuid).
     # n8n keeps the override for now since it isn't part of this cutover's
     # compose bring-up (profiled off, running from a pre-existing container
@@ -300,7 +300,7 @@ services:
       - "${HOME}/.local/share/n8n:/home/node/.n8n:rw"
     # ponytail: best-effort/untested equivalent of the quadlet's
     # `Network=pasta:--map-host-loopback,169.254.1.2` fix (which lets n8n
-    # workflows reach host-loopback services like ComfyUI/artifact-serve via
+    # workflows reach host-loopback services like ComfyUI/artifact-svc via
     # host.containers.internal). Plain compose has no pasta-specific
     # option; this may behave differently. n8n is profiled off by default,
     # so this isn't being relied on to be live by this change.

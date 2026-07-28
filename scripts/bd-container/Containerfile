@@ -14,11 +14,11 @@ RUN curl -fsSL -o /tmp/${BD_ARCHIVE} ${BD_BASE_URL}/${BD_ARCHIVE} \
     && rm -f /tmp/${BD_ARCHIVE} /tmp/checksums.txt
 
 WORKDIR /app
-COPY bd-serve.py ./
+COPY bd-svc.py ./
 
 EXPOSE 9101
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-  CMD ["python3", "-c", "import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('BD_SERVE_PORT','9101')+'/health', timeout=3)"]
+  CMD ["python3", "-c", "import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('BD_SVC_PORT','9101')+'/health', timeout=3)"]
 
-ENTRYPOINT ["python3", "/app/bd-serve.py", "run"]
+ENTRYPOINT ["python3", "/app/bd-svc.py", "run"]

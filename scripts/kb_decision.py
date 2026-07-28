@@ -50,7 +50,7 @@ __all__ = [
     "slugify",
 ]
 
-log = logging.getLogger("kb-serve")
+log = logging.getLogger("kb-svc")
 
 FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n(.*)$", re.DOTALL)
 DECISIONS_DIR_NAME = "decisions"

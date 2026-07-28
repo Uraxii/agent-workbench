@@ -33,7 +33,7 @@ __all__ = [
     "resolve_kb_home",
 ]
 
-log = logging.getLogger("kb-serve")
+log = logging.getLogger("kb-svc")
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 

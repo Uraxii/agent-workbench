@@ -38,7 +38,7 @@ nobody else.
 
 | Service | Port | Data it owns | Worst thing reachable through it |
 |---|---|---|---|
-| kb (`scripts/kb-serve.py`) | 9100 | `~/.knowledgebase`, the whole personal vault | Read every note; write arbitrary markdown into the vault; make the server fetch an arbitrary URL (`/clip`, `/atomize`); spend money against the configured LLM key when `KB_ENRICH=1` |
+| kb (`scripts/kb-svc.py`) | 9100 | `~/.knowledgebase`, the whole personal vault | Read every note; write arbitrary markdown into the vault; make the server fetch an arbitrary URL (`/clip`, `/atomize`); spend money against the configured LLM key when `KB_ENRICH=1` |
 | artifact | 9099 | `~/.local/share/artifacts`, staged review artifacts | Serves attacker-authored HTML and SVG **and** its own review UI. Scripted content from the same origin as the UI is full control of the UI |
 | bd | 3100 (bdui today) | `~/.beads-hub`, every board in every project | Read and rewrite issue state across all projects |
 | n8n | 5678 | workflow definitions and credentials | Third-party, opt-in, profiled off. Out of scope here beyond "do not treat its port as private" |
@@ -179,7 +179,7 @@ Plus, for that route specifically:
    the filesystem only through `slugify()`, never raw.
 4. **No user input reaches a shell.** Subprocesses take an argv list and
    never `shell=True`. The single existing `shell=True` call,
-   `resolve_api_key` in `scripts/kb-serve.py`, runs `KB_LLM_API_KEY_CMD`,
+   `resolve_api_key` in `scripts/kb-svc.py`, runs `KB_LLM_API_KEY_CMD`,
    an operator-set value from `kb.env` or the container environment. It is
    never populated from a request, and no request field may ever be routed
    into it.
@@ -193,7 +193,7 @@ Plus, for that route specifically:
 
 ## 6. What is implemented, and where
 
-Implemented in this workstream, in `scripts/kb-serve.py`:
+Implemented in this workstream, in `scripts/kb-svc.py`:
 
 - the section 4 header set on every response, stamped in `end_headers` so
   that the stdlib's own `send_error` replies (the 501 for an unimplemented
@@ -224,21 +224,14 @@ Reported, not implemented, because it belongs to another workstream:
   unchanged. Until then, the honest statement is that port 3100 is
   unprotected.
 
+
 ## 7. Is authentication still deferrable?
 
-**No. It is now required, and it should be built.** Two things changed.
-First, the stack went from one service to several, each with write
-endpoints and a distinct mount, so "the surface is small" no longer holds.
-Second, one of them serves attacker-authored HTML, which means the stack
-contains a mechanism for getting attacker code running inside the user's
-browser, next to the very ports that have no authentication.
+**Yes. Authentication is optional and off by default.** See `~/.knowledgebase/agent-workbench/decisions/security-baseline__2026-07-28.md`, which supersedes the prior note treating a bearer-token layer as no-longer-deferrable. The bearer-token design was never implemented, and the user has ruled it out as a requirement: "make auth optional." The reasoning in section 3 applies: a process running as the user can read the token file exactly as easily as it can read `~/.knowledgebase`. For a personal, single-user project, a token layer that only defends against browser-origin attackers and other users on a shared machine was judged not worth building.
 
-Section 4's controls are the right first move and they genuinely close the
-drive-by browser case, but they are all inference from headers a client
-controls. Authentication is the only control that distinguishes "the CLI
-called me" from "something else called me".
+Section 4's controls close the drive-by browser case and remain the standing mitigation. If future use or threat model changes make an authentication layer desirable, the minimal design below describes what adding one would look like:
 
-### Minimal recommendation
+### Minimal recommendation (optional, not implemented)
 
 A single shared bearer token, per install:
 
@@ -261,8 +254,7 @@ file is missing. The awkward part is the artifact review UI: a browser
 cannot read the token file, so it needs the token delivered as a
 `HttpOnly; SameSite=Strict` session cookie set by a small login route, or
 the UI's own origin must be treated as pre-authenticated. That decision
-belongs to the artifact workstream and is the reason this is a
-recommendation rather than a patch.
+belongs to the artifact workstream.
 
 ### What it does not buy
 
