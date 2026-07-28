@@ -340,6 +340,13 @@ def test_feedback_upload_gets_sandbox_csp(
 ) -> None:
     """Feedback uploads are caller-supplied bytes and get artifact headers."""
     del roots
+    ArtifactIndex.objects.create(
+        project="demo",
+        subdir="shot",
+        artifact_id="demo/shot",
+        src_path="/tmp/artifacts/demo/shot",
+        last_pushed=123,
+    )
     thread_response = client.post(
         "/_/api/threads",
         {
@@ -364,6 +371,13 @@ def test_feedback_upload_rejects_active_content(
 ) -> None:
     """Feedback uploads reject active-content extensions."""
     del roots
+    ArtifactIndex.objects.create(
+        project="demo",
+        subdir="shot",
+        artifact_id="demo/shot",
+        src_path="/tmp/artifacts/demo/shot",
+        last_pushed=123,
+    )
     response = client.post(
         "/_/api/threads",
         {
@@ -484,6 +498,13 @@ def test_threads_requires_artifact_query(client: Client, roots: tuple[Path, Path
 def test_feedback_mutation_response_keys_match_contract(client: Client, roots: tuple[Path, Path, Path]) -> None:
     """Mutation endpoints return the top-level keys validated by clients."""
     del roots
+    ArtifactIndex.objects.create(
+        project="artifact",
+        subdir="A",
+        artifact_id="artifact/A",
+        src_path="/tmp/artifacts/artifact/A",
+        last_pushed=123,
+    )
     create_thread = client.post(
         "/_/api/threads",
         {
@@ -828,3 +849,167 @@ def test_api_threads_404s_on_orphan_threads_without_index_entry(client: Client, 
     # Should 404 because there is no ArtifactIndex row, even though threads exist
     assert response.status_code == 404
     assert response.json()["reason"] == "unknown_artifact"
+
+
+def test_api_create_thread_404s_on_unindexed_artifact(client: Client, roots: tuple[Path, Path, Path]) -> None:
+    """Creating a thread for an unindexed artifact returns 404 unknown_artifact."""
+    del roots
+    # Try to create a thread without first creating an index entry
+    response = client.post(
+        "/_/api/threads",
+        {
+            "artifact": "unindexed/art",
+            "sub_path": "",
+            "body": "Thread body",
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json()["reason"] == "unknown_artifact"
+
+
+def test_api_create_thread_201s_on_indexed_artifact(client: Client, roots: tuple[Path, Path, Path]) -> None:
+    """Creating a thread for an indexed artifact succeeds."""
+    del roots
+    # Create index entry first
+    ArtifactIndex.objects.create(
+        project="indexed",
+        subdir="art",
+        artifact_id="indexed/art",
+        src_path="/tmp/artifacts/indexed/art",
+        last_pushed=123,
+    )
+
+    # Now create a thread - should succeed
+    response = client.post(
+        "/_/api/threads",
+        {
+            "artifact": "indexed/art",
+            "sub_path": "",
+            "body": "Thread body",
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["thread_id"] is not None
+    assert response.json()["artifact_id"] == "indexed/art"
+
+
+def test_api_create_reply_404s_when_artifact_unindexed(client: Client, roots: tuple[Path, Path, Path]) -> None:
+    """Creating a reply on a thread with unindexed artifact returns 404."""
+    del roots
+    # Create a thread directly in DB with unindexed artifact (simulating the bug)
+    thread = Thread.objects.create(
+        artifact_id="orphan/art",
+        sub_path="",
+        anchor_kind="page",
+        anchor_data=None,
+        resolved=0,
+        author="alice",
+        created_at=123,
+    )
+
+    # Try to create a reply - should fail because artifact is not indexed
+    response = client.post(
+        f"/_/api/threads/{thread.id}/replies",
+        {
+            "body": "Reply body",
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json()["reason"] == "unknown_artifact"
+
+
+def test_api_create_reply_201s_when_artifact_indexed(client: Client, roots: tuple[Path, Path, Path]) -> None:
+    """Creating a reply on a thread with indexed artifact succeeds."""
+    del roots
+    # Create index entry
+    ArtifactIndex.objects.create(
+        project="test",
+        subdir="art",
+        artifact_id="test/art",
+        src_path="/tmp/artifacts/test/art",
+        last_pushed=123,
+    )
+
+    # Create a thread
+    thread = Thread.objects.create(
+        artifact_id="test/art",
+        sub_path="",
+        anchor_kind="page",
+        anchor_data=None,
+        resolved=0,
+        author="alice",
+        created_at=123,
+    )
+
+    # Create a reply - should succeed
+    response = client.post(
+        f"/_/api/threads/{thread.id}/replies",
+        {
+            "body": "Reply body",
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["reply_id"] is not None
+
+
+def test_api_resolve_thread_404s_when_artifact_unindexed(client: Client, roots: tuple[Path, Path, Path]) -> None:
+    """Resolving a thread with unindexed artifact returns 404."""
+    del roots
+    # Create a thread directly in DB with unindexed artifact
+    thread = Thread.objects.create(
+        artifact_id="orphan/art",
+        sub_path="",
+        anchor_kind="page",
+        anchor_data=None,
+        resolved=0,
+        author="alice",
+        created_at=123,
+    )
+
+    # Try to resolve - should fail because artifact is not indexed
+    response = client.post(
+        f"/_/api/threads/{thread.id}/resolve",
+        {"resolved": True},
+        content_type="application/json",
+    )
+
+    assert response.status_code == 404
+    assert response.json()["reason"] == "unknown_artifact"
+
+
+def test_api_resolve_thread_200s_when_artifact_indexed(client: Client, roots: tuple[Path, Path, Path]) -> None:
+    """Resolving a thread with indexed artifact succeeds."""
+    del roots
+    # Create index entry
+    ArtifactIndex.objects.create(
+        project="test",
+        subdir="art",
+        artifact_id="test/art",
+        src_path="/tmp/artifacts/test/art",
+        last_pushed=123,
+    )
+
+    # Create a thread
+    thread = Thread.objects.create(
+        artifact_id="test/art",
+        sub_path="",
+        anchor_kind="page",
+        anchor_data=None,
+        resolved=0,
+        author="alice",
+        created_at=123,
+    )
+
+    # Resolve - should succeed
+    response = client.post(
+        f"/_/api/threads/{thread.id}/resolve",
+        {"resolved": True},
+        content_type="application/json",
+    )
+
+    assert response.status_code == 200
+    assert response.json()["resolved"] is True

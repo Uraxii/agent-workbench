@@ -96,10 +96,17 @@ def api_create_thread(request: HttpRequest) -> JsonResponse:
     ensure_feedback_schema()
     try:
         data = feedback_forms.request_data(request)
+        artifact_id = feedback_forms.require_artifact(data)
+        
+        # Check if artifact exists in index before creating thread
+        has_index_entry = ArtifactIndex.objects.filter(artifact_id=artifact_id).exists()
+        if not has_index_entry:
+            return _json_error("unknown_artifact", 404)
+        
         now = _now()
         with transaction.atomic():
             thread = Thread.objects.create(
-                artifact_id=feedback_forms.require_artifact(data),
+                artifact_id=artifact_id,
                 sub_path=feedback_forms.optional_text(data, "sub_path"),
                 anchor_kind=feedback_forms.optional_text(data, "anchor_kind", "page"),
                 anchor_data=_json_text(data.get("anchor_data")),
@@ -138,6 +145,12 @@ def api_create_reply(request: HttpRequest, id: int) -> JsonResponse:
     thread = Thread.objects.filter(id=id).first()
     if thread is None:
         return _json_error("not_found", 404)
+    
+    # Check if thread's artifact exists in index before creating reply
+    has_index_entry = ArtifactIndex.objects.filter(artifact_id=thread.artifact_id).exists()
+    if not has_index_entry:
+        return _json_error("unknown_artifact", 404)
+    
     try:
         data = feedback_forms.request_data(request)
         with transaction.atomic():
@@ -169,6 +182,12 @@ def api_resolve_thread(request: HttpRequest, id: int) -> JsonResponse:
     thread = Thread.objects.filter(id=id).first()
     if thread is None:
         return _json_error("not_found", 404)
+    
+    # Check if thread's artifact exists in index before resolving
+    has_index_entry = ArtifactIndex.objects.filter(artifact_id=thread.artifact_id).exists()
+    if not has_index_entry:
+        return _json_error("unknown_artifact", 404)
+    
     try:
         data = feedback_forms.request_data(request)
     except (ValueError, json.JSONDecodeError) as exc:
