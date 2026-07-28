@@ -84,9 +84,9 @@ $AW kb clip "https://example.com/article" --project gvn
 
 `--project` defaults to `inbox`. Every clip writes type `source`, which is
 splittable; with `KB_ENRICH=1` plus a resolvable key, the clip makes a model
-call and the response includes a `usage` key. There is no flag to skip
-enrichment, because an opt-in index is an index that drifts. Every clip is
-atomized, indexed and embedded in the same call.
+call and the response includes a `usage` key. Atomizing, indexing and
+embedding always happen in the same call and cannot be skipped; the model
+tier is controlled by `KB_ENRICH`.
 
 ## put -- write a note (body on stdin)
 
