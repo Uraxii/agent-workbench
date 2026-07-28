@@ -425,7 +425,7 @@ def fuse_rankings(
 
     Only notes the keyword search already returned can be reordered: the
     vector list contributes ranking signal, not extra rows, so a caller
-    never sees a result the FTS5 filters (project, type, superseded)
+    never sees a result the FTS5 filters (project, type, revised)
     would have excluded. Returns ``keyword_results`` unchanged when the
     vector list is empty.
     """

@@ -165,7 +165,7 @@ $AW kb query "information architecture" --project agent-workbench
 #     "score": 0.0313}]}
 ```
 
-`--project`, `--type` and `--all` (include superseded notes) are all
+`--project`, `--type` and `--all` (include revised notes) are all
 optional filters. The FTS5 keyword half decides which notes match and
 applies the filters; the vector half only reorders them. With no embedding
 model configured the vector half contributes nothing and search is plain
@@ -186,30 +186,30 @@ $AW kb status
 $AW kb decision record --project gvn --topic base-body-slices \
   --title "<title>" --text "<decision statement>" \
   [--rationale "<why>"] [--refs "<paths/tickets>"] [--tags "a, b"] \
-  [--supersedes "<path>"]
+  [--revises "<path>"]
 # -> {"path": "$HOME/.knowledgebase/gvn/decisions/base-body-slices__2026-07-22.md",
 #     "children": [], "method": "already-atomic", "indexed": 2374,
-#     "embedded": 1, "supersedes": ""}
+#     "embedded": 1, "revises": ""}
 
 $AW kb decision audit base-body-slices --project gvn
-# -> [{"date": "2026-07-22", "status": "superseded",
+# -> [{"date": "2026-07-22", "status": "revised",
 #     "title": "Base body is six mesh-deformed slices, not per-feature cuts",
 #     "path": "$HOME/.knowledgebase/gvn/decisions/base-body-slices__2026-07-22.md",
-#     "supersedes": ""},
+#     "revises": ""},
 #     {"date": "2026-07-22", "status": "active",
 #     "title": "Base body is six overlap-margin mesh slices ...",
 #     "path": "$HOME/.knowledgebase/gvn/decisions/base-body-slices__2026-07-22-2.md",
-#     "supersedes": ".../base-body-slices__2026-07-22.md"}]
+#     "revises": ".../base-body-slices__2026-07-22.md"}]
 ```
 
 `record` requires `--project` (decisions are never "inbox"). If the topic
-already has an `active` note, it auto-flips to `status: superseded` and the
-new note's `supersedes` field points at it -- exactly one `active` note per
+already has an `active` note, it auto-flips to `status: revised` and the
+new note's `revises` field points at it -- exactly one `active` note per
 topic at any time, and the audit chain is the files plus their frontmatter,
 never a separate database.
 
-`--supersedes` optionally rewrites an existing decision note IN PLACE,
-setting its `status` to `superseded`. The target must be a note on the same
+`--revises` optionally rewrites an existing decision note IN PLACE,
+setting its `status` to `revised`. The target must be a note on the same
 topic or the service rejects it. Decision records are always free (already-atomic
 type making no model call).
 
@@ -229,12 +229,12 @@ title: <title>
 topic: <topic>
 date: <YYYY-MM-DD>
 status: active
-supersedes: <path or empty>
+revises: <path or empty>
 tags: [a, b]
 ---
 ```
 
-Values are never quoted or escaped. An empty `supersedes` leaves a trailing
+Values are never quoted or escaped. An empty `revises` leaves a trailing
 space after the colon. This is the locked byte shape. By contrast, `kb put`
 writes quoted `type/title/source/...` frontmatter.
 

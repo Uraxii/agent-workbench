@@ -459,7 +459,7 @@ def test_decision_is_recorded_through_the_same_ingest_finish(
     assert body["method"] == "already-atomic"
     assert body["children"] == []
     assert body["indexed"] == 1
-    assert body["supersedes"] == ""
+    assert body["revises"] == ""
     assert Path(str(body["path"])).read_text(encoding="utf-8").startswith("---\n")
 
 

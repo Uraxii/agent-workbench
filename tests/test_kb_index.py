@@ -41,7 +41,7 @@ _BRACKET_TITLE_NOTE = (
     "topic: some-topic\n"
     "date: 2026-07-27\n"
     "status: active\n"
-    "supersedes: \n"
+    "revises: \n"
     "tags: [a, b]\n"
     "---\n\n"
     "Body.\n"
@@ -111,7 +111,7 @@ def test_build_index_skips_one_unreadable_note_and_keeps_the_rest(
     decisions_dir.mkdir(parents=True)
     (decisions_dir / "good.md").write_text(
         "---\ntitle: Fine\ntopic: fine\ndate: 2026-07-27\nstatus: active\n"
-        "supersedes: \ntags: [x]\n---\n\nFine body.\n",
+        "revises: \ntags: [x]\n---\n\nFine body.\n",
         encoding="utf-8",
     )
     with (decisions_dir / "broken.md").open("wb") as handle:
@@ -136,7 +136,7 @@ def test_build_index_full_rebuild_indexes_every_good_note(tmp_path: Path) -> Non
     (decisions_dir / "one.md").write_text(_BRACKET_TITLE_NOTE, encoding="utf-8")
     (decisions_dir / "two__2026-07-27.md").write_text(
         "---\ntitle: Second\ntopic: other\ndate: 2026-07-27\nstatus: active\n"
-        "supersedes: \ntags: [y]\n---\n\nSecond body.\n",
+        "revises: \ntags: [y]\n---\n\nSecond body.\n",
         encoding="utf-8",
     )
 

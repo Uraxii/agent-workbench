@@ -3,13 +3,13 @@
 One decision is one markdown file under
 ``<kb_home>/<project>/decisions/``, grouped by a stable ``topic`` key.
 Recording a new decision for a topic that already has an ``active`` note
-flips that prior note to ``superseded`` and points the new note's
-``supersedes`` field at it, so the audit chain is the files plus their
+flips that prior note to ``revised`` and points the new note's
+``revises`` field at it, so the audit chain is the files plus their
 frontmatter, never a separate database. Exactly one note per topic is
 ``active`` at any time.
 
 Frontmatter dialect: decision notes use bare, unquoted scalars
-(``title/topic/date/status/supersedes/tags``), NOT the quoted
+(``title/topic/date/status/revises/tags``), NOT the quoted
 ``type/title/source/...`` schema ``kb_vault.render_note`` writes. Every
 decision note already on disk uses the bare shape and ``kb-index.py``
 reads both, so this is byte-for-byte preserved. See ``render_decision``.
@@ -32,7 +32,7 @@ from kb_vault import (
 
 __all__ = [
     "ACTIVE",
-    "SUPERSEDED",
+    "REVISED",
     "Decision",
     "audit",
     "build_note_path",
@@ -46,7 +46,7 @@ __all__ = [
     "parse_tags",
     "record",
     "render_decision",
-    "resolve_supersedes_path",
+    "resolve_revises_path",
     "slugify",
 ]
 
@@ -55,7 +55,7 @@ log = logging.getLogger("kb-svc")
 FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n(.*)$", re.DOTALL)
 DECISIONS_DIR_NAME = "decisions"
 ACTIVE = "active"
-SUPERSEDED = "superseded"
+REVISED = "revised"
 
 
 @dataclass
@@ -64,7 +64,7 @@ class Decision:
 
     ``decision_date`` is the frontmatter ``date`` field (ISO
     ``YYYY-MM-DD``); it is spelled out because ``date`` collides with
-    ``datetime.date``. ``supersedes`` is the path string of the note this
+    ``datetime.date``. ``revises`` is the path string of the note this
     one replaced, or ``""`` when the topic is new.
     """
 
@@ -73,7 +73,7 @@ class Decision:
     topic: str
     decision_date: str
     status: str
-    supersedes: str
+    revises: str
     tags: list[str]
     body: str
 
@@ -132,7 +132,7 @@ def load_decision(path: Path) -> Decision:
         topic=fields.get("topic", ""),
         decision_date=fields.get("date", ""),
         status=fields.get("status", ACTIVE),
-        supersedes=fields.get("supersedes", ""),
+        revises=fields.get("revises", ""),
         tags=parse_tags(fields.get("tags", "[]")),
         body=body,
     )
@@ -143,7 +143,7 @@ def render_decision(decision: Decision) -> str:
 
     LOCKED byte shape -- the notes already in the vault must stay
     round-trippable. Two details that look like bugs and are NOT: an empty
-    ``supersedes`` leaves a trailing space after the colon, and values are
+    ``revises`` leaves a trailing space after the colon, and values are
     never quoted or escaped. Both match every note on disk; the newline
     rejection in ``validate_scalar`` is what keeps unquoted safe.
     Postcondition: the returned text ends with exactly one newline.
@@ -155,7 +155,7 @@ def render_decision(decision: Decision) -> str:
         f"topic: {decision.topic}\n"
         f"date: {decision.decision_date}\n"
         f"status: {decision.status}\n"
-        f"supersedes: {decision.supersedes}\n"
+        f"revises: {decision.revises}\n"
         f"tags: [{tags}]\n"
         "---\n\n"
         f"{decision.body}\n"
@@ -220,7 +220,7 @@ def build_note_path(decisions_dir_path: Path, topic_slug: str, today: str) -> Pa
     return candidate
 
 
-# ── supersession chain ────────────────────────────────────────────────
+# ── revision chain ────────────────────────────────────────────────────
 
 
 def find_notes_for_topic(
@@ -229,7 +229,7 @@ def find_notes_for_topic(
     """Every decision note recorded under ``topic``, any status.
 
     Returns unsorted matches. ``audit()`` orders them by walking the
-    ``supersedes`` chain, never by sorting on ``decision_date``.
+    ``revises`` chain, never by sorting on ``decision_date``.
 
     A note is only read when it resolves inside the decisions dir it was
     found in: a symlinked *file* would otherwise let an audit read
@@ -258,12 +258,12 @@ def find_active_note(
     return None
 
 
-def resolve_supersedes_path(
-    supersedes_arg: str | None,
+def resolve_revises_path(
+    revises_arg: str | None,
     decision_dirs: Sequence[Path],
     topic: str,
 ) -> Path | None:
-    """Pick the note being superseded.
+    """Pick the note being revised.
 
     An explicit path wins; otherwise the topic's current active note;
     otherwise ``None`` (a brand-new topic). An explicit path is resolved
@@ -273,27 +273,27 @@ def resolve_supersedes_path(
 
     ``decision_dirs`` here is the RECORDING project's dir only, never
     every project's: a cross-project topic-name collision must not
-    silently flip another project's note to superseded.
+    silently flip another project's note to revised.
 
     Raises:
         ValueError: an explicit path outside the project's decisions dir,
             naming a file that does not exist, or pointing at a note
             belonging to a different topic.
     """
-    if supersedes_arg:
-        candidate = Path(supersedes_arg).resolve()
+    if revises_arg:
+        candidate = Path(revises_arg).resolve()
         allowed = [d.resolve() for d in decision_dirs]
         if candidate.parent not in allowed or candidate.suffix != ".md":
             raise ValueError(
-                f"supersedes {supersedes_arg!r} is not a decision note of "
+                f"revises {revises_arg!r} is not a decision note of "
                 "this project"
             )
         if not candidate.is_file():
-            raise ValueError(f"supersedes {supersedes_arg!r} does not exist")
+            raise ValueError(f"revises {revises_arg!r} does not exist")
         target_note = load_decision(candidate)
         if target_note.topic != topic:
             raise ValueError(
-                f"supersedes {supersedes_arg!r} belongs to topic "
+                f"revises {revises_arg!r} belongs to topic "
                 f"{target_note.topic!r}, expected {topic!r}"
             )
         return candidate
@@ -332,19 +332,19 @@ def _parse_tag_field(raw: object) -> list[str]:
 
 
 def record(kb_home: Path, payload: Mapping[str, object]) -> dict[str, str]:
-    """Write a new active decision note, superseding the topic's prior one.
+    """Write a new active decision note, revising the topic's prior one.
 
     Args:
         kb_home: the vault root.
         payload: ``project``, ``topic``, ``title``, ``text`` (all
             required), plus optional ``rationale``, ``refs``, ``tags``,
-            ``supersedes``.
+            ``revises``.
 
     Returns:
-        ``{"path": <new note>, "supersedes": <prior note or "">}``.
+        ``{"path": <new note>, "revises": <prior note or "">}``.
 
     Side effects, in order: creates the project's decisions dir; rewrites
-    the superseded note with ``status: superseded``; writes the new note
+    the revised note with ``status: revised``; writes the new note
     with ``status: active`` and today's date. Postcondition: the topic has
     exactly one active note.
 
@@ -366,15 +366,15 @@ def record(kb_home: Path, payload: Mapping[str, object]) -> dict[str, str]:
     note_path = build_note_path(project_decisions_dir, slugify(topic), today)
     assert_inside_vault(kb_home, note_path)
 
-    supersedes_raw = payload.get("supersedes")
-    supersedes_path = resolve_supersedes_path(
-        str(supersedes_raw) if supersedes_raw else None,
+    revises_raw = payload.get("revises")
+    revises_path = resolve_revises_path(
+        str(revises_raw) if revises_raw else None,
         [project_decisions_dir],
         topic,
     )
-    if supersedes_path is not None:
-        prior = load_decision(supersedes_path)
-        prior.status = SUPERSEDED
+    if revises_path is not None:
+        prior = load_decision(revises_path)
+        prior.status = REVISED
         prior.path.write_text(render_decision(prior), encoding="utf-8")
 
     new_note = Decision(
@@ -383,7 +383,7 @@ def record(kb_home: Path, payload: Mapping[str, object]) -> dict[str, str]:
         topic=topic,
         decision_date=today,
         status=ACTIVE,
-        supersedes=str(supersedes_path) if supersedes_path else "",
+        revises=str(revises_path) if revises_path else "",
         tags=_parse_tag_field(payload.get("tags")),
         body=compose_body(
             text,
@@ -392,20 +392,20 @@ def record(kb_home: Path, payload: Mapping[str, object]) -> dict[str, str]:
         ),
     )
     note_path.write_text(render_decision(new_note), encoding="utf-8")
-    return {"path": str(note_path), "supersedes": new_note.supersedes}
+    return {"path": str(note_path), "revises": new_note.revises}
 
 
-def _supersedes_targets(supersedes: str, path: Path) -> bool:
-    """True when a note's raw ``supersedes`` string names ``path``.
+def _revises_targets(revises: str, path: Path) -> bool:
+    """True when a note's raw ``revises`` string names ``path``.
 
     Compares resolved paths, not raw strings, so the chain walk survives
     path aliasing (a bind-mounted ``/home`` vs ``/var/home`` alias) or a
-    relative link. An empty ``supersedes`` (a topic's root note) never
+    relative link. An empty ``revises`` (a topic's root note) never
     matches: ``Path("").resolve()`` is the cwd, which must not match.
     """
-    if not supersedes:
+    if not revises:
         return False
-    return Path(supersedes).resolve() == path.resolve()
+    return Path(revises).resolve() == path.resolve()
 
 
 def _same_day_suffix(note: Decision) -> int:
@@ -430,7 +430,7 @@ def _fallback_chain_order(
 ) -> list[Decision]:
     """Degrade to a best-effort order and say so, loudly, in the log.
 
-    Used when the ``supersedes`` chain walk cannot account for every note
+    Used when the ``revises`` chain walk cannot account for every note
     (no single root, or a broken link) -- the exact condition the chain
     walk exists to avoid, so a caller trusting this order silently would
     be back to the original ordering bug.
@@ -444,15 +444,15 @@ def _fallback_chain_order(
 
 
 def audit(decision_dirs: Sequence[Path], topic: str) -> list[Decision]:
-    """The topic's full supersession chain, oldest decision first.
+    """The topic's full revision chain, oldest decision first.
 
-    Ordering walks the ``supersedes`` links instead of sorting on
+    Ordering walks the ``revises`` links instead of sorting on
     ``decision_date``: recording a decision and correcting it same-day is
     normal, so two notes can tie on date and a date sort can silently
     print the chain backwards.
 
-    The walk starts at the one note with an empty ``supersedes``, then
-    repeatedly follows whichever note points its ``supersedes`` at the
+    The walk starts at the one note with an empty ``revises``, then
+    repeatedly follows whichever note points its ``revises`` at the
     current one, matched by resolved path. Falls back to a best-effort
     sort, with a warning naming the topic, when that walk cannot account
     for every note found. Postcondition: an unknown topic gives ``[]``.
@@ -460,12 +460,12 @@ def audit(decision_dirs: Sequence[Path], topic: str) -> list[Decision]:
     notes = find_notes_for_topic(decision_dirs, topic)
     if not notes:
         return []
-    roots = [note for note in notes if not note.supersedes]
+    roots = [note for note in notes if not note.revises]
     if len(roots) != 1:
         reason = (
-            "no note has an empty supersedes (no root to start from)"
+            "no note has an empty revises (no root to start from)"
             if not roots
-            else f"{len(roots)} notes have an empty supersedes (ambiguous root)"
+            else f"{len(roots)} notes have an empty revises (ambiguous root)"
         )
         return _fallback_chain_order(notes, topic, reason)
 
@@ -473,7 +473,7 @@ def audit(decision_dirs: Sequence[Path], topic: str) -> list[Decision]:
     seen = {str(roots[0].path)}
     while (
         next_note := next(
-            (n for n in notes if _supersedes_targets(n.supersedes, chain[-1].path)),
+            (n for n in notes if _revises_targets(n.revises, chain[-1].path)),
             None,
         )
     ) is not None and str(next_note.path) not in seen:
@@ -483,7 +483,7 @@ def audit(decision_dirs: Sequence[Path], topic: str) -> list[Decision]:
     if len(chain) != len(notes):
         reason = (
             f"chain walk only reached {len(chain)} of {len(notes)} notes "
-            "(a broken or dangling supersedes link)"
+            "(a broken or dangling revises link)"
         )
         return _fallback_chain_order(notes, topic, reason)
     return chain
