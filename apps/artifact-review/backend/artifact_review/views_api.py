@@ -17,7 +17,7 @@ from django.http import FileResponse, HttpRequest, HttpResponse, JsonResponse
 
 from artifact_review import artifact_paths, artifact_resolution, feedback_forms, feedback_json, publish_policy, ssrf_guard
 from artifact_review.feedback_database import ensure_feedback_schema
-from artifact_review.models import Reply, Setting, Thread, Upload
+from artifact_review.models import ArtifactIndex, Reply, Setting, Thread, Upload
 from artifact_review.response_headers import apply_app_headers, apply_artifact_headers
 from artifact_review.upload_validation import validate_archive_member
 
@@ -53,12 +53,12 @@ def api_threads(request: HttpRequest) -> JsonResponse:
     artifact_id = request.GET.get("artifact", "").strip()
     if not artifact_id:
         return _json_error("artifact_required", 400)
-    
+
     # If sub_path is present in query params, filter to that exact value (including empty)
     # If absent, return all threads for that artifact
     has_sub_path_param = "sub_path" in request.GET
     sub_path = request.GET.get("sub_path", "")
-    
+
     if has_sub_path_param:
         # Filter by exact sub_path
         queryset = (
@@ -73,15 +73,13 @@ def api_threads(request: HttpRequest) -> JsonResponse:
             .filter(artifact_id=artifact_id)
             .order_by("created_at", "id")
         )
-    
-    # Check if artifact exists in index or has threads
-    from artifact_review.models import ArtifactIndex
-    has_threads = queryset.exists()
+
+    # Check if artifact exists in index (404 only if no index entry, regardless of threads)
     has_index_entry = ArtifactIndex.objects.filter(artifact_id=artifact_id).exists()
-    
-    if not has_threads and not has_index_entry:
+
+    if not has_index_entry:
         return _json_error("unknown_artifact", 404)
-    
+
     return apply_app_headers(
         JsonResponse(
             {

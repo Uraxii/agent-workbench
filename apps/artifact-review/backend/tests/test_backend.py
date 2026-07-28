@@ -772,3 +772,31 @@ def test_api_threads_200_with_empty_list_for_known_artifact_no_threads(client: C
     assert response.status_code == 200
     assert response.json()["threads"] == []
     assert response.json()["artifact_id"] == "test/art"
+
+
+def test_api_threads_404s_on_orphan_threads_without_index_entry(client: Client, roots: tuple[Path, Path, Path]) -> None:
+    """api_threads 404s for artifact_id with threads but no ArtifactIndex row (orphan threads)."""
+    del roots
+    # Create a thread directly without a corresponding ArtifactIndex entry
+    thread = Thread.objects.create(
+        artifact_id="orphan/art",
+        sub_path="",
+        anchor_kind="page",
+        anchor_data=None,
+        resolved=0,
+        author="alice",
+        created_at=123,
+    )
+    Reply.objects.create(
+        thread=thread,
+        body="Orphan feedback",
+        author="alice",
+        created_at=124,
+    )
+
+    # Query for the orphan artifact (has threads but no index entry)
+    response = client.get("/_/api/threads?artifact=orphan%2Fart")
+
+    # Should 404 because there is no ArtifactIndex row, even though threads exist
+    assert response.status_code == 404
+    assert response.json()["reason"] == "unknown_artifact"
