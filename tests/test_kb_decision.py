@@ -427,3 +427,95 @@ def test_find_notes_for_topic_skips_a_symlinked_note(tmp_path: Path) -> None:
     (decision_dir / "link.md").symlink_to(outside)
 
     assert kb_decision.find_notes_for_topic([decision_dir], "leak-topic") == []
+
+
+# ── resolve_supersedes_path: topic matching validation ──────────────────
+
+def test_resolve_supersedes_path_rejects_mismatched_topic(
+    tmp_path: Path,
+) -> None:
+    """When an explicit supersedes path is given, the target note's topic
+    must match the topic being recorded. A cross-topic supersession is
+    silently prevented."""
+    # Create a note on topic "alpha"
+    first = kb_decision.record(tmp_path, _record_args(
+        project="proj", topic="alpha", title="Alpha Note", text="alpha text",
+    ))
+    alpha_note_path = Path(first["path"])
+    assert alpha_note_path.exists()
+
+    dir_a = alpha_note_path.parent
+
+    # Try to record a decision on topic "beta" with --supersedes pointing
+    # at the "alpha" note. This must be rejected.
+    with pytest.raises(ValueError, match="belongs to topic"):
+        kb_decision.resolve_supersedes_path(
+            str(alpha_note_path), [dir_a], "beta",
+        )
+
+
+def test_record_rejects_supersedes_with_mismatched_topic_and_leaves_file_unmodified(
+    tmp_path: Path,
+) -> None:
+    """Recording a decision on topic B with --supersedes pointing at a note
+    on topic A must fail and the target note must remain byte-for-byte
+    unmodified."""
+    dir_a = tmp_path / "proj" / "decisions"
+    dir_a.mkdir(parents=True)
+
+    # Create a note on topic "alpha"
+    first = kb_decision.record(tmp_path, _record_args(
+        project="proj", topic="alpha", title="Alpha Note", text="alpha text",
+    ))
+    alpha_note_path = Path(first["path"])
+    original_content = alpha_note_path.read_text(encoding="utf-8")
+
+    # Try to record a decision on topic "beta" with --supersedes pointing
+    # at the "alpha" note. This must fail.
+    with pytest.raises(ValueError, match="belongs to topic"):
+        kb_decision.record(tmp_path, _record_args(
+            project="proj",
+            topic="beta",
+            title="Beta Note",
+            text="beta text",
+            supersedes=str(alpha_note_path),
+        ))
+
+    # Verify the alpha note is completely unmodified
+    current_content = alpha_note_path.read_text(encoding="utf-8")
+    assert current_content == original_content
+    # And it's still active (not flipped to superseded)
+    alpha_note = kb_decision.load_decision(alpha_note_path)
+    assert alpha_note.status == kb_decision.ACTIVE
+
+
+def test_record_with_matching_topic_still_supersedes_successfully(
+    tmp_path: Path,
+) -> None:
+    """Verify the happy path still works: when an explicit supersedes path
+    is given pointing at a note on the same topic, supersession happens
+    normally (regression guard)."""
+    # Create a note on topic "shared-topic"
+    first = kb_decision.record(tmp_path, _record_args(
+        project="proj", topic="shared-topic", title="First", text="first text",
+    ))
+    first_path = Path(first["path"])
+
+    # Record a second decision on the same topic, explicitly superseding the first
+    second = kb_decision.record(tmp_path, _record_args(
+        project="proj",
+        topic="shared-topic",
+        title="Second",
+        text="second text",
+        supersedes=str(first_path),
+    ))
+    second_path = Path(second["path"])
+
+    # Verify the first note is now superseded
+    first_note = kb_decision.load_decision(first_path)
+    assert first_note.status == kb_decision.SUPERSEDED
+
+    # Verify the second note is active and points to the first
+    second_note = kb_decision.load_decision(second_path)
+    assert second_note.status == kb_decision.ACTIVE
+    assert second_note.supersedes == str(first_path)

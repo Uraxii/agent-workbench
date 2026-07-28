@@ -24,6 +24,7 @@ from kb_config import KbServeConfig, load_sibling
 __all__ = [
     "apply_enrichment",
     "find_unenriched_notes",
+    "fold_call_records",
     "kb_atomize_via_llm",
     "kb_enrich",
     "request_atomize_split",
@@ -53,9 +54,12 @@ MODEL_FAILURES = (
 
 def _chat_completion_json(
     config: KbServeConfig, model: str, prompt: str,
-) -> dict[str, object]:
+) -> tuple[dict[str, object], dict[str, object]]:
     """One chat-completions POST expecting a JSON object back.
 
+    Returns (parsed_content, call_record) where call_record is
+    {"id": str, "model": str, "prompt_tokens": int,
+     "completion_tokens": int, "total_tokens": int}.
     Raises on any network or parse failure; callers decide how to degrade.
     """
     payload = json.dumps({
@@ -74,7 +78,51 @@ def _chat_completion_json(
     )
     with urllib.request.urlopen(request, timeout=LLM_TIMEOUT_SEC) as response:
         data = json.loads(response.read())
-    return json.loads(data["choices"][0]["message"]["content"])
+    parsed = json.loads(data["choices"][0]["message"]["content"])
+    usage = data.get("usage", {})
+    call_record = {
+        "id": data.get("id", ""),
+        "model": data.get("model", ""),
+        "prompt_tokens": usage.get("prompt_tokens", 0),
+        "completion_tokens": usage.get("completion_tokens", 0),
+        "total_tokens": usage.get("total_tokens", 0),
+    }
+    return parsed, call_record
+
+
+def fold_call_records(records: list[dict[str, object]]) -> dict[str, object]:
+    """Fold a list of call records into an aggregated usage block.
+
+    Returns {"calls": int, "prompt_tokens": int, "completion_tokens": int,
+             "total_tokens": int, "generation_ids": [str, ...],
+             "models": [str, ...]}.
+    generation_ids are in call order with empty strings dropped; models are unique and sorted.
+    """
+    generation_ids: list[str] = []
+    models_list: list[str] = []
+    total_prompt = 0
+    total_completion = 0
+    total_tokens = 0
+
+    for record in records:
+        call_id = record.get("id", "")
+        if call_id:
+            generation_ids.append(call_id)
+        model = record.get("model", "")
+        if model and model not in models_list:
+            models_list.append(model)
+        total_prompt += record.get("prompt_tokens", 0)
+        total_completion += record.get("completion_tokens", 0)
+        total_tokens += record.get("total_tokens", 0)
+
+    return {
+        "calls": len(records),
+        "prompt_tokens": total_prompt,
+        "completion_tokens": total_completion,
+        "total_tokens": total_tokens,
+        "generation_ids": generation_ids,
+        "models": sorted(models_list),
+    }
 
 
 # ── enrichment: fill question/summary ─────────────────────────────────
@@ -109,7 +157,7 @@ def find_unenriched_notes(
 
 def request_enrichment(
     config: KbServeConfig, title: str, body: str,
-) -> dict[str, str]:
+) -> tuple[dict[str, str], dict[str, object]]:
     """One chat-completions call asking for ``{question, summary}`` JSON."""
     prompt = (
         "Given this knowledgebase note, respond with ONLY a JSON object "
@@ -118,11 +166,12 @@ def request_enrichment(
         f"summary of its content.\n\nTitle: {title}\n\n"
         f"{body[:ENRICH_PROMPT_CHAR_LIMIT]}"
     )
-    parsed = _chat_completion_json(config, config.llm_model, prompt)
-    return {
+    parsed, call_record = _chat_completion_json(config, config.llm_model, prompt)
+    enrichment = {
         "question": str(parsed.get("question", "")),
         "summary": str(parsed.get("summary", "")),
     }
+    return enrichment, call_record
 
 
 def apply_enrichment(note_path: Path, question: str, summary: str) -> None:
@@ -176,20 +225,25 @@ def kb_enrich(
         str(note_filter) if note_filter else None,
     )
     enriched: list[str] = []
+    call_records: list[dict[str, object]] = []
     for note_path in notes:
         try:
             fields, body = kb_index.parse_frontmatter(
                 note_path.read_text(encoding="utf-8")
             )
-            result = request_enrichment(
+            result, call_record = request_enrichment(
                 config, str(fields.get("title", note_path.stem)), body,
             )
+            call_records.append(call_record)
         except MODEL_FAILURES as exc:
             log.warning("enrichment failed for %s: %s", note_path, exc)
             continue
         apply_enrichment(note_path, result["question"], result["summary"])
         enriched.append(str(note_path))
-    return {"enriched": len(enriched), "notes": enriched}
+    response = {"enriched": len(enriched), "notes": enriched}
+    if call_records:
+        response["usage"] = fold_call_records(call_records)
+    return response
 
 
 # ── LLM-tier atomize (deterministic fallback) ─────────────────────────
@@ -267,14 +321,17 @@ def _parse_atomize_notes(parsed: Mapping[str, object]) -> list[dict[str, str]]:
 
 def request_atomize_split(
     config: KbServeConfig, title: str, body: str,
-) -> list[dict[str, str]]:
+) -> tuple[list[dict[str, str]], list[dict[str, object]]]:
     """Ask the atomize tier to split a document into self-contained notes.
 
-    Response shape: ``{"notes": [{"title", "body"}, ...]}``. Raises on any
-    network or parse failure (including a missing/malformed ``notes``
-    list); ``kb_atomize_via_llm`` decides how to degrade.
+    Response shape: ``(notes, call_records)`` where notes is
+    ``[{"title", "body"}, ...]`` and call_records is a list of
+    call_record dicts, one per chunk. Raises on any network or parse
+    failure (including a missing/malformed ``notes`` list);
+    ``kb_atomize_via_llm`` decides how to degrade.
     """
     notes: list[dict[str, str]] = []
+    call_records: list[dict[str, object]] = []
     for chunk in _atomize_prompt_body_chunks(body):
         prompt = (
             "Split the following knowledgebase note into distinct, "
@@ -282,9 +339,12 @@ def request_atomize_split(
             '{"notes": [{"title": "...", "body": "..."}, ...]}.\n\n'
             f"Title: {title}\n\n{chunk}"
         )
-        parsed = _chat_completion_json(config, config.atomize_model, prompt)
+        parsed, call_record = _chat_completion_json(
+            config, config.atomize_model, prompt
+        )
+        call_records.append(call_record)
         notes.extend(_parse_atomize_notes(parsed))
-    return notes
+    return notes, call_records
 
 
 def _write_llm_child_note(
@@ -306,13 +366,15 @@ def _write_llm_child_note(
 
 def kb_atomize_via_llm(
     config: KbServeConfig, note_path: Path, kb_home: Path,
-) -> tuple[list[Path], str]:
+) -> tuple[list[Path], str, list[dict[str, object]]]:
     """Split ``note_path`` into atomic children, model tier or not.
 
     Falls back to the deterministic heading splitter when the model is
     disabled, no key resolved, or the call fails. Returns
-    ``(children, method)`` where method is ``"llm"``, ``"deterministic"``
-    or ``"already-atomic"``.
+    ``(children, method, call_records)`` where method is ``"llm"``,
+    ``"deterministic"`` or ``"already-atomic"``. ``call_records`` is empty
+    for "already-atomic" and "deterministic", and contains one record per
+    LLM call for "llm".
 
     Which note types are already atomic is the deterministic splitter's
     rule (kb-atomize.py's ATOMIC_TYPES), and the model tier honours it
@@ -327,10 +389,10 @@ def kb_atomize_via_llm(
         note_path.read_text(encoding="utf-8")
     )
     if kb_index.derive_type(fields, note_path) in kb_atomize_script.ATOMIC_TYPES:
-        return [], "already-atomic"
+        return [], "already-atomic", []
     if config.enrich_enabled and config.llm_api_key:
         try:
-            notes = request_atomize_split(
+            notes, call_records = request_atomize_split(
                 config, str(fields.get("title", note_path.stem)), body,
             )
         except MODEL_FAILURES as exc:
@@ -339,6 +401,6 @@ def kb_atomize_via_llm(
             children = [
                 _write_llm_child_note(note_path, fields, item) for item in notes
             ]
-            return children, "llm"
+            return children, "llm", call_records
 
-    return kb_atomize_script.kb_atomize(note_path, kb_home), "deterministic"
+    return kb_atomize_script.kb_atomize(note_path, kb_home), "deterministic", []
