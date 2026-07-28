@@ -39,13 +39,19 @@ needs_lxml = pytest.mark.skipif(
 )
 
 
-def _load_kb_serve():
-    spec = importlib.util.spec_from_file_location("kb_serve_under_test", _SCRIPT_PATH)
+def _load_module(module_name: str, script_name: str):
+    """Import a hyphenated script under scripts/ by path."""
+    path = _SCRIPT_PATH.parent / script_name
+    spec = importlib.util.spec_from_file_location(module_name, path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def _load_kb_serve():
+    return _load_module("kb_serve_under_test", _SCRIPT_PATH.name)
 
 
 kb_serve = _load_kb_serve()
@@ -205,6 +211,79 @@ def test_post_without_json_content_type_is_refused(
     assert status == 415
     assert "application/json" in str(body["error"])
     assert not (config.kb_home / "proj1").exists()
+
+
+def _raw_request(base_url: str, request: bytes) -> bytes:
+    """Send a hand-built request bytes-for-bytes; return its status line.
+
+    urllib normalizes away exactly the malformed requests these cases are
+    about (duplicate headers, absolute-form targets), so the socket has to
+    be driven directly.
+    """
+    host, port = base_url.removeprefix("http://").split(":")
+    with socket.create_connection((host, int(port)), timeout=5) as sock:
+        sock.sendall(request)
+        return sock.recv(4096).split(b"\r\n")[0]
+
+
+def test_a_second_host_header_is_refused(
+    live_server: tuple[str, KbServeConfig],
+) -> None:
+    """Only the first Host is read here, so a second one lets this check
+    and anything in front of it disagree about the authority."""
+    status_line = _raw_request(
+        live_server[0],
+        b"GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nHost: evil.example\r\n\r\n",
+    )
+    assert b"403" in status_line
+
+
+def test_an_absolute_form_request_target_is_refused(
+    live_server: tuple[str, KbServeConfig],
+) -> None:
+    """Routing reads only the path, so an absolute-form target would route
+    on one authority while Host claims another."""
+    status_line = _raw_request(
+        live_server[0],
+        b"GET http://evil.example/health HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",
+    )
+    assert b"403" in status_line
+
+
+def test_a_chunked_body_is_refused_rather_than_read_as_empty(
+    live_server: tuple[str, KbServeConfig],
+) -> None:
+    """Framing this handler cannot honor must not degrade into "no body",
+    which would run the endpoint on its defaults."""
+    status_line = _raw_request(
+        live_server[0],
+        b"POST /reindex HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+        b"Content-Type: application/json\r\nTransfer-Encoding: chunked\r\n"
+        b"Content-Length: 0\r\n\r\n0\r\n\r\n",
+    )
+    assert b"400" in status_line
+
+
+def test_a_duplicate_content_length_is_refused(
+    live_server: tuple[str, KbServeConfig],
+) -> None:
+    status_line = _raw_request(
+        live_server[0],
+        b"POST /reindex HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+        b"Content-Type: application/json\r\n"
+        b"Content-Length: 0\r\nContent-Length: 9\r\n\r\n",
+    )
+    assert b"400" in status_line
+
+
+def test_kb_and_bd_enforce_the_same_security_baseline() -> None:
+    """The baseline is workbench-wide. If one service gains a guard the
+    other does not, this is what says so before it ships."""
+    bd_serve = _load_module("bd_serve_under_test", "bd-serve.py")
+    assert kb_serve.SECURITY_HEADERS == bd_serve.SECURITY_HEADERS
+    assert kb_serve.ALLOWED_HOST_NAMES == bd_serve.LOOPBACK_HOSTS
+    assert "end_headers" in vars(kb_serve.KbRequestHandler)
+    assert "end_headers" in vars(bd_serve.BdRequestHandler)
 
 
 @pytest.mark.parametrize(

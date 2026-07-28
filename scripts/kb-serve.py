@@ -412,13 +412,32 @@ class KbRequestHandler(BaseHTTPRequestHandler):
         """Answer 403 and return True when the request looks like it came
         from a web page rather than the CLI.
 
-        Two checks, because neither covers the other: a cross-origin
-        request carries an Origin header we never allowlist, and a
-        DNS-rebound request is same-origin (no Origin header at all) but
-        carries the attacker's hostname in Host.
+        Several checks, because none covers the others: a cross-origin
+        request carries an Origin header we never allowlist; a DNS-rebound
+        request is same-origin (no Origin header at all) but carries the
+        attacker's hostname in Host; an absolute-form request target lets
+        a caller route on one authority while Host says another; and two
+        Host headers let the value this check reads differ from the value
+        anything in front of it reads.
+
+        Kept deliberately identical in effect to bd-serve's own guard --
+        the baseline is workbench-wide, so the two services must not
+        diverge on which requests they refuse.
         """
         if self.headers.get("Origin"):
             self._send_json(403, {"error": "cross-origin requests are refused"})
+            return True
+        target = urlparse(self.path)
+        if target.scheme or target.netloc:
+            self._send_json(
+                403, {"error": "request target must be an origin-form path"},
+            )
+            return True
+        host_headers = self.headers.get_all("Host") or []
+        if len(host_headers) > 1:
+            self._send_json(
+                403, {"error": "exactly one Host header is required"},
+            )
             return True
         host = self.headers.get("Host", "")
         # urlparse strips the :port and the IPv6 brackets for us.
@@ -429,6 +448,15 @@ class KbRequestHandler(BaseHTTPRequestHandler):
         return False
 
     def _read_json_body(self) -> dict[str, object]:
+        # A body this handler cannot frame exactly must never be read as an
+        # empty payload: that silently turns "here is my body" into "run
+        # the endpoint with its defaults". Chunked bodies and duplicate
+        # Content-Length are refused rather than ignored.
+        if self.headers.get("Transfer-Encoding"):
+            raise ValueError("Transfer-Encoding is not supported")
+        lengths = self.headers.get_all("Content-Length") or []
+        if len(lengths) > 1:
+            raise ValueError("duplicate Content-Length")
         length = int(self.headers.get("Content-Length", "0"))
         # A negative length matters as much as an oversized one: rfile
         # .read(-1) drains to EOF, which would ignore the cap entirely.
