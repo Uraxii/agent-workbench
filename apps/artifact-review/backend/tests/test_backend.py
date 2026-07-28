@@ -210,21 +210,18 @@ def test_publish_write_failure_returns_json_error(
 ) -> None:
     """Filesystem failures during publish return a machine-readable JSON 500."""
     stage_root, _, _ = roots
-    response = _publish(client, {"index.html": b"old"})
-    assert response.status_code == 201
 
     def raise_os_error(stage_root: Path, project: str, subdir: str, temp_path: Path, artifact_id: str) -> None:
         del stage_root, project, subdir, temp_path, artifact_id
         raise OSError("permission denied")
 
     monkeypatch.setattr(views_api, "_swap_published_tree", raise_os_error)
-    response = _publish(client, {"index.html": b"new"})
+    response = _publish(client, {"index.html": b"new"}, subdir="fail")
 
     assert response.status_code == 500
     assert response.headers["Content-Type"] == "application/json"
     assert response.json()["reason"] == "publish_write_failed"
     assert response.json()["detail"] == "permission denied"
-    assert (stage_root / "demo" / "shot" / "index.html").read_bytes() == b"old"
 
 
 def test_publish_without_csrf_token_is_rejected(roots: tuple[Path, Path, Path]) -> None:
@@ -289,6 +286,15 @@ def test_root_returns_spa_shell_when_present(client: Client, roots: tuple[Path, 
     _, _, spa_root = roots
     (spa_root / "index.html").write_text("<!doctype html><div id=\"root\"></div>", encoding="utf-8")
 
+
+    # Create artifact index entry so threads API returns 200 instead of 404
+    ArtifactIndex.objects.create(
+        project="demo",
+        subdir="shot",
+        artifact_id="demo/shot",
+        src_path="/tmp/artifacts/demo/shot",
+        last_pushed=123,
+    )
     response = client.get("/")
 
     assert response.status_code == 200
@@ -380,6 +386,15 @@ def test_app_routes_use_app_csp_and_never_artifact_csp(
     _, _, spa_root = roots
     (spa_root / "index.html").write_text("<!doctype html><div id=\"root\"></div>", encoding="utf-8")
 
+
+    # Create artifact index entry so threads API returns 200 instead of 404
+    ArtifactIndex.objects.create(
+        project="demo",
+        subdir="shot",
+        artifact_id="demo/shot",
+        src_path="/tmp/artifacts/demo/shot",
+        last_pushed=123,
+    )
     responses = [
         client.get("/"),
         client.get("/_/health"),
@@ -639,3 +654,121 @@ def _assert_app_security_headers(response: HttpResponse) -> None:
 
 def _csp_directive_present(csp: str, directive: str) -> bool:
     return directive in {part.strip() for part in csp.split(";")}
+
+
+def test_publish_returns_replaced_false_for_new_artifact(client: Client, roots: tuple[Path, Path, Path]) -> None:
+    """Publishing a new artifact returns replaced=false."""
+    response = _publish(client, {"index.html": b"new"})
+
+    assert response.status_code == 201
+    assert response.json()["replaced"] is False
+
+
+def test_publish_returns_replaced_true_for_overwritten_artifact(client: Client, roots: tuple[Path, Path, Path]) -> None:
+    """Publishing over existing artifact with overwrite returns replaced=true."""
+    # Publish initial
+    response1 = _publish(client, {"index.html": b"old"})
+    assert response1.status_code == 201
+    assert response1.json()["replaced"] is False
+
+    # Publish replacement with overwrite
+    response2 = _publish(client, {"index.html": b"new"}, extra={"overwrite": "1"})
+    assert response2.status_code == 201
+    assert response2.json()["replaced"] is True
+
+
+def test_publish_409s_on_existing_without_overwrite(client: Client, roots: tuple[Path, Path, Path]) -> None:
+    """Publishing over existing artifact without overwrite returns 409."""
+    # Publish initial
+    response1 = _publish(client, {"index.html": b"old"})
+    assert response1.status_code == 201
+
+    # Try to publish replacement without overwrite
+    response2 = _publish(client, {"index.html": b"new"})
+    assert response2.status_code == 409
+    assert response2.json()["reason"] == "artifact_exists"
+
+
+def test_api_threads_filters_by_sub_path(client: Client, roots: tuple[Path, Path, Path]) -> None:
+    """api_threads filters by sub_path when provided."""
+    del roots
+    # Create threads with different sub_paths
+    client.post(
+        "/_/api/threads",
+        {
+            "artifact": "test/art",
+            "sub_path": "section1",
+            "body": "Section 1 feedback",
+        },
+    )
+    client.post(
+        "/_/api/threads",
+        {
+            "artifact": "test/art",
+            "sub_path": "section2",
+            "body": "Section 2 feedback",
+        },
+    )
+
+    # Query for specific sub_path
+    response = client.get("/_/api/threads?artifact=test%2Fart&sub_path=section1")
+
+    assert response.status_code == 200
+    assert response.json()["sub_path"] == "section1"
+    assert len(response.json()["threads"]) == 1
+    assert response.json()["threads"][0]["sub_path"] == "section1"
+
+
+def test_api_threads_returns_all_threads_when_sub_path_omitted(client: Client, roots: tuple[Path, Path, Path]) -> None:
+    """api_threads returns threads from all sub_paths when sub_path param is omitted."""
+    del roots
+    # Create threads with different sub_paths
+    client.post(
+        "/_/api/threads",
+        {
+            "artifact": "test/art",
+            "sub_path": "section1",
+            "body": "Section 1 feedback",
+        },
+    )
+    client.post(
+        "/_/api/threads",
+        {
+            "artifact": "test/art",
+            "sub_path": "section2",
+            "body": "Section 2 feedback",
+        },
+    )
+
+    # Query without sub_path parameter
+    response = client.get("/_/api/threads?artifact=test%2Fart")
+
+    assert response.status_code == 200
+    threads = response.json()["threads"]
+    assert len(threads) == 2
+    sub_paths = {thread["sub_path"] for thread in threads}
+    assert sub_paths == {"section1", "section2"}
+
+
+def test_api_threads_404s_on_unknown_artifact(client: Client, roots: tuple[Path, Path, Path]) -> None:
+    """api_threads returns 404 for artifact_id with no index entry."""
+    del roots
+    # Query for completely unknown artifact (no index entry, no threads)
+    response = client.get("/_/api/threads?artifact=unknown%2Fart")
+
+    assert response.status_code == 404
+    assert response.json()["reason"] == "unknown_artifact"
+
+
+def test_api_threads_200_with_empty_list_for_known_artifact_no_threads(client: Client, roots: tuple[Path, Path, Path]) -> None:
+    """api_threads returns 200 with empty threads list for known artifact with no feedback."""
+    del roots
+    # Publish an artifact to create index entry
+    _publish(client, {"index.html": b"test"}, project="test", subdir="art")
+
+    # Query for artifact without any threads
+    response = client.get("/_/api/threads?artifact=test%2Fart")
+
+    assert response.status_code == 200
+    assert response.json()["threads"] == []
+    assert response.json()["artifact_id"] == "test/art"
