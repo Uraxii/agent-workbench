@@ -2,7 +2,7 @@
 scripts/init-agent-workspace.sh.
 
 Scaffold the standard per-project agent workspace into a target repo:
-  * bd board            created + registered via the ``hub`` module (lives
+  * bd board            created + registered via the ``bd`` module (lives
                         centrally under the hub root, never in the repo)
   * docs/kb/            distilled markdown KB entries (tracked)
   * workstreams/        per-workstream status.md + artifacts
@@ -16,15 +16,15 @@ Idempotent: safe to re-run; each component reports "already initialized"
 rather than clobbering. Usage:
     init-workspace [TARGET_DIR] [--prefix PREFIX]
 
-Reuses the `hub` module directly for board creation (in-process call to
-hub.cmd_add-equivalent), not a subprocess to the old beads-hub.sh.
+Uses the `bd` module for board creation, not a subprocess to the old
+beads-hub.sh.
 """
 from __future__ import annotations
 
 import argparse
 from pathlib import Path
 
-from cli import hub
+from cli import bd
 
 __all__ = ["register", "scaffold_dirs"]
 
@@ -61,7 +61,7 @@ def scaffold_dirs(target_dir: Path) -> list[str]:
 def cmd_init_workspace(args: argparse.Namespace) -> int:
     """Run the full scaffold against TARGET_DIR (default cwd).
 
-    Order: register the bd board via the `hub` module (fatal on failure --
+    Order: register the bd board via the `bd` module (fatal on failure --
     it is the project's only board), then scaffold the dirs.
     """
     raw_target = Path(args.target_dir)
@@ -70,7 +70,7 @@ def cmd_init_workspace(args: argparse.Namespace) -> int:
     target_dir = raw_target.resolve()
     prefix = args.prefix or target_dir.name
 
-    hub.cmd_add(argparse.Namespace(name=prefix, prefix=None))
+    bd.cmd_add(argparse.Namespace(name=prefix, prefix=None))
     print(f"init-agent-workspace: bd board ready via hub (prefix: {prefix})")
 
     scaffold_dirs(target_dir)

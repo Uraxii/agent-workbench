@@ -24,6 +24,7 @@ __all__ = [
     "dispatch_post",
     "hub_root",
     "main",
+    "payload_write_board",
     "run_bd",
     "serve_forever",
 ]
@@ -118,8 +119,6 @@ def validate_text(value: object, field: str, limit: int, required: bool) -> str 
         raise ValidationError(f"{field}: must be non-empty")
     if len(value) > limit:
         raise ValidationError(f"{field}: too long")
-    if value.startswith("-"):
-        raise ValidationError(f"{field}: must not start with '-'")
     for char in value:
         if char == "\x00" or (ord(char) < 32 and char not in ("\n", "\t")):
             raise ValidationError(f"{field}: contains a control character")
@@ -324,6 +323,24 @@ def payload_board(payload: Mapping[str, object]) -> str:
     return validate_board_name(payload.get("board", AGGREGATOR_NAME), "board")
 
 
+def payload_write_board(payload: Mapping[str, object]) -> str:
+    board = payload_board(payload)
+    if board == AGGREGATOR_NAME:
+        raise ValidationError(
+            f"{AGGREGATOR_NAME}: aggregate board is read-only; "
+            "write to a project board instead",
+        )
+    return board
+
+
+def current_description(board: str, issue_id: str) -> str:
+    result = run_bd(board, ["show", issue_id])
+    stdout = result.get("stdout")
+    if isinstance(stdout, list) and stdout and isinstance(stdout[0], dict):
+        return str(stdout[0].get("description") or "")
+    return ""
+
+
 def handle_issue_list(payload: Mapping[str, object]) -> dict[str, object]:
     argv = ["list"]
     if "status" in payload:
@@ -346,8 +363,9 @@ def handle_issue_show(payload: Mapping[str, object]) -> dict[str, object]:
 
 
 def handle_issue_create(payload: Mapping[str, object]) -> dict[str, object]:
+    board = payload_write_board(payload)
     title = str(validate_text(payload.get("title"), "title", 500, True))
-    argv = ["create", title]
+    argv = ["create", f"--title={title}"]
     description = validate_text(payload.get("description"), "description", 20000, False)
     if description is not None:
         argv.extend(["-d", description])
@@ -360,12 +378,18 @@ def handle_issue_create(payload: Mapping[str, object]) -> dict[str, object]:
         argv.extend(["--parent", validate_issue_id(payload.get("parent"), "parent")])
     if "assignee" in payload:
         argv.extend(["-a", str(validate_text(payload.get("assignee"), "assignee", 500, True))])
-    return run_bd(payload_board(payload), argv)
+    return run_bd(board, argv)
 
 
 def handle_issue_update(payload: Mapping[str, object]) -> dict[str, object]:
+    board = payload_write_board(payload)
     issue_id = validate_issue_id(payload.get("id"))
     argv = ["update", issue_id]
+    overwrite_description = False
+    if "overwrite_description" in payload:
+        overwrite_description = validate_bool(
+            payload.get("overwrite_description"), "overwrite_description",
+        )
     if "status" in payload:
         argv.extend(["--status", validate_status(payload.get("status"))])
     if "assignee" in payload:
@@ -374,6 +398,11 @@ def handle_issue_update(payload: Mapping[str, object]) -> dict[str, object]:
         argv.extend(["-p", str(validate_priority(payload.get("priority")))])
     description = validate_text(payload.get("description"), "description", 20000, False)
     if description is not None:
+        if current_description(board, issue_id) and not overwrite_description:
+            raise ValidationError(
+                "description: existing description is non-empty; pass "
+                "overwrite_description or use /issue/note to ADD context instead",
+            )
         argv.extend(["-d", description])
     for label in validate_labels(payload.get("add_labels"), "add_labels"):
         argv.extend(["--add-label", label])
@@ -381,31 +410,34 @@ def handle_issue_update(payload: Mapping[str, object]) -> dict[str, object]:
         argv.extend(["--remove-label", label])
     if payload.get("claim") is not None and validate_bool(payload.get("claim"), "claim"):
         argv.append("--claim")
-    return run_bd(payload_board(payload), argv)
+    return run_bd(board, argv)
 
 
 def handle_issue_close(payload: Mapping[str, object]) -> dict[str, object]:
+    board = payload_write_board(payload)
     issue_id = validate_issue_id(payload.get("id"))
     argv = ["close", issue_id]
     reason = validate_text(payload.get("reason"), "reason", 500, False)
     if reason is not None:
         argv.extend(["--reason", reason])
-    return run_bd(payload_board(payload), argv)
+    return run_bd(board, argv)
 
 
 def handle_issue_note(payload: Mapping[str, object]) -> dict[str, object]:
+    board = payload_write_board(payload)
     issue_id = validate_issue_id(payload.get("id"))
     text = str(validate_text(payload.get("text"), "text", 20000, True))
-    return run_bd(payload_board(payload), ["note", issue_id, text])
+    return run_bd(board, ["note", issue_id, "--", text])
 
 
 def handle_issue_link(payload: Mapping[str, object]) -> dict[str, object]:
+    board = payload_write_board(payload)
     from_id = validate_issue_id(payload.get("from_id"), "from_id")
     to_id = validate_issue_id(payload.get("to_id"), "to_id")
     argv = ["link", from_id, to_id]
     if "type" in payload:
         argv.extend(["--type", validate_link_type(payload.get("type"))])
-    return run_bd(payload_board(payload), argv)
+    return run_bd(board, argv)
 
 
 def handle_issue_children(payload: Mapping[str, object]) -> dict[str, object]:
@@ -414,9 +446,45 @@ def handle_issue_children(payload: Mapping[str, object]) -> dict[str, object]:
 
 
 def handle_issue_priority(payload: Mapping[str, object]) -> dict[str, object]:
+    board = payload_write_board(payload)
     issue_id = validate_issue_id(payload.get("id"))
     priority = validate_priority(payload.get("priority"))
-    return run_bd(payload_board(payload), ["priority", issue_id, str(priority)])
+    return run_bd(board, ["priority", issue_id, str(priority)])
+
+
+def handle_issue_ready(payload: Mapping[str, object]) -> dict[str, object]:
+    argv = ["ready"]
+    if "assignee" in payload:
+        assignee = validate_text(payload.get("assignee"), "assignee", 500, True)
+        argv.extend(["-a", str(assignee)])
+    for label in validate_labels(payload.get("labels"), "labels"):
+        argv.extend(["--label", label])
+    if "limit" in payload:
+        argv.extend(["--limit", str(validate_limit(payload.get("limit")))])
+    return run_bd(payload_board(payload), argv)
+
+
+def handle_issue_search(payload: Mapping[str, object]) -> dict[str, object]:
+    query = str(validate_text(payload.get("query"), "query", 500, True))
+    argv = ["search", f"--query={query}"]
+    if "status" in payload:
+        argv.extend(["--status", validate_status(payload.get("status"))])
+    if "limit" in payload:
+        argv.extend(["--limit", str(validate_limit(payload.get("limit")))])
+    return run_bd(payload_board(payload), argv)
+
+
+def handle_issue_dep(payload: Mapping[str, object]) -> dict[str, object]:
+    issue_id = validate_issue_id(payload.get("id"))
+    argv = ["dep", "list", issue_id]
+    if "direction" in payload:
+        direction = payload.get("direction")
+        if direction not in {"up", "down"}:
+            raise ValidationError("direction: invalid direction")
+        argv.extend(["--direction", str(direction)])
+    if "type" in payload:
+        argv.extend(["--type", validate_link_type(payload.get("type"))])
+    return run_bd(payload_board(payload), argv)
 
 
 Endpoint = Callable[[Mapping[str, object]], dict[str, object]]
@@ -437,6 +505,9 @@ ENDPOINTS: dict[str, Endpoint] = {
     "/issue/link": handle_issue_link,
     "/issue/children": handle_issue_children,
     "/issue/priority": handle_issue_priority,
+    "/issue/ready": handle_issue_ready,
+    "/issue/search": handle_issue_search,
+    "/issue/dep": handle_issue_dep,
 }
 
 

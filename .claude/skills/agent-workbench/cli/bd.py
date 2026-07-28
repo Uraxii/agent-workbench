@@ -1,13 +1,10 @@
-"""`bd` subcommand -- HTTP client for the bd-svc board service.
+"""`bd` subcommand: HTTP client for the bd-svc board service.
 
 Carries no board logic of its own. Every verb is one POST to bd-svc
 (``scripts/bd-svc.py``), which owns ``~/.beads-hub`` and is the only thing
 that runs the ``bd`` binary. There is deliberately NO in-process fallback: if
 the service is down, the verb fails loudly naming the endpoint URL and the
 underlying error, rather than quietly touching the board on disk.
-
-The three ``ui-*`` verbs are the exception -- they drive the host-side bdui
-web front end (``cli/board.py``) and never read or write a board.
 """
 from __future__ import annotations
 
@@ -17,20 +14,21 @@ import os
 import urllib.error
 import urllib.request
 
-from cli import board
-
 __all__ = [
     "cmd_add",
     "cmd_children",
     "cmd_close",
     "cmd_create",
+    "cmd_dep",
     "cmd_init",
     "cmd_link",
     "cmd_list",
     "cmd_note",
     "cmd_path",
     "cmd_priority",
+    "cmd_ready",
     "cmd_repos",
+    "cmd_search",
     "cmd_show",
     "cmd_status",
     "cmd_sync",
@@ -161,6 +159,8 @@ def cmd_update(args: argparse.Namespace) -> int:
         payload["remove_labels"] = args.remove_label
     if args.claim:
         payload["claim"] = True
+    if args.overwrite_description:
+        payload["overwrite_description"] = True
     return _print_result("/issue/update", payload)
 
 
@@ -193,8 +193,37 @@ def cmd_priority(args: argparse.Namespace) -> int:
     return _print_result("/issue/priority", payload)
 
 
+def cmd_ready(args: argparse.Namespace) -> int:
+    payload = _board_payload(args)
+    if args.assignee is not None:
+        payload["assignee"] = args.assignee
+    if args.label:
+        payload["labels"] = args.label
+    if args.limit is not None:
+        payload["limit"] = args.limit
+    return _print_result("/issue/ready", payload)
+
+
+def cmd_search(args: argparse.Namespace) -> int:
+    payload = {**_board_payload(args), "query": args.query}
+    if args.status is not None:
+        payload["status"] = args.status
+    if args.limit is not None:
+        payload["limit"] = args.limit
+    return _print_result("/issue/search", payload)
+
+
+def cmd_dep(args: argparse.Namespace) -> int:
+    payload = {**_board_payload(args), "id": args.id}
+    if args.direction is not None:
+        payload["direction"] = args.direction
+    if args.type is not None:
+        payload["type"] = args.type
+    return _print_result("/issue/dep", payload)
+
+
 def _add_board_arg(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--board", default="hub")
+    parser.add_argument("--board", required=True)
 
 
 def _register_hub(sub: argparse._SubParsersAction) -> None:
@@ -240,6 +269,27 @@ def _register_issue_read(sub: argparse._SubParsersAction) -> None:
     _add_board_arg(children_cmd)
     children_cmd.set_defaults(func=cmd_children)
 
+    ready_cmd = sub.add_parser("ready", help="list ready issues")
+    _add_board_arg(ready_cmd)
+    ready_cmd.add_argument("--assignee", default=None)
+    ready_cmd.add_argument("--label", action="append", default=[])
+    ready_cmd.add_argument("--limit", default=None)
+    ready_cmd.set_defaults(func=cmd_ready)
+
+    search_cmd = sub.add_parser("search", help="search issues")
+    search_cmd.add_argument("query")
+    _add_board_arg(search_cmd)
+    search_cmd.add_argument("--status", default=None)
+    search_cmd.add_argument("--limit", default=None)
+    search_cmd.set_defaults(func=cmd_search)
+
+    dep_cmd = sub.add_parser("dep", help="list issue dependencies")
+    dep_cmd.add_argument("id")
+    _add_board_arg(dep_cmd)
+    dep_cmd.add_argument("--direction", choices=("up", "down"), default=None)
+    dep_cmd.add_argument("--type", default=None)
+    dep_cmd.set_defaults(func=cmd_dep)
+
 
 def _register_issue_write(sub: argparse._SubParsersAction) -> None:
     create_cmd = sub.add_parser("create", help="create an issue")
@@ -262,6 +312,7 @@ def _register_issue_write(sub: argparse._SubParsersAction) -> None:
     update_cmd.add_argument("--add-label", action="append", default=[])
     update_cmd.add_argument("--remove-label", action="append", default=[])
     update_cmd.add_argument("--claim", action="store_true")
+    update_cmd.add_argument("--overwrite-description", action="store_true")
     update_cmd.set_defaults(func=cmd_update)
 
     close_cmd = sub.add_parser("close", help="close an issue")
@@ -292,19 +343,6 @@ def _register_issue_linking(sub: argparse._SubParsersAction) -> None:
     priority_cmd.set_defaults(func=cmd_priority)
 
 
-def _register_ui(sub: argparse._SubParsersAction) -> None:
-    ui_up_cmd = sub.add_parser("ui-up", help="start the board UI")
-    ui_up_cmd.add_argument("repo_dir", nargs="?", default=".")
-    ui_up_cmd.set_defaults(func=board.cmd_up)
-
-    ui_down_cmd = sub.add_parser("ui-down", help="stop the board UI")
-    ui_down_cmd.add_argument("repo_dir", nargs="?", default=".")
-    ui_down_cmd.set_defaults(func=board.cmd_down)
-
-    ui_status_cmd = sub.add_parser("ui-status", help="list running board UIs")
-    ui_status_cmd.set_defaults(func=board.cmd_status)
-
-
 def register(subparsers: argparse._SubParsersAction) -> None:
     parser = subparsers.add_parser("bd", help="bd (beads) board hub + issue ops")
     sub = parser.add_subparsers(dest="bd_command", required=True)
@@ -312,4 +350,3 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     _register_issue_read(sub)
     _register_issue_write(sub)
     _register_issue_linking(sub)
-    _register_ui(sub)

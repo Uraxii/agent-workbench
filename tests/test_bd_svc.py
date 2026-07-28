@@ -96,20 +96,32 @@ def _init_board(hub: Path, name: str = "hub") -> None:
         ("/issue/show", {"id": "ABC-1"}, ["show", "ABC-1"], "hub"),
         ("/issue/create", {"board": "proj", "title": "T", "description": "D",
                            "priority": 2, "labels": ["a", "b"], "parent": "P1",
-                           "assignee": "me"}, ["create", "T", "-d", "D", "-p", "2",
-                           "--labels", "a,b", "--parent", "P1", "-a", "me"], "proj"),
-        ("/issue/update", {"id": "A1", "status": "blocked", "assignee": "me",
+                           "assignee": "me"}, ["create", "--title=T", "-d", "D",
+                           "-p", "2", "--labels", "a,b", "--parent", "P1",
+                           "-a", "me"], "proj"),
+        ("/issue/update", {"board": "proj", "id": "A1", "status": "blocked",
+                           "assignee": "me",
                            "priority": "4", "description": "D", "add_labels": ["x"],
                            "remove_labels": ["y"], "claim": True}, ["update", "A1",
                            "--status", "blocked", "-a", "me", "-p", "4", "-d", "D",
-                           "--add-label", "x", "--remove-label", "y", "--claim"], "hub"),
-        ("/issue/close", {"id": "A1", "reason": "done"}, ["close", "A1",
-                           "--reason", "done"], "hub"),
-        ("/issue/note", {"id": "A1", "text": "hello"}, ["note", "A1", "hello"], "hub"),
-        ("/issue/link", {"from_id": "A1", "to_id": "B2", "type": "blocks"},
-         ["link", "A1", "B2", "--type", "blocks"], "hub"),
+                           "--add-label", "x", "--remove-label", "y", "--claim"], "proj"),
+        ("/issue/close", {"board": "proj", "id": "A1", "reason": "done"},
+         ["close", "A1", "--reason", "done"], "proj"),
+        ("/issue/note", {"board": "proj", "id": "A1", "text": "hello"},
+         ["note", "A1", "--", "hello"], "proj"),
+        ("/issue/link", {"board": "proj", "from_id": "A1", "to_id": "B2",
+                         "type": "blocks"},
+         ["link", "A1", "B2", "--type", "blocks"], "proj"),
         ("/issue/children", {"id": "A1"}, ["children", "A1"], "hub"),
-        ("/issue/priority", {"id": "A1", "priority": 0}, ["priority", "A1", "0"], "hub"),
+        ("/issue/priority", {"board": "proj", "id": "A1", "priority": 0},
+         ["priority", "A1", "0"], "proj"),
+        ("/issue/ready", {"assignee": "me", "labels": ["a", "b"], "limit": 3},
+         ["ready", "-a", "me", "--label", "a", "--label", "b", "--limit", "3"],
+         "hub"),
+        ("/issue/search", {"query": "needle", "status": "open", "limit": 3},
+         ["search", "--query=needle", "--status", "open", "--limit", "3"], "hub"),
+        ("/issue/dep", {"id": "A1", "direction": "down", "type": "blocks"},
+         ["dep", "list", "A1", "--direction", "down", "--type", "blocks"], "hub"),
     ],
 )
 def test_issue_endpoints_build_expected_argv(
@@ -194,19 +206,40 @@ def test_shell_metacharacters_in_text_arrive_as_one_argument(
     service_env: tuple[Path, Path],
 ) -> None:
     hub, argv_path = service_env
-    _init_board(hub)
+    _init_board(hub, "proj")
     text = "title with ; && spaces and 'quotes' \"here\""
-    status, _ = _post("/issue/create", {"title": text, "description": text})
+    status, _ = _post(
+        "/issue/create", {"board": "proj", "title": text, "description": text},
+    )
     assert status == 200
-    assert _calls(argv_path)[-1]["argv"] == ["bd", "--json", "create", text, "-d", text]
+    assert _calls(argv_path)[-1]["argv"] == [
+        "bd", "--json", "create", f"--title={text}", "-d", text,
+    ]
 
 
-def test_title_starting_with_dash_rejected(service_env: tuple[Path, Path]) -> None:
+def test_leading_dash_title_and_description_are_flag_values(
+    service_env: tuple[Path, Path],
+) -> None:
     hub, argv_path = service_env
-    _init_board(hub)
-    status, _ = _post("/issue/create", {"title": "-bad"})
-    assert status == 400
-    assert not argv_path.exists()
+    _init_board(hub, "proj")
+    status, _ = _post(
+        "/issue/create",
+        {"board": "proj", "title": "- title", "description": "- bullet"},
+    )
+    assert status == 200
+    assert _calls(argv_path)[-1]["argv"] == [
+        "bd", "--json", "create", "--title=- title", "-d", "- bullet",
+    ]
+
+
+def test_validate_text_accepts_leading_dash_and_keeps_other_guards() -> None:
+    assert bd_serve.validate_text("- bullet", "description", 20, True) == "- bullet"
+    with pytest.raises(bd_serve.ValidationError, match="control character"):
+        bd_serve.validate_text("bad\x01", "description", 20, True)
+    with pytest.raises(bd_serve.ValidationError, match="too long"):
+        bd_serve.validate_text("x" * 21, "description", 20, True)
+    with pytest.raises(bd_serve.ValidationError, match="must be a string"):
+        bd_serve.validate_text(1, "description", 20, True)
 
 
 @pytest.mark.parametrize("priority", [5, -1, "high", "2; rm -rf /"])
@@ -214,8 +247,8 @@ def test_bad_priorities_rejected(
     service_env: tuple[Path, Path], priority: object,
 ) -> None:
     hub, argv_path = service_env
-    _init_board(hub)
-    status, _ = _post("/issue/priority", {"id": "A1", "priority": priority})
+    _init_board(hub, "proj")
+    status, _ = _post("/issue/priority", {"board": "proj", "id": "A1", "priority": priority})
     assert status == 400
     assert not argv_path.exists()
 
@@ -225,18 +258,159 @@ def test_good_priorities_accepted(
     service_env: tuple[Path, Path], priority: int,
 ) -> None:
     hub, argv_path = service_env
-    _init_board(hub)
-    status, _ = _post("/issue/priority", {"id": "A1", "priority": priority})
+    _init_board(hub, "proj")
+    status, _ = _post("/issue/priority", {"board": "proj", "id": "A1", "priority": priority})
     assert status == 200
     assert _calls(argv_path)[-1]["argv"][-1] == str(priority)
 
 
 def test_unknown_link_type_and_status_rejected(service_env: tuple[Path, Path]) -> None:
     hub, argv_path = service_env
-    _init_board(hub)
-    assert _post("/issue/link", {"from_id": "A1", "to_id": "B2", "type": "bad"})[0] == 400
+    _init_board(hub, "proj")
+    assert _post(
+        "/issue/link",
+        {"board": "proj", "from_id": "A1", "to_id": "B2", "type": "bad"},
+    )[0] == 400
     assert _post("/issue/list", {"status": "bad"})[0] == 400
     assert not argv_path.exists()
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "payload"),
+    [
+        ("/issue/create", {"title": "T"}),
+        ("/issue/update", {"id": "A1", "status": "blocked"}),
+        ("/issue/close", {"id": "A1"}),
+        ("/issue/note", {"id": "A1", "text": "note"}),
+        ("/issue/link", {"from_id": "A1", "to_id": "B2"}),
+        ("/issue/priority", {"id": "A1", "priority": 1}),
+    ],
+)
+def test_payload_write_board_rejects_hub_for_write_endpoints(
+    service_env: tuple[Path, Path], endpoint: str, payload: dict[str, object],
+) -> None:
+    hub, argv_path = service_env
+    _init_board(hub)
+    status, body = _post(endpoint, {"board": "hub", **payload})
+    assert status == 400
+    assert "hub" in str(body["error"])
+    assert "read-only" in str(body["error"])
+    assert not argv_path.exists()
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "payload"),
+    [
+        ("/issue/list", {}),
+        ("/issue/show", {"id": "A1"}),
+        ("/issue/children", {"id": "A1"}),
+        ("/issue/ready", {}),
+        ("/issue/search", {"query": "needle"}),
+        ("/issue/dep", {"id": "A1"}),
+    ],
+)
+def test_reads_still_accept_hub(
+    service_env: tuple[Path, Path], endpoint: str, payload: dict[str, object],
+) -> None:
+    hub, argv_path = service_env
+    _init_board(hub)
+    status, _ = _post(endpoint, {"board": "hub", **payload})
+    assert status == 200
+    assert _calls(argv_path)[-1]["beads_dir"] == str(hub / "hub" / ".beads")
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "handler_name"),
+    [
+        ("/issue/ready", "handle_issue_ready"),
+        ("/issue/search", "handle_issue_search"),
+        ("/issue/dep", "handle_issue_dep"),
+    ],
+)
+def test_new_read_endpoints_are_registered(endpoint: str, handler_name: str) -> None:
+    assert bd_serve.ENDPOINTS[endpoint] is getattr(bd_serve, handler_name)
+
+
+def test_issue_dep_rejects_bad_direction_without_subprocess(
+    service_env: tuple[Path, Path],
+) -> None:
+    hub, argv_path = service_env
+    _init_board(hub)
+    status, _ = _post("/issue/dep", {"id": "A1", "direction": "sideways"})
+    assert status == 400
+    assert not argv_path.exists()
+
+
+def test_description_update_refuses_non_empty_without_overwrite(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, list[str]]] = []
+
+    def fake_run_bd(
+        board: str, argv: list[str], *, json_output: bool = True,
+    ) -> dict[str, object]:
+        calls.append((board, argv))
+        return {"stdout": [{"description": "existing"}]}
+
+    monkeypatch.setattr(bd_serve, "run_bd", fake_run_bd)
+    status, body = _post(
+        "/issue/update", {"board": "proj", "id": "A1", "description": "new"},
+    )
+    assert status == 400
+    assert "overwrite_description" in str(body["error"])
+    assert "/issue/note" in str(body["error"])
+    assert calls == [("proj", ["show", "A1"])]
+
+
+@pytest.mark.parametrize(
+    ("existing", "overwrite"),
+    [("", False), ("existing", True)],
+)
+def test_description_update_allows_empty_or_explicit_overwrite(
+    monkeypatch: pytest.MonkeyPatch, existing: str, overwrite: bool,
+) -> None:
+    calls: list[tuple[str, list[str]]] = []
+
+    def fake_run_bd(
+        board: str, argv: list[str], *, json_output: bool = True,
+    ) -> dict[str, object]:
+        calls.append((board, argv))
+        if argv == ["show", "A1"]:
+            return {"stdout": [{"description": existing}]}
+        return {"stdout": {"argv": argv}}
+
+    payload: dict[str, object] = {
+        "board": "proj", "id": "A1", "description": "new",
+    }
+    if overwrite:
+        payload["overwrite_description"] = True
+    monkeypatch.setattr(bd_serve, "run_bd", fake_run_bd)
+    status, _ = _post("/issue/update", payload)
+    assert status == 200
+    assert calls == [
+        ("proj", ["show", "A1"]),
+        ("proj", ["update", "A1", "-d", "new"]),
+    ]
+
+
+def test_description_overwrite_flag_must_be_boolean(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run_bd(
+        board: str, argv: list[str], *, json_output: bool = True,
+    ) -> dict[str, object]:
+        return {"stdout": [{"description": ""}]}
+
+    monkeypatch.setattr(bd_serve, "run_bd", fake_run_bd)
+    status, body = _post(
+        "/issue/update",
+        {
+            "board": "proj", "id": "A1", "description": "new",
+            "overwrite_description": "yes",
+        },
+    )
+    assert status == 400
+    assert "overwrite_description" in str(body["error"])
 
 
 def test_bd_nonzero_surfaces_stderr(

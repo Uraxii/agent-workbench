@@ -58,7 +58,7 @@ def _all_present(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
         doctor.shutil, "which",
         _which_only("docker", "podman", "podman-compose", "docker-compose",
-                    "git", "bd", "tailscale"),
+                    "git", "tailscale"),
     )
     monkeypatch.setattr(doctor.subprocess, "run", _fake_run_ok)
     _kb_env_present(monkeypatch, tmp_path)
@@ -102,7 +102,7 @@ def test_rootful_podman_still_passes_the_gate(
 
     monkeypatch.setattr(
         doctor.shutil, "which",
-        _which_only("podman", "podman-compose", "git", "bd"),
+        _which_only("podman", "podman-compose", "git"),
     )
     monkeypatch.setattr(doctor.subprocess, "run", fake_run_rootful)
     _kb_env_present(monkeypatch, tmp_path)
@@ -117,7 +117,7 @@ def test_missing_required_check_fails_overall_and_cmd_doctor_exits_nonzero(
     """git missing (a required check) fails the gate and the handler's exit code."""
     monkeypatch.setattr(
         doctor.shutil, "which",
-        _which_only("docker", "podman-compose", "bd", "tailscale"),
+        _which_only("docker", "podman-compose", "tailscale"),
     )
     monkeypatch.setattr(doctor.subprocess, "run", _fake_run_ok)
     _kb_env_present(monkeypatch, tmp_path)
@@ -134,7 +134,7 @@ def test_optional_missing_does_not_fail_the_gate(
     """All required present, tailscale (optional) missing -> still exit 0."""
     monkeypatch.setattr(
         doctor.shutil, "which",
-        _which_only("docker", "podman-compose", "git", "bd"),
+        _which_only("docker", "podman-compose", "git"),
     )
     monkeypatch.setattr(doctor.subprocess, "run", _fake_run_ok)
     _kb_env_present(monkeypatch, tmp_path)

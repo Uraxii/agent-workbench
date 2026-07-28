@@ -4,8 +4,8 @@ concrete fix hint, and exiting non-zero if anything REQUIRED is missing.
 
 Required: a container runtime (docker or podman), a compose implementation
 (``docker compose`` CLI plugin, ``podman-compose``, or ``docker-compose``),
-``git``, a Python new enough to run this CLI, ``bd`` (the board CLI the hub
-verbs shell out to), and ``~/.knowledgebase/kb.env`` (compose declares it as
+``git``, a Python new enough to run this CLI, and ``~/.knowledgebase/kb.env``
+(compose declares it as
 an ``env_file``, so ``up`` fails outright when it is absent).
 
 Optional, reported but never failing the exit code: ``tailscale``.
@@ -162,18 +162,6 @@ def check_python() -> Check:
     )
 
 
-def check_bd() -> Check:
-    """Required: `bd` (the beads board CLI) on PATH.
-
-    The hub and init-workspace verbs shell out to it directly (cli/hub.py).
-    """
-    return _binary_check(
-        "bd", True,
-        "install bd (the beads board CLI) from "
-        "https://github.com/steveyegge/beads",
-    )
-
-
 def check_kb_env() -> Check:
     """Required: ``~/.knowledgebase/kb.env`` exists.
 
@@ -206,7 +194,6 @@ def run_checks() -> list[Check]:
         check_compose(),
         check_git(),
         check_python(),
-        check_bd(),
         check_kb_env(),
         check_tailscale(),
     ]

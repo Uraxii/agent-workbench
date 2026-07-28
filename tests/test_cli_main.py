@@ -51,11 +51,11 @@ def test_top_level_help_flags_both_work(flag: str) -> None:
 
 
 def test_bd_help_lists_expected_sub_subcommands() -> None:
-    """`bd --help` lists the folded hub+board sub-subcommands."""
+    """`bd --help` lists the folded hub and issue subcommands."""
     result = run_cli("bd", "--help")
     assert result.returncode == 0
     for name in ("init", "add", "sync", "list", "path", "status",
-                 "ui-up", "ui-down", "ui-status"):
+                 "ready", "search", "dep"):
         assert name in result.stdout
 
 
