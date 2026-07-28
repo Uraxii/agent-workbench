@@ -5,7 +5,7 @@ description: Locally deployable agent workbench (knowledgebase vault + bd board 
 
 # agent-workbench
 
-One skill, one executable, six subcommands. Every tool is pure Python
+One skill, one executable. Every tool is pure Python
 (argparse, stdlib + the two pre-existing lxml/readability deps kb-clip
 already used). No bash, no `.sh` shims. The CLI lives BESIDE the hardened
 container, never inside its image.
@@ -21,9 +21,9 @@ $AW <subcommand> [ARGS]
 |---|---|---|
 | `kb` | `scripts/kb.sh` | knowledgebase service client: init/add/path/index/clip/put/query/atomize/status/decision |
 | `bd` | `scripts/beads-hub.sh` + `scripts/board-ui.sh` | bd board hub (init/add/sync/list/path/status) + bdui web front end (ui-up/ui-down/ui-status, bare-host, per-repo -- separate from the always-on compose `bdui` service below, which is the single global hub-aggregator view) |
-| `artifact` | (new) | artifact review app: publish/feedback/serve/status, a facade over `.claude/skills/artifact-serve/scripts/artifact-serve.py` |
+| `artifact` | (new) | artifact review service client: publish/feedback/serve/status, an HTTP client of the `artifact-review` service in `apps/artifact-review/` |
 | `install` | (new) | (un)install this repo's skill into `$HOME/.claude/skills/agent-workbench` (`--link`/`--copy`/`--uninstall`) |
-| `init-workspace` | `scripts/init-agent-workspace.sh` | scaffold docs/kb + workstreams + bd board + reindex hook into a repo |
+| `init-workspace` | `scripts/init-agent-workspace.sh` | scaffold docs/kb + workstreams + bd board into a repo |
 
 - `kb` -- see `modes/kb.md` for the full kb walkthrough (clip/put/query,
   decisions, the derived-index rebuild, the optional LLM passes).
@@ -42,9 +42,11 @@ $AW init-workspace [TARGET_DIR] [--prefix PREFIX]
 
 `install` (un)installs this repo's skill dir into
 `$HOME/.claude/skills/agent-workbench`. `init-workspace` scaffolds
-`docs/kb/` + `workstreams/` + a bd board + the reindex hook into a target
-repo. Bringing the stack up is not a CLI verb: see "Deploy + hardening"
-below.
+`docs/kb/` + `workstreams/` + a bd board into a target repo. It builds no
+repo-local search index: the searchable knowledgebase is the vault under
+`KB_HOME`, indexed by the one indexer (`scripts/kb-index.py`) and searched
+with `kb query`. Bringing the stack up is not a CLI verb either: see
+"Deploy + hardening" below.
 
 ## How it differs from the old scripts
 
