@@ -411,6 +411,20 @@ def test_app_routes_use_app_csp_and_never_artifact_csp(
 def test_threads_filter_by_required_artifact_and_echo_scope(client: Client, roots: tuple[Path, Path, Path]) -> None:
     """Thread listing is scoped by the public artifact query parameter."""
     del roots
+    ArtifactIndex.objects.create(
+        project="artifact",
+        subdir="A",
+        artifact_id="artifact/A",
+        src_path="/tmp/artifacts/artifact/A",
+        last_pushed=123,
+    )
+    ArtifactIndex.objects.create(
+        project="artifact",
+        subdir="B",
+        artifact_id="artifact/B",
+        src_path="/tmp/artifacts/artifact/B",
+        last_pushed=123,
+    )
     first = client.post(
         "/_/api/threads",
         {
@@ -692,6 +706,13 @@ def test_publish_409s_on_existing_without_overwrite(client: Client, roots: tuple
 def test_api_threads_filters_by_sub_path(client: Client, roots: tuple[Path, Path, Path]) -> None:
     """api_threads filters by sub_path when provided."""
     del roots
+    ArtifactIndex.objects.create(
+        project="test",
+        subdir="art",
+        artifact_id="test/art",
+        src_path="/tmp/artifacts/test/art",
+        last_pushed=123,
+    )
     # Create threads with different sub_paths
     client.post(
         "/_/api/threads",
@@ -722,6 +743,13 @@ def test_api_threads_filters_by_sub_path(client: Client, roots: tuple[Path, Path
 def test_api_threads_returns_all_threads_when_sub_path_omitted(client: Client, roots: tuple[Path, Path, Path]) -> None:
     """api_threads returns threads from all sub_paths when sub_path param is omitted."""
     del roots
+    ArtifactIndex.objects.create(
+        project="test",
+        subdir="art",
+        artifact_id="test/art",
+        src_path="/tmp/artifacts/test/art",
+        last_pushed=123,
+    )
     # Create threads with different sub_paths
     client.post(
         "/_/api/threads",
