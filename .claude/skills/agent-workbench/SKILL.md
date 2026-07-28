@@ -1,6 +1,6 @@
 ---
 name: agent-workbench
-description: Locally deployable agent workbench (knowledgebase vault + bd board hub + bdui web front end + hardened kb-serve/artifact-serve containers) driven by ONE pure-Python CLI. Use to run knowledgebase clip/put/query, manage bd boards under the central hub, launch the board web UI, scaffold a repo's agent workspace, or record/audit an architectural or scope decision the moment it's settled ("record decision", "we decided", "log this decision").
+description: Locally deployable agent workbench (knowledgebase vault + bd board hub + bdui web front end + hardened kb-serve/artifact-review containers) driven by ONE pure-Python CLI. Use to run knowledgebase clip/put/query, manage bd boards under the central hub, launch the board web UI, scaffold a repo's agent workspace, or record/audit an architectural or scope decision the moment it's settled ("record decision", "we decided", "log this decision").
 ---
 
 # agent-workbench
@@ -65,7 +65,7 @@ the stack up. There is no `deploy` subcommand and no systemd quadlet
 layer: the CLI never starts, stops, or builds a container.
 
 ```bash
-podman-compose -f docker-compose.yml up -d               # kb-serve + artifact-serve + bdui
+podman-compose -f docker-compose.yml up -d               # kb-serve + bd-serve + artifact-serve + bdui
 podman-compose --profile n8n -f docker-compose.yml up -d # adds n8n
 docker compose -f docker-compose.yml up -d               # same file, docker host
 ```
@@ -97,7 +97,7 @@ detail on this holdback.
 
 ## n8n Public API (agent-facing)
 
-n8n's Public REST API is enabled (pinned in `n8n.container`), letting an
+n8n's Public REST API is enabled (pinned in `docker-compose.yml`), letting an
 agent create and trigger workflows without a human in the loop for the
 API calls themselves.
 

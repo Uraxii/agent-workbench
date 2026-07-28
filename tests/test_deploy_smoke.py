@@ -1,20 +1,20 @@
-"""Smoke tests for the agent-workbench deploy bundle.
+"""Smoke tests for the agent-workbench container stack.
 
 Two kinds of coverage:
 
 - test_kb_serve_health / test_artifact_serve_health: assert the LIVE stack
-  answers HTTP 200 when it is already up (via `deploy/agent-workbench/
-  agent-workbench up`). Skip cleanly whenever the tooling or the service
-  itself is not present -- these never start, stop, or otherwise mutate
-  either service.
+  answers HTTP 200 when it is already up (via `podman-compose up -d`, the
+  one supported deploy path). Skip cleanly whenever the runtime or the
+  service itself is not present -- these never start, stop, or otherwise
+  mutate either service.
 - test_kb_serve_container_boundary / test_artifact_serve_container_boundary:
   ALWAYS run (skip only if podman itself is missing), independent of
   whether the live stack is up. They build the two hardened images under
   distinct test tags on alternate host ports, run them standalone via
-  `podman run` (never via the real quadlets/systemctl), curl for health,
-  and tear the containers down in a fixture `finally` regardless of
-  pass/fail. This is what actually exercises the container boundary in a
-  clean/CI environment where the live stack has never been started.
+  `podman run` (never through the compose stack), curl for health, and
+  tear the containers down in a fixture `finally` regardless of pass/fail.
+  This is what actually exercises the container boundary in a clean/CI
+  environment where the live stack has never been started.
 """
 from __future__ import annotations
 
@@ -51,13 +51,12 @@ HEALTH_POLL_TRIES = 20
 HEALTH_POLL_DELAY_SEC = 0.5
 
 
-def _require_tooling() -> None:
-    for tool in ("podman", "systemctl"):
-        if shutil.which(tool) is None:
-            pytest.skip(f"{tool} not available on this host")
-
-
 def _require_podman() -> None:
+    """Skip when no container runtime is present.
+
+    Only podman is checked. The stack is compose-managed, so there is no
+    systemd unit to query and nothing here should gate on systemctl.
+    """
     if shutil.which("podman") is None:
         pytest.skip("podman not available on this host")
 
@@ -91,7 +90,7 @@ def _run(cmd: list[str], timeout: float) -> None:
 
 
 def test_kb_serve_health() -> None:
-    _require_tooling()
+    _require_podman()
     status = _http_status(KB_HEALTH_URL)
     if status is None:
         pytest.skip("kb-serve not reachable at 127.0.0.1:9100 -- stack not up")
@@ -99,7 +98,7 @@ def test_kb_serve_health() -> None:
 
 
 def test_artifact_serve_health() -> None:
-    _require_tooling()
+    _require_podman()
     status = _http_status(ARTIFACT_SERVE_URL)
     if status is None:
         pytest.skip("artifact-serve not reachable at 127.0.0.1:9099 -- stack not up")

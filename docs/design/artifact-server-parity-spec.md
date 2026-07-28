@@ -10,7 +10,6 @@ Primary sources:
 | `.claude/skills/agent-workbench/cli/artifact.py` | Host HTTP client contract. |
 | `.claude/skills/agent-workbench/modes/artifact.md` | User-facing artifact mode contract. |
 | `docker-compose.yml` | 71-106 portable compose review-serve service |
-| `.claude/skills/agent-workbench/cli/deploy.py` | 188-227 build, install, start, healthcheck, 258-268 safe down behavior |
 | `tests/test_review_serve_bd_mirror.py` | 20-51 bd board resolution and missing CLI behavior |
 | `tests/test_review_serve_http.py` | 36-260 HTTP behavior coverage |
 | `tests/test_review_serve_core.py` | 23-248 schema, anchors, store, feedback, path safety |
@@ -466,17 +465,16 @@ JSON shape:
 | Control | Current source |
 |---|---|
 | Base image pinned by digest | `FROM python@sha256:6771159cd4fa5d9bba1258caf0b82e6b73458c694d178ad97c5e925c2d0e1a91`. |
-| Rootless identity | Quadlet `User=%U`, `Group=%U`, `UserNS=keep-id`; compose uses best-effort `user: "${UID:-1000}:${GID:-1000}"`. |
-| Read-only root filesystem | Quadlet `ReadOnly=true`; compose `read_only: true`. |
-| Tmpfs | Quadlet `Tmpfs=/tmp`; compose `tmpfs: /tmp`. |
-| Drop capabilities | Quadlet `DropCapability=ALL`; compose `cap_drop: [ALL]`. |
-| No new privileges | Quadlet `NoNewPrivileges=true`; compose `security_opt: no-new-privileges:true`. |
+| Rootless identity | Compose uses best-effort `user: "${UID:-1000}:${GID:-1000}"`. |
+| Read-only root filesystem | Compose `read_only: true`. |
+| Tmpfs | Compose `tmpfs: /tmp`. |
+| Drop capabilities | Compose `cap_drop: [ALL]`. |
+| No new privileges | Compose `security_opt: no-new-privileges:true`. |
 | Narrow mounts | `/tmp/artifacts:/tmp/artifacts:rw` and `~/.local/share/artifacts:~/.local/share/artifacts:rw`. No `$HOME`-wide mount. |
-| Loopback publish | App binds `REVIEW_SERVE_HOST=0.0.0.0` in-container. Podman publishes only `127.0.0.1:9099:9099`. Compose does the same. |
+| Loopback publish | App binds `REVIEW_SERVE_HOST=0.0.0.0` in-container. Compose publishes only `127.0.0.1:9099:9099`. |
 | Healthcheck | Containerfile and compose GET `http://127.0.0.1:${REVIEW_SERVE_PORT:-9099}/`. |
-| SELinux note | Quadlet disables label check with `SecurityLabelDisable=true` for the narrow feedback bind. |
 
-The tracked container README still contains older text about a broad `~` read-only mount and `Network=host`. The current hardening source of truth is the Containerfile, quadlet, compose file, deploy CLI, and tests.
+The current hardening source of truth is the Containerfile, `docker-compose.yml`, and the tests. There is no systemd quadlet layer and no `deploy` CLI verb; compose is the only deploy path.
 
 ### 6.3 Tailscale Serve
 
@@ -487,9 +485,9 @@ tailscale serve --bg --https=443 http://127.0.0.1:9099
 ```
 
 The artifact CLI no longer exposes or stops the service. Use host-level
-Tailscale management and deploy or compose lifecycle commands.
+Tailscale management and compose lifecycle commands.
 
-Live-service footgun: do not add any app, deploy, or shutdown path that tears down host Tailscale Serve mappings unexpectedly. The deploy CLI `down` only stops bundle-owned quadlets and does not call `tailscale serve off`.
+Live-service footgun: do not add any app or shutdown path that tears down host Tailscale Serve mappings unexpectedly. Bringing the stack down with compose does not call `tailscale serve off`, and nothing should.
 
 ### 6.4 Held HTTP publish endpoint, ticket `agent-workbench-wxh`
 

@@ -615,11 +615,12 @@ def cmd_resolve_secret(args: argparse.Namespace) -> int:
     logged. Prints the key with an empty value when nothing resolves, and
     callers treat that the same as "no key configured".
 
-    Kept for ``scripts/kb-container/kb-serve.container``'s ExecStartPre,
-    which resolves the key host-side so the container never needs the
-    vault CLI. That quadlet is slated for deletion in favour of
-    docker-compose (decision topic agent-workbench-container-runtime);
-    this subcommand goes with it.
+    Written for a host-side pre-start hook that resolved the key before
+    the container started. Compose has no pre-start hook and resolves the
+    key in-process instead (see ``resolve_api_key``), so nothing in this
+    repo calls this verb any more. It is kept only as the documented
+    escape hatch for a host that wants to resolve the key outside the
+    container; ``scripts/n8n-container/n8n-secret.py`` mirrors its shape.
     """
     kb_home = resolve_kb_home(args.kb_home)
     merged = {**load_kb_env(kb_home), **os.environ}
