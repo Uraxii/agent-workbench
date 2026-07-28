@@ -28,7 +28,7 @@ $AW <subcommand> [ARGS]
 
 For the full verb list and invocation examples for each subcommand family,
 see the corresponding mode doc:
-- `modes/kb.md` for kb verbs (clip/put/query/atomize/decision/enrich/etc)
+- `modes/kb.md` for kb verbs (clip/put/query/atomize/decision/enrich/regenerate/etc)
 - `modes/bd.md` for bd verbs (init/add/sync/repos/path/status + issue operations + ui status)
 - `modes/artifact.md` for artifact verbs (publish/feedback/status + new comment/reply/resolve)
 

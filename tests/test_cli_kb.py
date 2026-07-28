@@ -29,7 +29,7 @@ _AGENT_WORKBENCH_DIR = (
 if str(_AGENT_WORKBENCH_DIR) not in sys.path:
     sys.path.insert(0, str(_AGENT_WORKBENCH_DIR))
 
-from cli import kb, kb_decision  # noqa: E402
+from cli import kb, kb_decision, kb_regenerate  # noqa: E402
 
 
 class _FakeResponse:
@@ -138,6 +138,8 @@ def test_a_failed_verb_never_falls_back_to_touching_the_vault(
         (["path", "proj1"], "GET", "/project?project=proj1"),
         (["query", "widgets"], "GET", "/query?q=widgets"),
         (["enrich"], "POST", "/enrich"),
+        (["regenerate", "missing"], "POST", "/regenerate/missing"),
+        (["regenerate", "full"], "POST", "/regenerate/full"),
     ],
 )
 def test_verb_calls_its_endpoint(
@@ -279,3 +281,27 @@ def test_decision_module_holds_no_vault_logic() -> None:
     """The chain walk and frontmatter dialect live in the service now."""
     assert not hasattr(kb_decision, "render_decision")
     assert not hasattr(kb_decision, "audit")
+
+
+# ── regenerate verbs ──────────────────────────────────────────────────
+
+
+def test_regenerate_dry_run_flag_reaches_the_payload(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    patcher, seen = _capture_request({"mode": "missing", "dry_run": True})
+    args = _run(["regenerate", "missing", "--dry-run"])
+    with patcher:
+        assert args.func(args) == 0
+    [request] = seen
+    assert request.full_url == "http://127.0.0.1:9100/regenerate/missing"
+    assert json.loads(request.data) == {"dry_run": True}
+    capsys.readouterr()
+
+
+def test_regenerate_module_holds_no_vault_logic() -> None:
+    """Mirrors test_decision_module_holds_no_vault_logic: kb_regenerate.py
+    is an HTTP client only. The batching, staleness comparison and
+    embedding all live in scripts/kb_embed.py inside the service."""
+    assert not hasattr(kb_regenerate, "sync_vectors")
+    assert not hasattr(kb_regenerate, "stale_notes")

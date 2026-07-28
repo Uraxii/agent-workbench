@@ -1,7 +1,7 @@
 # agent-workbench: kb mode
 
 Knowledgebase ops:
-init/add/path/index/clip/put/query/atomize/status/decision/enrich.
+init/add/path/index/clip/put/query/atomize/status/decision/enrich/regenerate.
 
 The vault lives at `$KB_HOME` (default `~/.knowledgebase`) and the
 knowledgebase service is the only thing that opens it. Every verb below is
@@ -43,12 +43,13 @@ When a request makes at least one model call, the response includes a `usage`
 key with `calls` (HTTP calls made), token counts (summed across calls),
 `generation_ids` (provider ids in call order, for billing reconciliation),
 and `models` (unique and sorted; a list because `clip`/`put`/`atomize` spend
-via `KB_ATOMIZE_MODEL` while `enrich` spends via `KB_LLM_MODEL`). The key's
-absence means the request was free. Verbs that can carry `usage`: `clip`,
-`put`, `atomize`, `enrich`. Not `decision record` (always already-atomic),
-nor `index`, `query`, `status`, `init`, `add`, `path`. This enables cost
-estimation: run `kb enrich` once, divide `total_tokens` by `enriched`, and
-multiply by notes remaining.
+via `KB_ATOMIZE_MODEL`, `enrich` spends via `KB_LLM_MODEL`, and `regenerate`
+spends via `KB_EMBED_MODEL`). The key's absence means the request was free.
+Verbs that can carry `usage`: `clip`, `put`, `atomize`, `enrich`,
+`regenerate`. Not `decision record` (always already-atomic), nor `index`,
+`query`, `status`, `init`, `add`, `path`. This enables cost estimation: run
+`kb enrich` once, divide `total_tokens` by `enriched`, and multiply by
+notes remaining.
 
 ## init -- create the vault
 
@@ -84,13 +85,20 @@ Prints the bare path only (the service's `GET /project` actually answers
 
 ```bash
 $AW kb index
-# -> {"indexed": 2370, "embedded": 2370, "db": "/home/nicole/.knowledgebase/index/kb.db"}
+# -> {"indexed": 2370, "embedded": 0, "db": "/home/nicole/.knowledgebase/index/kb.db"}
 ```
 
-Rebuilds the whole derived layer (FTS5 rows and vectors) from the vault
-markdown alone. That is the recovery path: the index is never something to
-back up, and editing the vault outside the service is repaired by
-rerunning this.
+Rebuilds the FTS5 index whole from the vault markdown, then incrementally
+embeds only stale vectors and prunes vectors for notes that no longer
+exist. That is the recovery path: the index is never something to back
+up, and editing the vault outside the service is repaired by rerunning
+this.
+
+`embedded`, on every verb below that carries it, counts vectors WRITTEN
+BY THAT CALL, not the vault's total vector count -- on a warm database
+(nothing stale, as above) it reads `0` even though the vault has 2370
+vectors already. `GET /health`'s `vector_count` is where the running
+total lives.
 
 ## clip -- capture a web source
 
@@ -98,7 +106,7 @@ rerunning this.
 $AW kb clip "https://example.com/article" --project gvn
 # -> {"path": "/home/nicole/.knowledgebase/gvn/sources/article.md",
 #     "children": ["/home/nicole/.knowledgebase/gvn/sources/article--intro.md"],
-#     "method": "llm", "indexed": 2371, "embedded": 2371,
+#     "method": "llm", "indexed": 2371, "embedded": 2,
 #     "usage": {"calls": 1, "prompt_tokens": 284, "completion_tokens": 293,
 #               "total_tokens": 577,
 #               "generation_ids": ["gen-1785253583-u4apBDVzZObTHrRoRNcg"],
@@ -108,8 +116,13 @@ $AW kb clip "https://example.com/article" --project gvn
 `--project` defaults to `inbox`. Every clip writes type `source`, which is
 splittable; with `KB_ENRICH=1` plus a resolvable key, the clip makes a model
 call and the response includes a `usage` key. Atomizing, indexing and
-embedding always happen in the same call and cannot be skipped; the model
-tier is controlled by `KB_ENRICH`.
+embedding always happen in the same call and cannot be skipped; embedding
+is scoped to the clipped note plus its children (here 1 parent + 1 child =
+`"embedded": 2`), never the whole vault. The model tier is controlled by
+`KB_ENRICH`. If the embedding backend fails, the response still carries
+`indexed`/`embedded` for the write that already landed, plus an
+`embed_error` string naming what went wrong -- the write itself never
+fails because embedding degraded.
 
 ## put -- write a note (body on stdin)
 
@@ -118,7 +131,7 @@ echo "Body text goes here." | $AW kb put gvn "My Note" --type note \
   --source "https://example.com"
 # -> {"path": "/home/nicole/.knowledgebase/gvn/notes/my-note.md",
 #     "children": [], "method": "already-atomic", "indexed": 2372,
-#     "embedded": 2372}
+#     "embedded": 1}
 ```
 
 `--type` defaults to `note`, `--source` defaults to `""`. `--type decision`
@@ -138,7 +151,7 @@ $AW kb atomize --url "https://example.com/article" --project gvn \
 # -> {"parent": "/home/nicole/.knowledgebase/gvn/sources/article.md",
 #     "path": "/home/nicole/.knowledgebase/gvn/sources/article.md",
 #     "children": ["/home/nicole/.knowledgebase/gvn/sources/article--intro.md"],
-#     "method": "llm", "indexed": 2373, "embedded": 2373,
+#     "method": "llm", "indexed": 2373, "embedded": 2,
 #     "usage": {"calls": 1, "prompt_tokens": 284, "completion_tokens": 293,
 #               "total_tokens": 577,
 #               "generation_ids": ["gen-1785253583-u4apBDVzZObTHrRoRNcg"],
@@ -151,7 +164,9 @@ Give `--url` or pipe content on stdin (omit `--url` to read stdin).
 instead. Splittable types with `KB_ENRICH=1` plus a key configured make a
 model call with `method: "llm"` and include a `usage` key; deterministic
 splits have `method: "deterministic"` and no `usage` key -- both are normal
-outcomes, never an error.
+outcomes, never an error. `embedded` is scoped to this note plus its
+children (see `## clip`); an `embed_error` key appears alongside it if the
+embedding backend failed, without failing the write.
 
 ## query -- hybrid keyword + vector search
 
@@ -189,7 +204,7 @@ $AW kb decision record --project gvn --topic base-body-slices \
   [--supersedes "<path>"]
 # -> {"path": "/home/nicole/.knowledgebase/gvn/decisions/base-body-slices__2026-07-22.md",
 #     "children": [], "method": "already-atomic", "indexed": 2374,
-#     "embedded": 2374, "supersedes": ""}
+#     "embedded": 1, "supersedes": ""}
 
 $AW kb decision audit base-body-slices --project gvn
 # -> [{"date": "2026-07-22", "status": "superseded",
@@ -264,6 +279,72 @@ default) or no LLM key resolved, the result reads `{"enriched": 0,
 `KB_ENRICH=1` plus a key configured at deploy time in kb.env (the real
 file is `$HOME/.knowledgebase/kb.env`; the repo ships an example template).
 Never document or imply a real secret value in deploy configuration.
+
+## regenerate -- bounded, resumable vector backfill
+
+```bash
+$AW kb regenerate missing
+# -> {"mode": "missing", "dry_run": false,
+#     "embeddings": {"enabled": true, "embedded": 192, "pruned": 0,
+#                     "remaining": 2188, "chars_sent": 341908,
+#                     "usage": {"calls": 6, "prompt_tokens": 85477,
+#                               "completion_tokens": 0, "total_tokens": 85477,
+#                               "generation_ids": [],
+#                               "models": ["text-embedding-3-small"]}},
+#     "atomize": {"enabled": false, "processed": 0, "remaining": 0,
+#                 "message": "atomize regeneration is not implemented; ..."},
+#     "next": "$HOME/.claude/skills/agent-workbench/agent-workbench kb regenerate missing"}
+
+$AW kb regenerate full --dry-run
+# -> {"mode": "full", "dry_run": true,
+#     "embeddings": {"enabled": true, "would_embed": 2380, "would_prune": 0,
+#                     "chars_to_send": 4241700, "estimated_tokens": 1060425,
+#                     "estimated_tokens_basis": "chars_to_send // 4; an estimate, not a billed count",
+#                     "batch_limit": 192, "calls_required": 13},
+#     "atomize": {"enabled": false, "processed": 0, "remaining": 0,
+#                 "message": "atomize regeneration is not implemented; ..."},
+#     "next": "$HOME/.claude/skills/agent-workbench/agent-workbench kb regenerate full"}
+```
+
+Two verbs, both `--dry-run`-able, no `--limit` and no `--project`: `missing`
+embeds only notes never embedded or changed since (compares each note's
+current content hash against what is stored); `full` marks every note
+stale first, then runs the exact same bounded batch `missing` would. Each
+real call embeds at most a fixed batch of notes (module constant, not a
+flag) so a call always finishes well inside the CLI's request timeout;
+`full` is the answer to "I changed `KB_EMBED_MODEL`" -- it is what makes
+every note stale again so the next batches re-embed under the new model.
+
+The `next` field is the whole control plane: keep re-running the printed
+command until `next` comes back `null`. Note that `full`'s `next` always
+names `kb regenerate missing`, never `kb regenerate full` -- `full` resets
+every hash on every call, so looping on `full` would never converge.
+`--dry-run` performs the identical scan and reports the exact
+`chars_to_send`/`estimated_tokens` without making any network call,
+resetting any hash, or pruning; its `next` names the same verb you just
+dry-ran, so running it for real is one copy-paste away.
+
+With no `KB_EMBED_MODEL`/key configured, embeddings stay off and both
+verbs return 200 (never an error) with `embeddings.enabled: false`, every
+count at `0`, and a `message` explaining why -- the same degrade-instead-of-fail
+shape as `enrich`. A mid-run backend failure is the one place `regenerate`
+differs from every other ingest verb: because embedding IS the operation
+here (not a side effect of a write that already safely landed), a failed
+batch is reported as a 502 rather than a silent degrade, with whatever
+batches already committed kept and counted.
+
+The atomize tier of `regenerate` is NOT implemented. Both verbs always
+return an `atomize` block with `enabled: false` and a message naming the
+pending decision: re-atomizing would require deleting a note's prior
+atomized children (which carry `kb enrich`-written question/summary), and
+that collides with the standing "no delete routes for kb notes" decision.
+This route covers the vector tier only.
+
+After upgrading onto this version, backfill the vault with
+`kb regenerate missing` (called repeatedly until `next` is `null`), not
+`kb index`: `kb index`/`POST /reindex` stays the unbounded, one-shot
+recovery path and will likely exceed the CLI's 120s timeout against a
+cold database with thousands of stale vectors.
 
 ## deletion -- out-of-band human operation
 

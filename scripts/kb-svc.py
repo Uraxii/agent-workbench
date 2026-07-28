@@ -10,7 +10,8 @@ truth. ``index/kb.db`` (FTS5 rows plus vectors) is derived from it and
 nothing else, which is why ``POST /reindex`` is a complete recovery path.
 Atomization, indexing and embedding are unconditional on every ingest
 route -- there is no flag that skips them and no ingest path that omits
-them.
+them. Embedding is scoped to the ingested note and its children, not the
+whole vault: see POST /regenerate/* to backfill everything else.
 
 Endpoints (all JSON):
     GET  /health                     status, vault, indexed + vector counts
@@ -31,6 +32,11 @@ Endpoints (all JSON):
     POST /decision {project,topic,title,text,...}
                                      record a decision, supersede the prior
     POST /enrich {project?,note?}    fill question/summary via the LLM
+    POST /regenerate/missing {dry_run?}
+                                     embed stale notes, bounded + resumable
+    POST /regenerate/full {dry_run?}
+                                     mark every note stale, then one bounded
+                                     batch
 
 CLI:
     kb-svc.py run [--host H] [--port P] [--kb-home DIR]
@@ -52,7 +58,7 @@ import os
 import sqlite3
 import sys
 import urllib.error
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import ModuleType
@@ -104,6 +110,7 @@ __all__ = [
     "main",
     "rebuild_derived",
     "record_decision",
+    "regenerate",
     "request_atomize_split",
     "request_enrichment",
     "resolve_api_key",
@@ -114,6 +121,20 @@ log = logging.getLogger("kb-svc")
 
 INDEX_DIR = "index"
 INDEX_DB_NAME = "kb.db"
+# Prefix for the copy-pasteable command in a /regenerate response's "next"
+# field. Left as the literal "$HOME" the CLI docs already use everywhere
+# else (see modes/kb.md's `AW=$HOME/...` line): the caller's shell expands
+# it, this process never does.
+NEXT_COMMAND_PREFIX = "$HOME/.claude/skills/agent-workbench/agent-workbench"
+ATOMIZE_REGENERATE_MESSAGE = (
+    "atomize regeneration is not implemented; it requires deleting a "
+    "note's prior atomized children, which the standing no-delete policy "
+    "does not permit. This route covers the vector tier only."
+)
+EMBEDDINGS_DISABLED_MESSAGE = (
+    "KB_EMBED_MODEL is unset or no API key resolved (checked "
+    "KB_LLM_API_KEY_CMD, KB_LLM_API_KEY); embeddings disabled"
+)
 # One request body is one note, not a file upload: 8 MiB is far past any
 # real note and keeps an unauthenticated loopback caller from making the
 # service read an unbounded body into memory.
@@ -188,19 +209,42 @@ def _note_texts(kb_home: Path) -> list[tuple[str, str]]:
     return texts
 
 
+def _rebuild_index(kb_home: Path, db_path: Path) -> int:
+    """Rebuild the FTS5 index whole from the vault markdown alone.
+
+    Local and offline (measured 0.604s for the whole vault) and a full
+    rebuild is the only trivially-idempotent shape, so every derived-layer
+    entry point rebuilds it whole rather than trying to patch it in place.
+    """
+    kb_vault.vault_init(kb_home)
+    return kb_index_module().build_index(kb_home, db_path)
+
+
 def rebuild_derived(config: KbServeConfig) -> dict[str, object]:
     """Rebuild every derived artifact from the vault markdown alone.
 
-    Drops and repopulates both the FTS5 rows and the vector table. Takes
-    no input but the vault, which is what makes it the recovery path when
-    the index is lost or the vault was edited outside this service.
+    Rebuilds the FTS5 index whole, then incrementally syncs (embeds only
+    what is stale) and prunes the vector table. Takes no input but the
+    vault, which is what makes it the recovery path when the index is
+    lost or the vault was edited outside this service.
+
+    Deliberately still UNBOUNDED: this is the documented complete
+    recovery path (``POST /reindex``) and must converge in one call. On a
+    cold or freshly migrated database it costs exactly what it cost
+    before this change -- a strict non-regression. ``POST
+    /regenerate/missing`` is the bounded, resumable route for keeping
+    vectors current day to day; this is the "start over" path.
     """
     kb_home = config.kb_home
-    kb_vault.vault_init(kb_home)
     db_path = index_db_path(kb_home)
-    indexed = kb_index_module().build_index(kb_home, db_path)
-    embedded = kb_embed.rebuild_vectors(config, db_path, _note_texts(kb_home))
-    return {"indexed": indexed, "embedded": embedded, "db": str(db_path)}
+    indexed = _rebuild_index(kb_home, db_path)
+    notes = _note_texts(kb_home)
+    stale = kb_embed.stale_notes(db_path, notes)
+    embed_counts = kb_embed.sync_vectors(config, db_path, stale)
+    kb_embed.prune_vectors(db_path, {path for path, _ in notes})
+    return {
+        "indexed": indexed, "embedded": embed_counts.embedded, "db": str(db_path),
+    }
 
 
 def count_indexed_notes(kb_home: Path) -> int:
@@ -244,26 +288,57 @@ def search(
 # ── ingest: atomize + index + embed, always ───────────────────────────
 
 
+def _embed_notes(
+    config: KbServeConfig, paths: Sequence[Path],
+) -> kb_embed.EmbedCounts:
+    """Read ``paths`` off disk and sync exactly their vectors.
+
+    O(len(paths)) in both file reads and backend calls, independent of
+    vault size. Unreadable notes are skipped with a warning, matching
+    ``_note_texts``.
+    """
+    notes: list[tuple[str, str]] = []
+    for path in paths:
+        try:
+            notes.append((str(path), path.read_text(encoding="utf-8")))
+        except (OSError, UnicodeDecodeError) as exc:
+            log.warning("skipping unreadable note %s: %s", path, exc)
+    db_path = index_db_path(config.kb_home)
+    return kb_embed.sync_vectors(config, db_path, notes)
+
+
 def _finish_ingest(
     config: KbServeConfig, note_path: Path,
 ) -> dict[str, object]:
-    """Atomize, then rebuild the derived layer. Every ingest ends here.
+    """Atomize, reindex, then embed only the note and its children.
 
     Keeping this on one path is the invariant: no caller can write a note
     into the vault without its children, its index rows and its vectors
-    being produced in the same request.
+    being produced in the same request. Embedding is scoped to
+    ``[note_path] + children`` rather than the whole vault -- that is the
+    fix: ingest is now O(1) in vault size no matter how many stale rows
+    exist elsewhere, which is also what makes the vector migration safe.
+
+    DELIBERATE ASYMMETRY (also see ``regenerate``): an embedding failure
+    here still returns normally with ``embed_error`` set, never raises,
+    because the note is already safely in the vault and failing the
+    write would be worse.
     """
     children, method, call_records = kb_llm.kb_atomize_via_llm(
         config, note_path, config.kb_home,
     )
-    derived = rebuild_derived(config)
+    db_path = index_db_path(config.kb_home)
+    indexed = _rebuild_index(config.kb_home, db_path)
+    embed_counts = _embed_notes(config, [note_path, *children])
     response = {
         "path": str(note_path),
         "children": [str(child) for child in children],
         "method": method,
-        "indexed": derived["indexed"],
-        "embedded": derived["embedded"],
+        "indexed": indexed,
+        "embedded": embed_counts.embedded,
     }
+    if embed_counts.error:
+        response["embed_error"] = embed_counts.error
     if call_records:
         response["usage"] = fold_call_records(call_records)
     return response
@@ -363,6 +438,166 @@ def audit_decisions(
         }
         for note in kb_decision.audit(dirs, topic)
     ]
+
+
+# ── regenerate: bounded, resumable vector backfill ─────────────────────
+
+
+def _regenerate_atomize_block() -> dict[str, object]:
+    """The always-present, always-disabled atomize block (see SCOPE
+    BOUNDARY in the regenerate design: re-atomizing needs a delete route
+    the standing no-delete policy does not grant)."""
+    return {
+        "enabled": False, "processed": 0, "remaining": 0,
+        "message": ATOMIZE_REGENERATE_MESSAGE,
+    }
+
+
+def _regenerate_disabled(mode: str, dry_run: bool) -> dict[str, object]:
+    """The whole-response shape when no embedding backend is configured.
+
+    200, never an error: offline is a fallback for this route exactly
+    like every other one.
+    """
+    embeddings = {
+        "enabled": False, "embedded": 0, "pruned": 0,
+        "remaining": 0, "chars_sent": 0,
+        "message": EMBEDDINGS_DISABLED_MESSAGE,
+    }
+    return {
+        "mode": mode, "dry_run": dry_run,
+        "embeddings": embeddings, "atomize": _regenerate_atomize_block(),
+        "next": None,
+    }
+
+
+def _regenerate_dry_run(
+    mode: str, db_path: Path, stale: list[tuple[str, str]], live_paths: set[str],
+) -> dict[str, object]:
+    """Report what the WHOLE remaining job would send, with zero side
+    effects.
+
+    Unlike a real call, a dry run is never capped to one
+    ``REGENERATE_BATCH_LIMIT`` batch: its purpose is previewing the full
+    operation (how much data leaves the machine, how many invocations
+    the ``next``-loop will take) before an operator starts paying for it,
+    so ``stale`` here is the entire remaining set, not one call's slice.
+    """
+    chars_to_send = kb_embed.embed_payload_chars([text for _, text in stale])
+    calls_required = -(-len(stale) // kb_embed.REGENERATE_BATCH_LIMIT)
+    would_prune = len(set(kb_embed.stored_fingerprints(db_path)) - live_paths)
+    embeddings = {
+        "enabled": True,
+        "would_embed": len(stale),
+        "would_prune": would_prune,
+        "chars_to_send": chars_to_send,
+        "estimated_tokens": chars_to_send // 4,
+        "estimated_tokens_basis":
+            "chars_to_send // 4; an estimate, not a billed count",
+        "batch_limit": kb_embed.REGENERATE_BATCH_LIMIT,
+        "calls_required": calls_required,
+    }
+    # A dry run's next always names the verb you just dry-ran: running it
+    # for real is the whole point, and there is nothing to wait on.
+    next_command = (
+        None if not stale else f"{NEXT_COMMAND_PREFIX} kb regenerate {mode}"
+    )
+    return {
+        "mode": mode, "dry_run": True,
+        "embeddings": embeddings, "atomize": _regenerate_atomize_block(),
+        "next": next_command,
+    }
+
+
+def _regenerate_real(
+    config: KbServeConfig,
+    mode: str,
+    db_path: Path,
+    work: list[tuple[str, str]],
+    live_paths: set[str],
+    stale_count: int,
+) -> dict[str, object]:
+    """Embed ``work``, prune, and report what actually happened.
+
+    DELIBERATE ASYMMETRY (also see ``_finish_ingest``): on ``/put``
+    ``/clip`` ``/atomize`` ``/decision`` an embedding failure still
+    returns 2xx and degrades to keyword-only, because the note is safely
+    in the vault and failing the write would be worse. Here, embedding
+    IS the operation, so a backend failure comes back as an ``error`` key
+    (the HTTP layer turns that into 502), with whatever batches already
+    committed kept and counted.
+    """
+    embed_counts = kb_embed.sync_vectors(config, db_path, work)
+    pruned = kb_embed.prune_vectors(db_path, live_paths)
+    remaining = stale_count - embed_counts.embedded
+    embeddings = {
+        "enabled": True,
+        "embedded": embed_counts.embedded,
+        "pruned": pruned,
+        "remaining": remaining,
+        "chars_sent": embed_counts.chars_sent,
+    }
+    if embed_counts.usage:
+        embeddings["usage"] = embed_counts.usage
+    # full never points back at itself: it resets every hash on every
+    # call, so a caller that kept calling "full" until remaining hit 0
+    # would never terminate. missing is the only convergent loop target.
+    next_command = (
+        None if remaining == 0 else f"{NEXT_COMMAND_PREFIX} kb regenerate missing"
+    )
+    result = {
+        "mode": mode, "dry_run": False,
+        "embeddings": embeddings, "atomize": _regenerate_atomize_block(),
+        "next": next_command,
+    }
+    if embed_counts.error:
+        result["error"] = f"embedding backend failed: {embed_counts.error}"
+    return result
+
+
+def regenerate(
+    config: KbServeConfig, reset: bool, dry_run: bool,
+) -> dict[str, object]:
+    """One bounded, resumable vector-backfill pass.
+
+    ``reset`` is the ONLY difference between the two routes: True marks
+    every stored hash NULL first (``/regenerate/full``), False does not
+    (``/regenerate/missing``). Everything after is one code path, so
+    ``full`` inherits ``missing``'s boundedness and resumability for
+    free. At most ``kb_embed.REGENERATE_BATCH_LIMIT`` notes are embedded
+    per call. ``dry_run`` runs the identical scan, skips the reset, the
+    prune and every network call, and reports the exact
+    ``chars_to_send`` (see ``_regenerate_dry_run``).
+
+    Ships the embeddings tier only: the returned ``atomize`` block always
+    carries ``enabled: false`` naming the pending no-delete-routes policy
+    decision that blocks it, never a placeholder to fill in later.
+    """
+    mode = "full" if reset else "missing"
+    kb_home = config.kb_home
+    # Guarantees index/kb.db's directory exists even against a vault no
+    # ingest route has ever touched yet, exactly like every other entry
+    # point that opens it (_rebuild_index, cmd_run). Cheap and idempotent:
+    # creates dirs only, no FTS or vector work.
+    kb_vault.vault_init(kb_home)
+    db_path = index_db_path(kb_home)
+
+    if not kb_embed.embeddings_enabled(config):
+        return _regenerate_disabled(mode, dry_run)
+
+    notes = _note_texts(kb_home)
+    if reset and not dry_run:
+        kb_embed.mark_all_stale(db_path)
+    # reset means "every note is stale" by definition -- computed directly
+    # rather than via stale_notes so a dry run never has to consult (or
+    # mutate) stored hashes to know the answer for `full`.
+    stale = notes if reset else kb_embed.stale_notes(db_path, notes)
+    live_paths = {path for path, _ in notes}
+
+    if dry_run:
+        return _regenerate_dry_run(mode, db_path, stale, live_paths)
+    work = stale[:kb_embed.REGENERATE_BATCH_LIMIT]
+    return _regenerate_real(config, mode, db_path, work, live_paths, len(stale))
 
 
 # ── HTTP server ───────────────────────────────────────────────────────
@@ -568,6 +803,8 @@ class KbRequestHandler(BaseHTTPRequestHandler):
             "/reindex": self._handle_reindex,
             "/decision": self._handle_decision,
             "/enrich": self._handle_enrich,
+            "/regenerate/full": self._handle_regenerate_full,
+            "/regenerate/missing": self._handle_regenerate_missing,
         }
         handler = routes.get(parsed.path)
         if handler is None:
@@ -614,8 +851,23 @@ class KbRequestHandler(BaseHTTPRequestHandler):
         config = self.server.config
         result = kb_enrich(config, payload)
         if result.get("enriched"):
-            rebuild_derived(config)
+            db_path = index_db_path(config.kb_home)
+            _rebuild_index(config.kb_home, db_path)
+            _embed_notes(config, [Path(str(p)) for p in result["notes"]])
         self._send_json(200, result)
+
+    def _handle_regenerate(self, payload: dict[str, object], reset: bool) -> None:
+        dry_run = payload.get("dry_run", False)
+        if not isinstance(dry_run, bool):
+            raise ValueError("dry_run must be a boolean")
+        result = regenerate(self.server.config, reset, dry_run)
+        self._send_json(502 if "error" in result else 200, result)
+
+    def _handle_regenerate_full(self, payload: dict[str, object]) -> None:
+        self._handle_regenerate(payload, reset=True)
+
+    def _handle_regenerate_missing(self, payload: dict[str, object]) -> None:
+        self._handle_regenerate(payload, reset=False)
 
 
 def serve_forever(config: KbServeConfig, host: str, port: int) -> None:
