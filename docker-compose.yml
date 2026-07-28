@@ -143,7 +143,7 @@ services:
     environment:
       ARTIFACT_SVC_HOST: "0.0.0.0"
       ARTIFACT_SVC_PORT: "9099"
-      ARTIFACT_SVC_ALLOWED_HOSTS: "127.0.0.1,localhost"
+      ARTIFACT_SVC_ALLOWED_HOSTS: "${ARTIFACT_SVC_ALLOWED_HOSTS:-127.0.0.1,localhost}"
       ARTIFACT_SVC_STAGE_ROOT: "/tmp/artifacts"
       ARTIFACT_SVC_FEEDBACK_ROOT: "${HOME}/.local/share/artifacts"
       DJANGO_DEBUG: "0"
