@@ -9,16 +9,15 @@ from __future__ import annotations
 
 import argparse
 import logging
-import subprocess
 
-from cli import artifact, bd, doctor, init_workspace, install, kb, scratch
+from cli import artifact, bd, doctor, init_workspace, install, kb
 
 __all__ = ["build_parser", "main"]
 
 log = logging.getLogger("agent-workbench")
 
 SUBCOMMAND_MODULES = (
-    kb, bd, artifact, install, init_workspace, doctor, scratch,
+    kb, bd, artifact, install, init_workspace, doctor,
 )
 
 
@@ -34,9 +33,8 @@ def build_parser() -> argparse.ArgumentParser:
         description="Locally deployable agent workbench: knowledgebase "
                      "vault (kb), bd board hub (bd), the "
                      "artifact review app (artifact), workspace scaffold "
-                     "(init-workspace), fresh-machine prerequisite "
-                     "checks (doctor), and throwaway-instance "
-                     "verification (scratch).",
+                     "(init-workspace), and fresh-machine prerequisite "
+                     "checks (doctor).",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
     for module in SUBCOMMAND_MODULES:
@@ -57,9 +55,6 @@ def main(argv: list[str]) -> int:
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)
-    except subprocess.CalledProcessError as exc:
-        log.error("%s", exc)
-        return exc.returncode or 1
     except (RuntimeError, ValueError, OSError) as exc:
         log.error("%s", exc)
         return 1

@@ -7,7 +7,9 @@ touched.
 """
 from __future__ import annotations
 
+import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -18,7 +20,40 @@ SKILL_DIR = REPO_ROOT / ".claude" / "skills" / "agent-workbench"
 if str(SKILL_DIR) not in sys.path:
     sys.path.insert(0, str(SKILL_DIR))
 
-from cli import install  # noqa: E402  (path shim must precede this import)
+from cli import install, paths  # noqa: E402  (path shim must precede this import)
+
+
+def _git(cwd: Path, *args: str) -> None:
+    """Run `git <args>` in `cwd` with a throwaway identity, for test fixtures
+    only -- never used by the shipped CLI itself."""
+    subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t", *args],
+        cwd=cwd, check=True, capture_output=True,
+    )
+
+
+def _git_output(cwd: Path, *args: str) -> str:
+    result = subprocess.run(
+        ["git", *args], cwd=cwd, check=True, capture_output=True, text=True,
+    )
+    return result.stdout.strip()
+
+
+def _rev_parse(cwd: Path, rev: str) -> str:
+    return _git_output(cwd, "rev-parse", rev)
+
+
+@pytest.fixture()
+def git_repo(tmp_path: Path) -> Path:
+    """A real one-commit git repo under `tmp_path`, for exercising
+    `paths.git_head` against real git-managed files."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    (repo / "f.txt").write_text("x\n", encoding="utf-8")
+    _git(repo, "add", "f.txt")
+    _git(repo, "commit", "-q", "-m", "init")
+    return repo
 
 
 @pytest.fixture()
@@ -154,3 +189,113 @@ def test_uninstall_no_op_when_nothing_installed(
 
     assert not target.exists()
     assert "nothing installed" in capsys.readouterr().out
+
+
+# -- paths.git_head -----------------------------------------------------
+
+def test_git_head_resolves_normal_checkout(git_repo: Path) -> None:
+    """A plain (non-worktree) checkout resolves via the symbolic HEAD ref."""
+    expected = _rev_parse(git_repo, "HEAD")
+
+    assert paths.git_head(git_repo) == expected
+
+
+def test_git_head_resolves_linked_worktree(
+    git_repo: Path, tmp_path: Path,
+) -> None:
+    """A linked worktree's `.git` file + `commondir` resolves too."""
+    worktree = tmp_path / "wt"
+    _git(git_repo, "worktree", "add", "-q", str(worktree))
+    expected = _rev_parse(worktree, "HEAD")
+
+    assert (worktree / ".git").is_file()
+    assert paths.git_head(worktree) == expected
+
+
+def test_git_head_resolves_packed_ref(git_repo: Path) -> None:
+    """A ref that only exists in `packed-refs` (loose ref pruned) still
+    resolves."""
+    branch_ref = _git_output(git_repo, "symbolic-ref", "HEAD")
+    _git(git_repo, "pack-refs", "--all")
+    (git_repo / ".git" / branch_ref).unlink(missing_ok=True)
+    expected = _rev_parse(git_repo, "HEAD")
+
+    assert paths.git_head(git_repo) == expected
+
+
+def test_git_head_resolves_detached_head(git_repo: Path) -> None:
+    """A raw 40-char SHA in HEAD (detached) is returned as-is."""
+    sha = _rev_parse(git_repo, "HEAD")
+    _git(git_repo, "checkout", "-q", "--detach", sha)
+
+    assert paths.git_head(git_repo) == sha
+
+
+def test_git_head_returns_none_on_garbage(tmp_path: Path) -> None:
+    """No `.git` at all, a malformed HEAD, and a dangling gitdir file all
+    return None instead of raising."""
+    assert paths.git_head(tmp_path / "not-a-repo") is None
+
+    junk = tmp_path / "junk"
+    junk.mkdir()
+    (junk / ".git").mkdir()
+    (junk / ".git" / "HEAD").write_text("nonsense\n", encoding="utf-8")
+    assert paths.git_head(junk) is None
+
+    dangling = tmp_path / "dangling"
+    dangling.mkdir()
+    (dangling / ".git").write_text("gitdir: /nonexistent/x\n", encoding="utf-8")
+    assert paths.git_head(dangling) is None
+
+
+# -- install marker -------------------------------------------------------
+
+def test_install_copy_writes_marker_json_with_commit_source_timestamp(
+    source: Path, target: Path, git_repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """--copy stamps a JSON marker carrying commit, source, and timestamp."""
+    monkeypatch.setattr(paths, "repo_root", lambda: git_repo)
+    expected_commit = _rev_parse(git_repo, "HEAD")
+
+    install._install_copy(target, source)
+
+    marker = install.read_marker(target)
+    assert marker is not None
+    assert marker["commit"] == expected_commit
+    assert marker["source"] == str(source.resolve())
+    datetime.fromisoformat(str(marker["installed_at"]))  # does not raise
+
+
+def test_read_marker_returns_none_when_absent(target: Path) -> None:
+    """No marker file at all -> None, distinct from an empty/legacy one."""
+    assert install.read_marker(target) is None
+
+
+def test_read_marker_legacy_empty_file_reads_as_present_no_commit(
+    target: Path,
+) -> None:
+    """The old `touch()`-only marker parses as `{}`: present, no commit."""
+    target.mkdir(parents=True)
+    (target / install.INSTALL_MARKER).touch()
+
+    assert install.read_marker(target) == {}
+
+
+def test_read_marker_corrupt_json_reads_as_present_empty(target: Path) -> None:
+    """Corrupt marker contents parse as `{}`, not a crash."""
+    target.mkdir(parents=True)
+    (target / install.INSTALL_MARKER).write_text("{not json", encoding="utf-8")
+
+    assert install.read_marker(target) == {}
+
+
+def test_uninstall_accepts_legacy_empty_marker(source: Path, target: Path) -> None:
+    """--uninstall still removes a copy install stamped by the old empty
+    touch()-only marker."""
+    target.mkdir(parents=True)
+    (target / "SKILL.md").write_text("x\n", encoding="utf-8")
+    (target / install.INSTALL_MARKER).touch()
+
+    assert install._uninstall(target, source) is True
+    assert not target.exists()

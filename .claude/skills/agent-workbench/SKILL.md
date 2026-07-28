@@ -25,7 +25,6 @@ $AW <subcommand> [ARGS]
 | `install` | (un)install this repo's skill into `$HOME/.claude/skills/agent-workbench` |
 | `init-workspace` | scaffold docs/kb + workstreams + bd board into a repo |
 | `doctor` | prerequisite checks and install diagnostics |
-| `scratch` | run a command against a throwaway `kb`/`bd`/`artifact` instance instead of the live stack (see below) |
 
 For the full verb list and invocation examples for each subcommand family,
 see the corresponding mode doc:
@@ -40,10 +39,14 @@ Probing the live stack (curling `127.0.0.1:9099`/`9100`/`9101`, or any
 override) to verify a change is NOT an acceptable verification method. It
 permanently mutates the real vault, the real board hub, or the real
 artifact store. HTTP-surface verification of kb-svc/bd-svc/artifact-svc
-goes through `scratch` instead:
+goes through `scripts/scratch.py` instead -- this is repo dev/test
+tooling, NOT a CLI verb (the shipped CLI is a pure HTTP client with no
+container-runtime access), so it only exists in a repo checkout; a
+copy-installed skill has no repo beside it and should not be verifying
+services at all:
 
 ```bash
-$AW scratch <kb|bd|artifact> -- <command...>
+scripts/scratch.py <kb|bd|artifact> -- <command...>
 ```
 
 This brings up ONE throwaway container for that service against a fresh
@@ -59,12 +62,12 @@ other two services are pointed at a `.invalid` sentinel host, so a call
 to them fails immediately with a DNS error naming the cause (e.g.
 `bd-svc-not-started-by-this-scratch-run.invalid`) instead of silently
 reaching the live stack. Do NOT chain a call to a different service
-inside the wrapped command (`scratch bd -- ... && $AW kb ...` will fail
-loudly, by design). To verify two services at once, nest `scratch` calls
--- the outer service stays live inside the inner one:
+inside the wrapped command (`scratch.py bd -- ... && $AW kb ...` will
+fail loudly, by design). To verify two services at once, nest `scratch`
+calls -- the outer service stays live inside the inner one:
 
 ```bash
-$AW scratch kb -- $AW scratch bd -- $AW kb status
+scripts/scratch.py kb -- scripts/scratch.py bd -- $AW kb status
 ```
 
 Requires a repo checkout (it reuses `docker-compose.yml` +
@@ -76,16 +79,23 @@ for a worked example against each service.
 ## install / init-workspace
 
 ```bash
-$AW install --link
+$AW install --copy
 $AW init-workspace [TARGET_DIR] [--prefix PREFIX]
 ```
 
-`install` (un)installs this repo's skill dir into
-`$HOME/.claude/skills/agent-workbench`. `init-workspace` scaffolds
-`docs/kb/` + `workstreams/` + a bd board into a target repo. It builds no
-repo-local search index: the searchable knowledgebase is the vault under
-`KB_HOME`, indexed by the one indexer (`scripts/kb-index.py`) and searched
-with `kb query`. Bringing the stack up is not a CLI verb either: see
+`install` puts this repo's skill dir at
+`$HOME/.claude/skills/agent-workbench`. `--copy` is the production
+install: a real copy pinned to the source commit, stamped into a marker
+file the CLI reads back. `--link` is a dev symlink, and it makes the
+installed skill track whatever branch that working tree has checked out
+-- that's why `--copy` is the default recommendation. `--uninstall`
+removes a repo-owned install (symlink or stamped copy). `doctor` reports
+which of the two you have, and flags it when a pinned copy has gone
+stale relative to the repo. `init-workspace` scaffolds `docs/kb/` +
+`workstreams/` + a bd board into a target repo. It builds no repo-local
+search index: the searchable knowledgebase is the vault under `KB_HOME`,
+indexed by the one indexer (`scripts/kb-index.py`) and searched with
+`kb query`. Bringing the stack up is not a CLI verb either: see
 "Deploy + hardening" below.
 
 ## How it differs from the old scripts

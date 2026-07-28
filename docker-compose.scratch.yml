@@ -1,5 +1,5 @@
 # Override for `agent-workbench scratch <kb|bd|artifact> -- <command...>`
-# (cli/scratch.py). Brings up ONE throwaway instance of a service against a
+# (scripts/scratch.py). Brings up ONE throwaway instance of a service against a
 # scratch data dir, published on a random free host port, torn down
 # (`down -v`) by the same run. Never used standalone -- always layered on
 # top of docker-compose.yml with `-f docker-compose.yml -f
@@ -9,7 +9,7 @@
 # overridden here, to point at the scratch dir instead of the real data
 # root and publish on an ephemeral port instead of the fixed 9099/9100/9101.
 #
-# The __AW_SCRATCH__ placeholder is substituted by cli/scratch.py with the
+# The __AW_SCRATCH__ placeholder is substituted by scripts/scratch.py with the
 # real scratch dir path via plain string replace BEFORE this file is ever
 # handed to podman-compose -- deliberately NOT a compose `${VAR}`.
 # podman-compose 1.6.0's `!override` YAML tag captures each scalar's RAW

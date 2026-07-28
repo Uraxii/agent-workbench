@@ -29,6 +29,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from cli import install, paths
+
 __all__ = ["register", "run_checks", "Check"]
 
 MIN_PYTHON = (3, 9)
@@ -187,6 +189,89 @@ def check_tailscale() -> Check:
     )
 
 
+def _copy_reinstall_hint() -> str:
+    """The exact --copy reinstall command, rooted at this repo when it is
+    reachable from here."""
+    try:
+        root = paths.repo_root()
+    except RuntimeError:
+        root = None
+    skill_dir = (
+        f"{root}/.claude/skills/agent-workbench" if root is not None
+        else "<agent-workbench repo>/.claude/skills/agent-workbench"
+    )
+    return f"{skill_dir}/agent-workbench install --copy"
+
+
+def check_skill_install() -> Check:
+    """Optional: report the installed skill's provenance.
+
+    Distinguishes: not installed, a dev symlink (the defect -- tracks
+    whatever branch that working tree has checked out), a pinned copy
+    matching the source repo's current HEAD, a stale pinned copy, a legacy
+    copy with no recorded commit, a copy whose source repo cannot be
+    reached from here (the normal state for a production install), and a
+    real dir this repo did not install. Never required: this reports, it
+    does not gate.
+    """
+    name = "skill install"
+    target = install.install_target()
+
+    if target.is_symlink():
+        resolved = target.resolve()
+        return Check(
+            name, False, False,
+            f"dev symlink -> {resolved} (tracks whatever branch that "
+            "working tree currently has checked out)",
+            f"{resolved}/agent-workbench install --copy",
+        )
+    if not target.exists():
+        return Check(
+            name, False, False, f"not installed at {target}",
+            _copy_reinstall_hint(),
+        )
+
+    marker = install.read_marker(target)
+    if marker is None:
+        return Check(
+            name, False, False,
+            f"real dir at {target}, no install marker -- not installed by "
+            "this repo's installer",
+            f"move or rename {target} yourself (this repo did not install "
+            f"it), then run: {_copy_reinstall_hint()}",
+        )
+
+    commit = marker.get("commit")
+    if not commit:
+        return Check(
+            name, False, False,
+            "installed copy has no recorded commit (legacy install, "
+            "unknown provenance)",
+            _copy_reinstall_hint(),
+        )
+
+    short = str(commit)[:12]
+    try:
+        repo_root = paths.repo_root()
+    except RuntimeError:
+        return Check(
+            name, False, True,
+            f"pinned at {short} (source repo unreachable from here; "
+            "staleness could not be checked)",
+            "",
+        )
+
+    head = paths.git_head(repo_root)
+    if head == commit:
+        return Check(name, False, True, f"pinned at {short}, matches repo HEAD", "")
+    return Check(
+        name, False, False,
+        f"stale -- installed at {short}, repo HEAD is now "
+        f"{(head or 'unknown')[:12]}",
+        _copy_reinstall_hint(),
+    )
+
+
 def run_checks() -> list[Check]:
     """Run every prerequisite check and return the full report."""
     return [
@@ -196,6 +281,7 @@ def run_checks() -> list[Check]:
         check_python(),
         check_kb_env(),
         check_tailscale(),
+        check_skill_install(),
     ]
 
 
@@ -208,7 +294,7 @@ def render_human(checks: list[Check]) -> str:
     """Render `checks` as one human-readable line per check."""
     lines = []
     for check in checks:
-        glyph = "OK" if check.ok else ("MISSING" if check.required else "SKIP")
+        glyph = "OK" if check.ok else ("MISSING" if check.required else "WARN")
         line = f"[{glyph}] {check.name}: {check.detail}"
         if check.fix_hint:
             line += f" -- {check.fix_hint}"

@@ -21,13 +21,15 @@ list/show/ready/search/dep.
 
 Never probe the live bd-svc (port 9101, the real `~/.beads-hub`) to verify
 a change works -- that leaves permanent residue in the real board hub. Use
-`scratch`, which brings up a throwaway bd-svc against a fresh temp data
-dir, runs the wrapped command, and tears both down when it returns:
+`scripts/scratch.py` (repo dev/test tooling, not a CLI verb -- only
+available from a repo checkout), which brings up a throwaway bd-svc
+against a fresh temp data dir, runs the wrapped command, and tears both
+down when it returns:
 
 ```bash
 AW=$HOME/.claude/skills/agent-workbench/agent-workbench
-$AW scratch bd -- $AW bd status
-# -> agent-workbench scratch: bd-svc up at 127.0.0.1:<random port>
+scripts/scratch.py bd -- $AW bd status
+# -> scratch: bd-svc up at 127.0.0.1:<random port>
 # -> {"hub_root": "/tmp/aw-scratch-XXXXXXXX", "initialized": false, "repos": []}
 ```
 
@@ -36,7 +38,8 @@ scratch dir instead of the real hub. `scratch bd` isolates ONLY bd-svc: a
 `kb`/`artifact` call made inside the wrapped command still fails loudly
 (sentinel `.invalid` host), never reaches the live stack. See `SKILL.md`
 for the full `scratch` contract (any `bd` verb works the same way inside
-it, and nesting `scratch kb -- scratch bd -- ...` covers two services).
+it, and nesting `scripts/scratch.py kb -- scripts/scratch.py bd -- ...`
+covers two services).
 
 ## Hub verbs
 

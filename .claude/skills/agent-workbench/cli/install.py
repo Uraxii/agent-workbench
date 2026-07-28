@@ -18,14 +18,19 @@ Flags are mutually exclusive; exactly one is required.
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 
 from cli import paths
 
-__all__ = ["register", "install_target"]
+__all__ = ["register", "install_target", "read_marker"]
 
-# Marker file written by --copy to indicate the install can be safely removed.
+# Marker file written by --copy to indicate the install can be safely
+# removed. Holds a small JSON object: {"commit", "source", "installed_at"}.
+# A pre-existing empty marker (the old touch()-only format) is still valid:
+# see read_marker().
 INSTALL_MARKER = ".installed-by-agent-workbench"
 
 
@@ -72,16 +77,51 @@ def _install_link(target: Path, source: Path) -> None:
     print(f"agent-workbench: linked {target} -> {source}")
 
 
+def _write_marker(target: Path, source: Path) -> None:
+    """Write INSTALL_MARKER: the source commit (if resolvable), the
+    absolute source dir, and an ISO 8601 UTC install timestamp."""
+    try:
+        commit = paths.git_head(paths.repo_root())
+    except RuntimeError:
+        commit = None
+    marker = {
+        "commit": commit,
+        "source": str(source.resolve()),
+        "installed_at": datetime.now(timezone.utc).isoformat(),
+    }
+    (target / INSTALL_MARKER).write_text(json.dumps(marker), encoding="utf-8")
+
+
+def read_marker(target: Path) -> dict[str, object] | None:
+    """Parse ``target``'s INSTALL_MARKER, or None if it is absent.
+
+    An empty or corrupt marker (including the pre-JSON, empty-``touch()``
+    format this file used to be) parses as ``{}`` -- present, but no
+    recorded commit -- never a crash and never "absent".
+    """
+    marker_path = target / INSTALL_MARKER
+    if not marker_path.is_file():
+        return None
+    text = marker_path.read_text(encoding="utf-8").strip()
+    if not text:
+        return {}
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 def _install_copy(target: Path, source: Path) -> None:
     """Recursively copy ``source`` over ``target`` (__pycache__ excluded).
-    
+
     Stamps the install with INSTALL_MARKER so --uninstall can safely
     remove it later.
     """
     if target.is_symlink():
         target.unlink()
     shutil.copytree(source, target, dirs_exist_ok=True, ignore=_ignore_pycache)
-    (target / INSTALL_MARKER).touch()
+    _write_marker(target, source)
     print(f"agent-workbench: copied {source} -> {target}")
 
 

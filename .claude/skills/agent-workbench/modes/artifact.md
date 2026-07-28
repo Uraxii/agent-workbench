@@ -27,14 +27,16 @@ filesystem fallback.
 
 Never probe the live artifact-svc (port 9099, the real
 `/tmp/artifacts` + `~/.local/share/artifacts`) to verify a change works --
-that leaves permanent residue in the real artifact store. Use `scratch`,
-which brings up a throwaway artifact-svc against a fresh temp data dir,
-runs the wrapped command, and tears both down when it returns:
+that leaves permanent residue in the real artifact store. Use
+`scripts/scratch.py` (repo dev/test tooling, not a CLI verb -- only
+available from a repo checkout), which brings up a throwaway artifact-svc
+against a fresh temp data dir, runs the wrapped command, and tears both
+down when it returns:
 
 ```bash
 AW=$HOME/.claude/skills/agent-workbench/agent-workbench
-$AW scratch artifact -- $AW artifact status
-# -> agent-workbench scratch: artifact-svc up at 127.0.0.1:<random port>
+scripts/scratch.py artifact -- $AW artifact status
+# -> scratch: artifact-svc up at 127.0.0.1:<random port>
 # -> {"artifacts": [], "endpoint": "http://127.0.0.1:<random port>",
 #     "health": {"status": "ok"}}
 ```
@@ -45,8 +47,9 @@ scratch port. `scratch artifact` isolates ONLY artifact-svc: a `kb`/`bd`
 call made inside the wrapped command still fails loudly (sentinel
 `.invalid` host), never reaches the live stack. See `SKILL.md` for the
 full `scratch` contract (any `artifact` verb, including `publish`, works
-the same way inside it, and nesting `scratch kb -- scratch bd -- ...`
-covers two services).
+the same way inside it, and nesting
+`scripts/scratch.py kb -- scripts/scratch.py bd -- ...` covers two
+services).
 
 ## Publish
 

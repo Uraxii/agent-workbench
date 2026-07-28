@@ -21,7 +21,20 @@ SKILL_DIR = REPO_ROOT / ".claude" / "skills" / "agent-workbench"
 if str(SKILL_DIR) not in sys.path:
     sys.path.insert(0, str(SKILL_DIR))
 
-from cli import doctor  # noqa: E402  (path shim must precede this import)
+from cli import doctor, install  # noqa: E402  (path shim must precede this import)
+
+
+def _write_marker(target: Path, commit: str | None) -> None:
+    """Stand in for a --copy install's marker with a chosen `commit`."""
+    target.mkdir(parents=True, exist_ok=True)
+    (target / install.INSTALL_MARKER).write_text(
+        json.dumps({"commit": commit, "source": "s", "installed_at": "t"}),
+        encoding="utf-8",
+    )
+
+
+def _raise_repo_root_unreachable() -> Path:
+    raise RuntimeError("agent-workbench: repository root not found.")
 
 
 def _which_only(*names: str):
@@ -142,6 +155,25 @@ def test_optional_missing_does_not_fail_the_gate(
     exit_code = doctor.cmd_doctor(argparse.Namespace(json=False))
 
     assert exit_code == 0
+
+
+def test_optional_missing_renders_warn_never_skip(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """A failing optional check renders [WARN], not [SKIP], and still exits 0."""
+    monkeypatch.setattr(
+        doctor.shutil, "which",
+        _which_only("docker", "podman-compose", "git"),
+    )
+    monkeypatch.setattr(doctor.subprocess, "run", _fake_run_ok)
+    _kb_env_present(monkeypatch, tmp_path)
+
+    checks = doctor.run_checks()
+    rendered = doctor.render_human(checks)
+
+    assert "[WARN] tailscale" in rendered
+    assert "SKIP" not in rendered
+    assert doctor.all_required_ok(checks)
 
 
 def test_json_flag_round_trips_through_json_loads_with_expected_shape(
@@ -323,3 +355,156 @@ def test_python_check_fails_below_the_floor(
     assert result.ok is False
     assert "need >= 99.0" in result.detail
     assert result.fix_hint != ""
+
+
+# -- check_skill_install --------------------------------------------------
+
+def test_skill_install_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """Nothing at the install target -> not-ok, not required, has a hint."""
+    monkeypatch.setattr(doctor.install, "install_target", lambda: tmp_path / "gone")
+
+    result = doctor.check_skill_install()
+
+    assert result.name == "skill install"
+    assert result.required is False
+    assert result.ok is False
+    assert "not installed" in result.detail
+    assert result.fix_hint != ""
+
+
+def test_skill_install_symlink_flags_dev_defect(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """A symlink target is the defect: reported not-ok with the resolved
+    path and an exact --copy reinstall hint."""
+    real = tmp_path / "dev-repo-skill"
+    real.mkdir()
+    target = tmp_path / "target"
+    target.symlink_to(real)
+    monkeypatch.setattr(doctor.install, "install_target", lambda: target)
+
+    result = doctor.check_skill_install()
+
+    assert result.ok is False
+    assert "dev symlink" in result.detail
+    assert str(real.resolve()) in result.detail
+    assert result.fix_hint.endswith("install --copy")
+
+
+def test_skill_install_matches_repo_head_is_ok(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """Marker commit == repo HEAD -> ok, short SHA shown, no fix hint."""
+    target = tmp_path / "target"
+    commit = "deadbeef" * 5
+    _write_marker(target, commit)
+    monkeypatch.setattr(doctor.install, "install_target", lambda: target)
+    monkeypatch.setattr(doctor.paths, "repo_root", lambda: tmp_path / "repo")
+    monkeypatch.setattr(doctor.paths, "git_head", lambda root: commit)
+
+    result = doctor.check_skill_install()
+
+    assert result.ok is True
+    assert commit[:12] in result.detail
+    assert result.fix_hint == ""
+
+
+def test_skill_install_stale_marker_is_not_ok(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """Marker commit != repo HEAD -> not-ok, both short SHAs shown."""
+    target = tmp_path / "target"
+    installed = "aaaa" * 10
+    current = "bbbb" * 10
+    _write_marker(target, installed)
+    monkeypatch.setattr(doctor.install, "install_target", lambda: target)
+    monkeypatch.setattr(doctor.paths, "repo_root", lambda: tmp_path / "repo")
+    monkeypatch.setattr(doctor.paths, "git_head", lambda root: current)
+
+    result = doctor.check_skill_install()
+
+    assert result.ok is False
+    assert "stale" in result.detail
+    assert installed[:12] in result.detail
+    assert current[:12] in result.detail
+    assert result.fix_hint != ""
+
+
+def test_skill_install_legacy_empty_marker_is_not_ok(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """Marker present but no recorded commit -> not-ok, unknown provenance."""
+    target = tmp_path / "target"
+    target.mkdir(parents=True)
+    (target / install.INSTALL_MARKER).touch()
+    monkeypatch.setattr(doctor.install, "install_target", lambda: target)
+
+    result = doctor.check_skill_install()
+
+    assert result.ok is False
+    assert "legacy" in result.detail
+    assert result.fix_hint != ""
+
+
+def test_skill_install_repo_unreachable_pinned_copy_is_ok(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """Marker has a commit but the source repo can't be reached from here
+    -- the normal healthy state for a production install, not a failure."""
+    target = tmp_path / "target"
+    _write_marker(target, "cccc" * 10)
+    monkeypatch.setattr(doctor.install, "install_target", lambda: target)
+    monkeypatch.setattr(doctor.paths, "repo_root", _raise_repo_root_unreachable)
+
+    result = doctor.check_skill_install()
+
+    assert result.ok is True
+    assert "staleness could not be checked" in result.detail
+    assert result.fix_hint == ""
+
+
+def test_skill_install_real_dir_no_marker_is_not_ok_and_offers_no_delete(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """A real dir this repo never installed -> not-ok, not installed by us,
+    and the fix hint never instructs deleting it."""
+    target = tmp_path / "target"
+    target.mkdir(parents=True)
+    (target / "SKILL.md").write_text("unrelated\n", encoding="utf-8")
+    monkeypatch.setattr(doctor.install, "install_target", lambda: target)
+
+    result = doctor.check_skill_install()
+
+    assert result.ok is False
+    assert "not installed by this repo" in result.detail
+    assert "rm " not in result.fix_hint
+    assert "delete" not in result.fix_hint
+    assert result.fix_hint != ""
+
+
+def test_skill_install_never_required_so_never_gates_exit_code(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """Whatever state the install check is in, it cannot flip doctor's
+    overall required-ok verdict."""
+    target = tmp_path / "target"
+    target.symlink_to(tmp_path)  # guaranteed not-ok state
+    monkeypatch.setattr(doctor.install, "install_target", lambda: target)
+
+    result = doctor.check_skill_install()
+
+    assert result.required is False
+    assert result not in [c for c in doctor.run_checks() if c.required]
+
+
+def test_run_checks_includes_skill_install(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """`run_checks` (and therefore --json) includes the new check by name."""
+    monkeypatch.setattr(doctor.install, "install_target", lambda: tmp_path / "gone")
+
+    names = [c.name for c in doctor.run_checks()]
+
+    assert "skill install" in names

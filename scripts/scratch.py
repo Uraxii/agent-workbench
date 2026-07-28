@@ -1,7 +1,16 @@
-"""`scratch` subcommand -- run a command against a throwaway service
-instance instead of the live stack.
+#!/usr/bin/env python3
+"""scratch -- repo dev/test harness: run a command against a throwaway
+service instance instead of the live stack.
 
-    $AW scratch <kb|bd|artifact> -- <command...>
+    scripts/scratch.py <kb|bd|artifact> -- <command...>
+
+e.g. ``scripts/scratch.py kb -- "$AW" kb status``
+
+This is repo tooling, not a CLI verb -- it is NOT part of the shipped
+agent-workbench skill (see ../.claude/skills/agent-workbench/cli/), which
+is a pure HTTP client with no container-runtime access. Only useful from a
+repo checkout: it shells out to `podman-compose` and reuses this repo's
+own docker-compose.yml + docker-compose.scratch.yml.
 
 Brings up ONE disposable container for the named service on a free host
 port against a fresh temp data dir, exports the env vars the existing
@@ -39,10 +48,9 @@ import uuid
 from pathlib import Path
 from typing import NamedTuple
 
-from cli import paths
+__all__ = ["main"]
 
-__all__ = ["register"]
-
+REPO_ROOT = Path(__file__).resolve().parents[1]
 HEALTH_POLL_TRIES = 20
 HEALTH_POLL_DELAY_SEC = 0.5
 DOWN_TIMEOUT_SEC = 5
@@ -74,12 +82,12 @@ SERVICES: dict[str, ServiceSpec] = {
 }
 
 
-def register(subparsers: argparse._SubParsersAction) -> None:
-    """Add the `scratch` parser: SERVICE followed by `-- COMMAND...`."""
-    parser = subparsers.add_parser(
-        "scratch",
-        help="run a command against a throwaway service instance, "
-             "never the live stack",
+def build_parser() -> argparse.ArgumentParser:
+    """Build the `scratch.py` parser: SERVICE followed by `-- COMMAND...`."""
+    parser = argparse.ArgumentParser(
+        prog="scratch.py",
+        description="run a command against a throwaway service instance, "
+                     "never the live stack",
     )
     parser.add_argument("service", choices=sorted(SERVICES))
     parser.add_argument(
@@ -87,7 +95,7 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         help="command to run against the scratch instance, e.g. "
              "-- kb query 'foo'",
     )
-    parser.set_defaults(func=cmd_scratch)
+    return parser
 
 
 def _command_args(raw: list[str], service: str) -> list[str]:
@@ -95,45 +103,30 @@ def _command_args(raw: list[str], service: str) -> list[str]:
     command = raw[1:] if raw[:1] == ["--"] else list(raw)
     if not command:
         raise RuntimeError(
-            "agent-workbench scratch: no command given, e.g. "
-            f"`scratch {service} -- kb status`"
+            "scratch: no command given, e.g. "
+            f"`scratch.py {service} -- kb status`"
         )
     return command
 
 
 def _compose_files() -> tuple[Path, Path]:
-    """Locate docker-compose.yml + docker-compose.scratch.yml.
+    """Locate docker-compose.yml + docker-compose.scratch.yml at the repo root.
 
     Raises:
-        RuntimeError: naming what to do, if this is a copy install or
-            either file is missing from the resolved repo root.
+        RuntimeError: naming what is missing, if either file is absent.
     """
-    try:
-        root = paths.repo_root()
-    except RuntimeError as exc:
-        raise RuntimeError(
-            "agent-workbench scratch: docker-compose.yml not found (this "
-            "looks like a copy-installed skill, which has no repo "
-            "checkout beside it). Run `scratch` from a checkout of the "
-            "agent-workbench repo instead."
-        ) from exc
-    base = root / "docker-compose.yml"
-    override = root / "docker-compose.scratch.yml"
+    base = REPO_ROOT / "docker-compose.yml"
+    override = REPO_ROOT / "docker-compose.scratch.yml"
     missing = [p for p in (base, override) if not p.is_file()]
     if missing:
         names = ", ".join(str(p) for p in missing)
-        raise RuntimeError(
-            f"agent-workbench scratch: missing {names}. Run `scratch` "
-            "from a checkout of the agent-workbench repo."
-        )
+        raise RuntimeError(f"scratch: missing {names}.")
     return base, override
 
 
 def _require_podman_compose() -> None:
     if shutil.which("podman-compose") is None:
-        raise RuntimeError(
-            "agent-workbench scratch: `podman-compose` not found on PATH."
-        )
+        raise RuntimeError("scratch: `podman-compose` not found on PATH.")
 
 
 def _http_status(url: str) -> int | None:
@@ -151,7 +144,7 @@ def _wait_healthy(port: int, spec: ServiceSpec) -> None:
             return
         time.sleep(HEALTH_POLL_DELAY_SEC)
     raise RuntimeError(
-        f"agent-workbench scratch: {spec.compose_name} never answered "
+        f"scratch: {spec.compose_name} never answered "
         f"{url} after {HEALTH_POLL_TRIES * HEALTH_POLL_DELAY_SEC:.0f}s"
     )
 
@@ -188,8 +181,7 @@ def _bring_up(
     )
     port = _host_port(base, override, project, spec)
     print(
-        f"agent-workbench scratch: {spec.compose_name} up at "
-        f"127.0.0.1:{port}",
+        f"scratch: {spec.compose_name} up at 127.0.0.1:{port}",
         file=sys.stderr,
     )
     _wait_healthy(port, spec)
@@ -212,7 +204,8 @@ def _scratch_env(spec: ServiceSpec, port: int, service: str) -> dict[str, str]:
     instead of silently reaching the live stack -- UNLESS an enclosing
     `scratch` run already redirected them (tracked via ``AW_SCRATCH_ACTIVE``,
     comma-joined service names), which lets nested
-    ``scratch kb -- scratch bd -- ...`` runs cover two services at once.
+    ``scratch.py kb -- scratch.py bd -- ...`` runs cover two services at
+    once.
     """
     env = os.environ.copy()
     active = set(filter(None, env.get(ACTIVE_ENV, "").split(",")))
@@ -231,10 +224,9 @@ def _scratch_env(spec: ServiceSpec, port: int, service: str) -> dict[str, str]:
 def cmd_scratch(args: argparse.Namespace) -> int:
     """Bring up a throwaway service instance, run the command, tear down.
 
-    Returns the wrapped command's exit code. Raises RuntimeError (turned
-    into a non-zero exit by cli.main) if the compose files are missing,
-    podman-compose is unavailable, or the instance never becomes healthy
-    -- never falls back to the live stack.
+    Returns the wrapped command's exit code. Raises RuntimeError if the
+    compose files are missing, podman-compose is unavailable, or the
+    instance never becomes healthy -- never falls back to the live stack.
     """
     spec = SERVICES[args.service]
     command = _command_args(args.command, args.service)
@@ -268,3 +260,17 @@ def cmd_scratch(args: argparse.Namespace) -> int:
         # Same stdout=sys.stderr reasoning as `up` in _bring_up above.
         subprocess.run(down_cmd, stdout=sys.stderr, check=False)
         shutil.rmtree(scratch_dir, ignore_errors=True)
+
+
+def main(argv: list[str]) -> int:
+    """Parse argv and run `scratch`. Never falls back to the live stack."""
+    args = build_parser().parse_args(argv)
+    try:
+        return cmd_scratch(args)
+    except (RuntimeError, ValueError, OSError, subprocess.CalledProcessError) as exc:
+        print(f"scratch: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))
