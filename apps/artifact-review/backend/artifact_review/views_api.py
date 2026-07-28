@@ -53,12 +53,35 @@ def api_threads(request: HttpRequest) -> JsonResponse:
     artifact_id = request.GET.get("artifact", "").strip()
     if not artifact_id:
         return _json_error("artifact_required", 400)
+    
+    # If sub_path is present in query params, filter to that exact value (including empty)
+    # If absent, return all threads for that artifact
+    has_sub_path_param = "sub_path" in request.GET
     sub_path = request.GET.get("sub_path", "")
-    queryset = (
-        Thread.objects.prefetch_related("replies__uploads")
-        .filter(artifact_id=artifact_id, sub_path=sub_path)
-        .order_by("created_at", "id")
-    )
+    
+    if has_sub_path_param:
+        # Filter by exact sub_path
+        queryset = (
+            Thread.objects.prefetch_related("replies__uploads")
+            .filter(artifact_id=artifact_id, sub_path=sub_path)
+            .order_by("created_at", "id")
+        )
+    else:
+        # Return all threads for this artifact
+        queryset = (
+            Thread.objects.prefetch_related("replies__uploads")
+            .filter(artifact_id=artifact_id)
+            .order_by("created_at", "id")
+        )
+    
+    # Check if artifact exists in index or has threads
+    from artifact_review.models import ArtifactIndex
+    has_threads = queryset.exists()
+    has_index_entry = ArtifactIndex.objects.filter(artifact_id=artifact_id).exists()
+    
+    if not has_threads and not has_index_entry:
+        return _json_error("unknown_artifact", 404)
+    
     return apply_app_headers(
         JsonResponse(
             {
@@ -175,6 +198,8 @@ def api_publish(request: HttpRequest) -> JsonResponse:
         project = artifact_paths.validate_name(request.POST["project"])
         subdir = artifact_paths.validate_name(request.POST["as"])
         destination = artifact_paths.safe_join(artifact_paths.stage_root(), f"{project}/{subdir}")
+        if destination.exists() and not request.POST.get("overwrite"):
+            return _json_error("artifact_exists", 409)
         try:
             result = _publish_archive(
                 project=project,
@@ -238,7 +263,7 @@ def _publish_archive(project: str, subdir: str, artifact_id: str, archive_bytes:
                 bytes_written += member.size
         if files == 0:
             raise ValueError("empty_archive")
-        _swap_published_tree(stage_root, project, subdir, temp_path, artifact_id)
+        replaced = _swap_published_tree(stage_root, project, subdir, temp_path, artifact_id)
     except Exception:
         shutil.rmtree(temp_path, ignore_errors=True)
         raise
@@ -249,11 +274,12 @@ def _publish_archive(project: str, subdir: str, artifact_id: str, archive_bytes:
         "subdir": subdir,
         "files": files,
         "bytes": bytes_written,
+        "replaced": replaced,
         "url": f"/{project}/{subdir}/",
     }
 
 
-def _swap_published_tree(stage_root: Path, project: str, subdir: str, temp_path: Path, artifact_id: str) -> None:
+def _swap_published_tree(stage_root: Path, project: str, subdir: str, temp_path: Path, artifact_id: str) -> bool:
     project_path = artifact_paths.safe_join(stage_root, project)
     project_path.mkdir(parents=True, exist_ok=True)
     destination = artifact_paths.safe_join(stage_root, f"{project}/{subdir}")
@@ -277,6 +303,7 @@ def _swap_published_tree(stage_root: Path, project: str, subdir: str, temp_path:
                 backup_path.rename(destination)
             raise
         shutil.rmtree(backup_path, ignore_errors=True)
+    return replaced
 
 
 def _store_feedback_uploads(request: HttpRequest, reply: Reply) -> None:

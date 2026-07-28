@@ -27,7 +27,7 @@ filesystem fallback.
 
 ```bash
 AW=$HOME/.claude/skills/agent-workbench/agent-workbench
-$AW artifact publish --project NAME --src /path/to/file-or-dir --id <artifact-id>
+$AW artifact publish --project NAME --src /path/to/file-or-dir
 ```
 
 `publish` reads the local file or directory, builds an uncompressed tar in
@@ -40,7 +40,7 @@ POST /_/api/publish
 Multipart fields:
 
 - `project`
-- `as`
+- `as` (defaults to basename of `--src`; override with `--as NAME`)
 - `artifact_id`, when `--id` is supplied
 - `archive`, the tar file part
 
@@ -89,6 +89,38 @@ The service owns these paths:
 
 No old artifact data is migrated.
 
+## Deletion
+
+Deletion is not provided as a CLI verb. To remove an artifact, use filesystem operations
+as a human out-of-band process:
+
+**Published artifact tree:** Remove the directory at `/tmp/artifacts/{project}/{subdir}`
+
+```bash
+rm -rf /tmp/artifacts/{project}/{subdir}
+```
+
+The artifact_index row and all feedback threads keyed on that artifact_id **survive** the
+tree deletion and continue to be queryable. To fully clean an artifact:
+
+1. Delete the tree: `rm -rf /tmp/artifacts/{project}/{subdir}`
+2. Clear the index row from the feedback database:
+
+```bash
+sqlite3 "$HOME/.local/share/artifacts/feedback.db" \
+  "DELETE FROM artifact_index WHERE project='{project}' AND subdir='{subdir}';"
+```
+
+3. Optionally clear all feedback threads for that artifact:
+
+```bash
+sqlite3 "$HOME/.local/share/artifacts/feedback.db" \
+  "DELETE FROM thread WHERE artifact_id='{project}/{subdir}';"
+```
+
+Existing artifacts `xss/probe`, `e2e/single`, and `e2e/tree` are test residue and may be
+left as-is or cleared using the above procedures.
+
 ## Removed Verbs
 
 The old bare-host server and its CLI verbs were retired:
@@ -100,5 +132,5 @@ push unpush start stop status expose unexpose clean run feedback name
 Only the agent-workbench artifact subcommands remain:
 
 ```text
-publish feedback status
+publish feedback comment reply resolve status
 ```

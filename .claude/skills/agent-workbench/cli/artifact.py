@@ -44,13 +44,36 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         "--id", dest="artifact_id", default=None,
         help="Artifact ID for feedback correlation. Default: service assigned.",
     )
+    publish_cmd.add_argument("--force", action="store_true", help="Overwrite existing artifact")
     publish_cmd.set_defaults(func=cmd_publish)
 
     feedback_cmd = sub.add_parser(
         "feedback", help="dump threads + reply chains for an artifact as JSON",
     )
     feedback_cmd.add_argument("--artifact", dest="artifact_id", required=True)
+    feedback_cmd.add_argument("--sub-path", dest="sub_path", default=None, help="Filter to specific sub-path")
+    feedback_cmd.add_argument("--all-paths", action="store_true", help="Show threads from all sub-paths")
     feedback_cmd.set_defaults(func=cmd_feedback)
+
+
+    comment_cmd = sub.add_parser("comment", help="create a feedback thread")
+    comment_cmd.add_argument("--artifact", dest="artifact_id", required=True)
+    comment_cmd.add_argument("--body", required=True)
+    comment_cmd.add_argument("--sub-path", dest="sub_path", default="")
+    comment_cmd.add_argument("--author", default="")
+    comment_cmd.add_argument("--anchor-kind", dest="anchor_kind", default="page")
+    comment_cmd.set_defaults(func=cmd_comment)
+
+    reply_cmd = sub.add_parser("reply", help="add a reply to a feedback thread")
+    reply_cmd.add_argument("--thread", type=int, required=True)
+    reply_cmd.add_argument("--body", required=True)
+    reply_cmd.add_argument("--author", default="")
+    reply_cmd.set_defaults(func=cmd_reply)
+
+    resolve_cmd = sub.add_parser("resolve", help="resolve or reopen a feedback thread")
+    resolve_cmd.add_argument("--thread", type=int, required=True)
+    resolve_cmd.add_argument("--reopen", action="store_true", help="reopen instead of resolve")
+    resolve_cmd.set_defaults(func=cmd_resolve)
 
     status_cmd = sub.add_parser("status", help="artifact service health + entries")
     status_cmd.set_defaults(func=cmd_status)
@@ -218,9 +241,12 @@ def cmd_publish(args: argparse.Namespace) -> int:
         archive = _build_tar(args.src)
     except ArtifactRequestError as exc:
         return _print_service_error("publish", url, exc)
-    fields = {"project": args.project, "as": args.as_name or ""}
+    as_name = args.as_name if args.as_name is not None else Path(args.src).name
+    fields = {"project": args.project, "as": as_name}
     if args.artifact_id:
         fields["artifact_id"] = args.artifact_id
+    if args.force:
+        fields["overwrite"] = "1"
     body, content_type = _multipart(fields, "archive", "artifact.tar", archive)
     headers = {"Content-Type": content_type, "Content-Length": str(len(body))}
     try:
@@ -233,9 +259,70 @@ def cmd_publish(args: argparse.Namespace) -> int:
 
 def cmd_feedback(args: argparse.Namespace) -> int:
     """Fetch artifact feedback threads from the artifact service."""
-    query = urlencode({"artifact": args.artifact_id})
+    query_params = {"artifact": args.artifact_id}
+    if args.all_paths:
+        # Don't add sub_path to get all sub-paths
+        pass
+    elif args.sub_path is not None:
+        # Use specified sub_path
+        query_params["sub_path"] = args.sub_path
+    else:
+        # Default: filter to empty sub_path (root level only)
+        query_params["sub_path"] = ""
+    query = urlencode(query_params)
     url = f"{_base_url()}/_/api/threads?{query}"
     return _run_json_command("feedback", url)
+
+
+def cmd_comment(args: argparse.Namespace) -> int:
+    """Create a feedback thread for an artifact."""
+    url = f"{_base_url()}/_/api/threads"
+    fields = {
+        "artifact": args.artifact_id,
+        "body": args.body,
+        "sub_path": args.sub_path,
+        "author": args.author,
+        "anchor_kind": args.anchor_kind,
+    }
+    fields = {k: v for k, v in fields.items() if v}
+    body = urlencode(fields).encode("utf-8")
+    try:
+        opener, csrf_token = _csrf_opener(_base_url(), url)
+    except ArtifactRequestError as exc:
+        return _print_service_error("comment", url, exc)
+    headers = {"X-CSRFToken": csrf_token, "Content-Type": "application/x-www-form-urlencoded"}
+    return _run_json_command("comment", url, data=body, headers=headers, opener=opener)
+
+
+def cmd_reply(args: argparse.Namespace) -> int:
+    """Add a reply to a feedback thread."""
+    url = f"{_base_url()}/_/api/threads/{args.thread}/replies"
+    fields = {
+        "body": args.body,
+        "author": args.author,
+    }
+    fields = {k: v for k, v in fields.items() if v}
+    body = urlencode(fields).encode("utf-8")
+    try:
+        opener, csrf_token = _csrf_opener(_base_url(), url)
+    except ArtifactRequestError as exc:
+        return _print_service_error("reply", url, exc)
+    headers = {"X-CSRFToken": csrf_token, "Content-Type": "application/x-www-form-urlencoded"}
+    return _run_json_command("reply", url, data=body, headers=headers, opener=opener)
+
+
+def cmd_resolve(args: argparse.Namespace) -> int:
+    """Resolve or reopen a feedback thread."""
+    url = f"{_base_url()}/_/api/threads/{args.thread}/resolve"
+    resolved = "false" if args.reopen else "true"
+    fields = {"resolved": resolved}
+    body = urlencode(fields).encode("utf-8")
+    try:
+        opener, csrf_token = _csrf_opener(_base_url(), url)
+    except ArtifactRequestError as exc:
+        return _print_service_error("resolve", url, exc)
+    headers = {"X-CSRFToken": csrf_token, "Content-Type": "application/x-www-form-urlencoded"}
+    return _run_json_command("resolve", url, data=body, headers=headers, opener=opener)
 
 
 def cmd_status(args: argparse.Namespace) -> int:
