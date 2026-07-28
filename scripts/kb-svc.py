@@ -78,6 +78,7 @@ from kb_config import (  # noqa: E402
 from kb_llm import (  # noqa: E402
     apply_enrichment,
     find_unenriched_notes,
+    fold_call_records,
     kb_atomize_via_llm,
     kb_enrich,
     request_atomize_split,
@@ -92,6 +93,7 @@ __all__ = [
     "cmd_resolve_secret",
     "count_indexed_notes",
     "find_unenriched_notes",
+    "fold_call_records",
     "kb_atomize_via_llm",
     "kb_clip_and_atomize",
     "kb_clip_module",
@@ -251,17 +253,20 @@ def _finish_ingest(
     into the vault without its children, its index rows and its vectors
     being produced in the same request.
     """
-    children, method = kb_llm.kb_atomize_via_llm(
+    children, method, call_records = kb_llm.kb_atomize_via_llm(
         config, note_path, config.kb_home,
     )
     derived = rebuild_derived(config)
-    return {
+    response = {
         "path": str(note_path),
         "children": [str(child) for child in children],
         "method": method,
         "indexed": derived["indexed"],
         "embedded": derived["embedded"],
     }
+    if call_records:
+        response["usage"] = fold_call_records(call_records)
+    return response
 
 
 def kb_put(

@@ -277,7 +277,8 @@ def resolve_supersedes_path(
 
     Raises:
         ValueError: an explicit path outside the project's decisions dir,
-            or naming a file that does not exist.
+            naming a file that does not exist, or pointing at a note
+            belonging to a different topic.
     """
     if supersedes_arg:
         candidate = Path(supersedes_arg).resolve()
@@ -289,6 +290,12 @@ def resolve_supersedes_path(
             )
         if not candidate.is_file():
             raise ValueError(f"supersedes {supersedes_arg!r} does not exist")
+        target_note = load_decision(candidate)
+        if target_note.topic != topic:
+            raise ValueError(
+                f"supersedes {supersedes_arg!r} belongs to topic "
+                f"{target_note.topic!r}, expected {topic!r}"
+            )
         return candidate
     active = find_active_note(decision_dirs, topic)
     return active.path if active else None

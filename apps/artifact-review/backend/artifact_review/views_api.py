@@ -1,7 +1,27 @@
-"""API views for the artifact review backend."""
+"""API views for the artifact review backend.
+
+Public endpoints (always available):
+- api_settings: GET /_/api/settings
+- api_artifacts: GET /_/api/artifacts
+- api_upload: GET /_/api/uploads/<id>
+- api_threads: GET/POST /_/api/threads (list/create feedback)
+- api_create_reply: POST /_/api/threads/<id>/replies
+- api_resolve_thread: POST /_/api/threads/<id>/resolve
+- api_publish: POST /_/api/publish (publish artifacts)
+
+Test-only endpoints (dev-gated, namespace-scoped):
+- api_test_clean_artifact: DELETE /_/api/test/artifacts/test/<subdir>
+
+Test endpoints are only enabled when ARTIFACT_SVC_TEST_ROUTES=1.
+They are structurally absent from the URLconf when disabled, not mounted with 403.
+Only artifacts in the 'test/' project namespace can be cleaned.
+These endpoints are deliberately NOT exposed in the CLI or agent-facing docs.
+See apps/artifact-review/backend/artifact_review/views_api.py for implementation.
+"""
 
 from __future__ import annotations
 
+import functools
 import io
 import json
 import logging
@@ -10,18 +30,85 @@ import tarfile
 import time
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from django.db import connection, transaction
 from django.http import FileResponse, HttpRequest, HttpResponse, JsonResponse
 
 from artifact_review import artifact_paths, artifact_resolution, feedback_forms, feedback_json, publish_policy, ssrf_guard
 from artifact_review.feedback_database import ensure_feedback_schema
-from artifact_review.models import Reply, Setting, Thread, Upload
+from artifact_review.models import ArtifactIndex, Reply, Setting, Thread, Upload
 from artifact_review.response_headers import apply_app_headers, apply_artifact_headers
 from artifact_review.upload_validation import validate_archive_member
 
 logger = logging.getLogger(__name__)
+
+# Type alias for view functions
+View = Callable[..., JsonResponse]
+
+
+def validate_artifact_from_request(key: str = "artifact") -> Callable[[View], View]:
+    """Decorator that validates artifact exists before running the view.
+    
+    Strictly extracts artifact_id from request using only the specified parameter name.
+    Returns 404 unknown_artifact if artifact not found in ArtifactIndex.
+    Does NOT fall back to alternate parameter names.
+    
+    Args:
+        key: The parameter name to look for (default: "artifact")
+    """
+    def decorator(view: View) -> View:
+        @functools.wraps(view)
+        def wrapper(request: HttpRequest, *args: object, **kwargs: object) -> JsonResponse:
+            # For GET requests, check query parameters
+            artifact_id = request.GET.get(key, "").strip()
+            
+            # For POST requests, check the body
+            if not artifact_id and request.method == "POST":
+                try:
+                    data = feedback_forms.request_data(request)
+                    artifact_id = (data.get(key, "").strip() 
+                                  if isinstance(data.get(key), str) else "")
+                except (ValueError, json.JSONDecodeError):
+                    # Let the view handle parsing errors
+                    return view(request, *args, **kwargs)
+            
+            # If we have an artifact_id, validate it exists
+            if artifact_id:
+                has_index_entry = ArtifactIndex.objects.filter(artifact_id=artifact_id).exists()
+                if not has_index_entry:
+                    return _json_error("unknown_artifact", 404)
+            
+            return view(request, *args, **kwargs)
+        
+        return wrapper
+    
+    return decorator
+
+
+def validate_artifact_from_thread_id() -> Callable[[View], View]:
+    """Decorator that validates artifact exists for a thread before running the view.
+    
+    Extracts thread_id from kwargs, gets the thread, and validates its artifact
+    is indexed. Returns 404 unknown_artifact if artifact not found.
+    """
+    def decorator(view: View) -> View:
+        @functools.wraps(view)
+        def wrapper(request: HttpRequest, *args: object, **kwargs: object) -> JsonResponse:
+            thread_id = kwargs.get("id")
+            if thread_id is not None:
+                thread = Thread.objects.filter(id=thread_id).first()
+                if thread is not None:
+                    # Check if thread's artifact exists in index
+                    has_index_entry = ArtifactIndex.objects.filter(artifact_id=thread.artifact_id).exists()
+                    if not has_index_entry:
+                        return _json_error("unknown_artifact", 404)
+            
+            return view(request, *args, **kwargs)
+        
+        return wrapper
+    
+    return decorator
 
 
 def api_settings(request: HttpRequest) -> JsonResponse:
@@ -47,18 +134,34 @@ def api_upload(request: HttpRequest, id: int) -> HttpResponse:
     return apply_artifact_headers(response)
 
 
+@validate_artifact_from_request("artifact")
 def api_threads(request: HttpRequest) -> JsonResponse:
     """List feedback threads for an artifact."""
     ensure_feedback_schema()
     artifact_id = request.GET.get("artifact", "").strip()
     if not artifact_id:
         return _json_error("artifact_required", 400)
+
+    # If sub_path is present in query params, filter to that exact value (including empty)
+    # If absent, return all threads for that artifact
+    has_sub_path_param = "sub_path" in request.GET
     sub_path = request.GET.get("sub_path", "")
-    queryset = (
-        Thread.objects.prefetch_related("replies__uploads")
-        .filter(artifact_id=artifact_id, sub_path=sub_path)
-        .order_by("created_at", "id")
-    )
+
+    if has_sub_path_param:
+        # Filter by exact sub_path
+        queryset = (
+            Thread.objects.prefetch_related("replies__uploads")
+            .filter(artifact_id=artifact_id, sub_path=sub_path)
+            .order_by("created_at", "id")
+        )
+    else:
+        # Return all threads for this artifact
+        queryset = (
+            Thread.objects.prefetch_related("replies__uploads")
+            .filter(artifact_id=artifact_id)
+            .order_by("created_at", "id")
+        )
+
     return apply_app_headers(
         JsonResponse(
             {
@@ -70,15 +173,18 @@ def api_threads(request: HttpRequest) -> JsonResponse:
     )
 
 
+@validate_artifact_from_request("artifact")
 def api_create_thread(request: HttpRequest) -> JsonResponse:
     """Create a feedback thread."""
     ensure_feedback_schema()
     try:
         data = feedback_forms.request_data(request)
+        artifact_id = feedback_forms.require_artifact(data)
+        
         now = _now()
         with transaction.atomic():
             thread = Thread.objects.create(
-                artifact_id=feedback_forms.require_artifact(data),
+                artifact_id=artifact_id,
                 sub_path=feedback_forms.optional_text(data, "sub_path"),
                 anchor_kind=feedback_forms.optional_text(data, "anchor_kind", "page"),
                 anchor_data=_json_text(data.get("anchor_data")),
@@ -111,12 +217,14 @@ def api_create_thread(request: HttpRequest) -> JsonResponse:
     )
 
 
+@validate_artifact_from_thread_id()
 def api_create_reply(request: HttpRequest, id: int) -> JsonResponse:
     """Create a reply for a thread."""
     ensure_feedback_schema()
     thread = Thread.objects.filter(id=id).first()
     if thread is None:
         return _json_error("not_found", 404)
+    
     try:
         data = feedback_forms.request_data(request)
         with transaction.atomic():
@@ -142,12 +250,14 @@ def api_create_reply(request: HttpRequest, id: int) -> JsonResponse:
     )
 
 
+@validate_artifact_from_thread_id()
 def api_resolve_thread(request: HttpRequest, id: int) -> JsonResponse:
     """Resolve or reopen a thread."""
     ensure_feedback_schema()
     thread = Thread.objects.filter(id=id).first()
     if thread is None:
         return _json_error("not_found", 404)
+    
     try:
         data = feedback_forms.request_data(request)
     except (ValueError, json.JSONDecodeError) as exc:
@@ -175,6 +285,8 @@ def api_publish(request: HttpRequest) -> JsonResponse:
         project = artifact_paths.validate_name(request.POST["project"])
         subdir = artifact_paths.validate_name(request.POST["as"])
         destination = artifact_paths.safe_join(artifact_paths.stage_root(), f"{project}/{subdir}")
+        if destination.exists() and not request.POST.get("overwrite"):
+            return _json_error("artifact_exists", 409)
         try:
             result = _publish_archive(
                 project=project,
@@ -238,7 +350,7 @@ def _publish_archive(project: str, subdir: str, artifact_id: str, archive_bytes:
                 bytes_written += member.size
         if files == 0:
             raise ValueError("empty_archive")
-        _swap_published_tree(stage_root, project, subdir, temp_path, artifact_id)
+        replaced = _swap_published_tree(stage_root, project, subdir, temp_path, artifact_id)
     except Exception:
         shutil.rmtree(temp_path, ignore_errors=True)
         raise
@@ -249,11 +361,12 @@ def _publish_archive(project: str, subdir: str, artifact_id: str, archive_bytes:
         "subdir": subdir,
         "files": files,
         "bytes": bytes_written,
+        "replaced": replaced,
         "url": f"/{project}/{subdir}/",
     }
 
 
-def _swap_published_tree(stage_root: Path, project: str, subdir: str, temp_path: Path, artifact_id: str) -> None:
+def _swap_published_tree(stage_root: Path, project: str, subdir: str, temp_path: Path, artifact_id: str) -> bool:
     project_path = artifact_paths.safe_join(stage_root, project)
     project_path.mkdir(parents=True, exist_ok=True)
     destination = artifact_paths.safe_join(stage_root, f"{project}/{subdir}")
@@ -277,6 +390,7 @@ def _swap_published_tree(stage_root: Path, project: str, subdir: str, temp_path:
                 backup_path.rename(destination)
             raise
         shutil.rmtree(backup_path, ignore_errors=True)
+    return replaced
 
 
 def _store_feedback_uploads(request: HttpRequest, reply: Reply) -> None:
@@ -316,6 +430,7 @@ def _now() -> int:
 
 
 __all__ = [
+    "api_test_clean_artifact",
     "api_artifacts",
     "api_create_reply",
     "api_create_thread",
@@ -325,3 +440,70 @@ __all__ = [
     "api_threads",
     "api_upload",
 ]
+
+
+# Test-only endpoints (dev-gated, namespace-scoped)
+# These are disabled by default and only enabled when ARTIFACT_SVC_TEST_ROUTES=1
+
+def api_test_clean_artifact(request: HttpRequest, project: str, subdir: str) -> JsonResponse:
+    """Test-only endpoint: clean up a test artifact and its feedback.
+    
+    Only works for artifacts in the 'test/' project namespace.
+    Requires ARTIFACT_SVC_TEST_ROUTES=1 environment variable.
+    Deletes the artifact directory and removes the ArtifactIndex entry.
+    
+    Args:
+        project: Project name (must be "test" for safety)
+        subdir: Subdirectory name
+    
+    Returns:
+        404 if artifact not found or not in test namespace
+        403 if project is not "test"
+        200 with cleanup details on success
+    """
+    from django.conf import settings
+    
+    # This should only be reachable if TEST_ROUTES is enabled,
+    # but check again for defense in depth
+    if not settings.ARTIFACT_SVC_TEST_ROUTES:
+        return _json_error("test_routes_disabled", 403)
+    
+    # Structural safety: only allow cleanup in test/ namespace
+    if project != "test":
+        return _json_error("not_in_test_namespace", 403)
+    
+    ensure_feedback_schema()
+    artifact_id = f"{project}/{subdir}"
+    
+    # Get the artifact from index
+    artifact = ArtifactIndex.objects.filter(artifact_id=artifact_id).first()
+    if artifact is None:
+        return _json_error("unknown_artifact", 404)
+    
+    # Delete artifact files
+    try:
+        artifact_path = Path(artifact.src_path)
+        if artifact_path.exists():
+            shutil.rmtree(artifact_path)
+    except Exception as exc:
+        logger.error("Failed to delete test artifact files for %s: %s", artifact_id, exc)
+        return _json_error("cleanup_failed", 500)
+    
+    # Delete artifact index entry
+    with transaction.atomic():
+        # Delete all related threads and their replies/uploads
+        for thread in Thread.objects.filter(artifact_id=artifact_id):
+            Reply.objects.filter(thread=thread).delete()
+        Thread.objects.filter(artifact_id=artifact_id).delete()
+        
+        # Delete the index entry
+        artifact.delete()
+    
+    return apply_app_headers(
+        JsonResponse(
+            {
+                "artifact_id": artifact_id,
+                "cleaned": True,
+            }
+        )
+    )

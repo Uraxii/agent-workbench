@@ -30,7 +30,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="agent-workbench",
         description="Locally deployable agent workbench: knowledgebase "
-                     "vault (kb), bd board hub + web UI (bd), the "
+                     "vault (kb), bd board hub (bd), the "
                      "artifact review app (artifact), workspace scaffold "
                      "(init-workspace), and fresh-machine prerequisite "
                      "checks (doctor).",
