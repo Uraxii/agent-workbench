@@ -36,10 +36,14 @@ services:
       KB_SVC_PORT: "9100"
       HOME: "${HOME}"
       KB_HOME: "${HOME}/.knowledgebase"
-    # Real, gitignored env file (not the tracked kb.env.example) -- may not
-    # exist yet on a fresh host; create it from kb.env.example before
-    # first `up`. Carries KB_ENRICH, KB_LLM_BASE_URL, KB_LLM_MODEL, and
-    # optionally KB_LLM_API_KEY or KB_LLM_API_KEY_CMD.
+    # Real, gitignored env file (not the tracked kb.env.example). Optional:
+    # only needed to turn on LLM enrichment (KB_ENRICH, KB_LLM_BASE_URL,
+    # KB_LLM_MODEL, and optionally KB_LLM_API_KEY or KB_LLM_API_KEY_CMD).
+    # `required: false` below means a fresh host with no kb.env still
+    # brings kb-svc up -- kb_config.py's load_kb_env() already treats a
+    # missing file as empty. This is compose-spec 2.24+ / Docker Compose
+    # v2.24+ syntax (the long env_file form); older compose only has the
+    # short string form, which hard-fails `up` when the file is absent.
     #
     # Nuance vs. the quadlet: the quadlet resolves KB_LLM_API_KEY_CMD
     # host-side via ExecStartPre before the container ever starts, so the
@@ -49,7 +53,8 @@ services:
     # isn't available in-container, it just logs a warning and returns no
     # key -- a safe no-op, since KB_ENRICH defaults to 0 anyway.
     env_file:
-      - "${HOME}/.knowledgebase/kb.env"
+      - path: "${HOME}/.knowledgebase/kb.env"
+        required: false
     ports:
       - "127.0.0.1:9100:9100"
     volumes:
@@ -285,15 +290,23 @@ services:
       N8N_PORT: "5678"
       N8N_LISTEN_ADDRESS: "0.0.0.0"
       N8N_PUBLIC_API_DISABLED: "false"
-    # Real, gitignored env file. N8N_ENCRYPTION_KEY is REQUIRED and n8n has
-    # no _CMD vault-resolution fallback of its own (that convention is only
-    # implemented by the quadlet's separate host-side n8n-secret.py
-    # script). For this compose path, set the literal
-    # N8N_ENCRYPTION_KEY=<value> (Mode 1, static) directly in the real
-    # n8n.env below -- the Mode-2 vault _CMD variant only works via the
-    # quadlet deploy path.
+    # Real, gitignored env file. N8N_ENCRYPTION_KEY is REQUIRED for n8n
+    # itself to run, and n8n has no _CMD vault-resolution fallback of its
+    # own (that convention is only implemented by the quadlet's separate
+    # host-side n8n-secret.py script). For this compose path, set the
+    # literal N8N_ENCRYPTION_KEY=<value> (Mode 1, static) directly in the
+    # real n8n.env below -- the Mode-2 vault _CMD variant only works via
+    # the quadlet deploy path.
+    #
+    # `required: false` here (compose-spec 2.24+ / Docker Compose v2.24+)
+    # only means a missing n8n.env does not block `up`; n8n is
+    # profile-gated, so a host that never opts into n8n must not have its
+    # entire compose model fail to parse over a file it was never told to
+    # create. Once someone does `--profile n8n up`, n8n itself still
+    # refuses to start without N8N_ENCRYPTION_KEY set.
     env_file:
-      - "${HOME}/.local/share/n8n/n8n.env"
+      - path: "${HOME}/.local/share/n8n/n8n.env"
+        required: false
     ports:
       - "127.0.0.1:5678:5678"
     volumes:

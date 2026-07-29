@@ -120,6 +120,16 @@ def _install_copy(target: Path, source: Path) -> None:
     """
     if target.is_symlink():
         target.unlink()
+    if (
+        target.is_dir()
+        and not target.is_symlink()
+        and read_marker(target) is None
+    ):
+        raise RuntimeError(
+            f"agent-workbench: refusing to copy over real dir {target} "
+            "-- it is not a stamped agent-workbench install; move it "
+            "aside yourself first",
+        )
     shutil.copytree(source, target, dirs_exist_ok=True, ignore=_ignore_pycache)
     _write_marker(target, source)
     print(f"agent-workbench: copied {source} -> {target}")

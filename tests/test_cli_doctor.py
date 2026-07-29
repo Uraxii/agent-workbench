@@ -311,16 +311,18 @@ def test_container_runtime_missing_reports_fix_hint(
     assert "podman" in result.fix_hint
 
 
-def test_kb_env_check_fails_when_file_absent(
+def test_kb_env_check_absent_is_optional_not_required(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
-    """Missing ~/.knowledgebase/kb.env is a required failure with a cp hint."""
+    """Missing ~/.knowledgebase/kb.env is optional (LLM enrichment only,
+    the stack runs offline without it), reported with a cp hint but never
+    required."""
     _kb_env_absent(monkeypatch, tmp_path)
 
     result = doctor.check_kb_env()
 
     assert result.name == "kb.env"
-    assert result.required is True
+    assert result.required is False
     assert result.ok is False
     assert doctor.KB_ENV_EXAMPLE in result.fix_hint
 
@@ -335,6 +337,27 @@ def test_kb_env_check_passes_when_file_present(
 
     assert result.ok is True
     assert result.fix_hint == ""
+
+
+def test_kb_env_missing_does_not_fail_cmd_doctor_exit_code(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """kb.env missing, everything else present -> doctor still exits 0.
+
+    Pins the fresh-install behaviour: docker-compose.yml's kb-svc env_file
+    is `required: false`, so a missing kb.env must never gate the exit
+    code.
+    """
+    monkeypatch.setattr(
+        doctor.shutil, "which",
+        _which_only("docker", "podman-compose", "git", "tailscale"),
+    )
+    monkeypatch.setattr(doctor.subprocess, "run", _fake_run_ok)
+    _kb_env_absent(monkeypatch, tmp_path)
+
+    exit_code = doctor.cmd_doctor(argparse.Namespace(json=False))
+
+    assert exit_code == 0
 
 
 def test_python_check_passes_on_the_running_interpreter() -> None:

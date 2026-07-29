@@ -4,17 +4,16 @@ concrete fix hint, and exiting non-zero if anything REQUIRED is missing.
 
 Required: a container runtime (docker or podman), a compose implementation
 (``docker compose`` CLI plugin, ``podman-compose``, or ``docker-compose``),
-``git``, a Python new enough to run this CLI, and ``~/.knowledgebase/kb.env``
-(compose declares it as
-an ``env_file``, so ``up`` fails outright when it is absent).
+``git``, and a Python new enough to run this CLI.
 
-Optional, reported but never failing the exit code: ``tailscale``.
+Optional, reported but never failing the exit code: ``tailscale`` and
+``~/.knowledgebase/kb.env`` (only needed to turn on LLM enrichment; the
+stack comes up and answers health checks with it absent).
 
 There is deliberately NO rootless-runtime check. The containers are the only
 writers to the mounted data dirs, so whichever uid they run as is internally
 consistent; the surviving concern (a human must still be able to read the
-markdown vault) is a README caveat, not an install gate. See
-~/.knowledgebase/agent-workbench/decisions/agent-workbench-mount-ownership__2026-07-27.md
+markdown vault) is a README caveat, not an install gate.
 
 ``--json`` emits a machine-readable report instead of the human lines,
 per this project's machine-facing-output-defaults-to-JSON convention.
@@ -36,7 +35,7 @@ __all__ = ["register", "run_checks", "Check"]
 MIN_PYTHON = (3, 9)
 
 KB_ENV_PATH = Path.home() / ".knowledgebase" / "kb.env"
-KB_ENV_EXAMPLE = "scripts/kb-container/kb.env.example"
+KB_ENV_EXAMPLE = "scripts/kb-container/kb.env.example"  # repo-root-relative
 
 
 @dataclass(frozen=True)
@@ -164,19 +163,33 @@ def check_python() -> Check:
     )
 
 
-def check_kb_env() -> Check:
-    """Required: ``~/.knowledgebase/kb.env`` exists.
+def _kb_env_example_hint() -> str:
+    """The kb.env.example source path, absolute when the repo root is
+    reachable from here, else the repo-root-relative form it is defined
+    at (with a note that it is relative)."""
+    try:
+        root = paths.repo_root()
+    except RuntimeError:
+        return f"{KB_ENV_EXAMPLE} (relative to the repo root)"
+    return str(root / KB_ENV_EXAMPLE)
 
-    docker-compose.yml declares it as kb-svc's ``env_file``, and compose
-    refuses to start the stack when a declared env_file is missing.
+
+def check_kb_env() -> Check:
+    """Optional: ``~/.knowledgebase/kb.env`` exists.
+
+    docker-compose.yml declares it as kb-svc's ``env_file`` with
+    ``required: false``, so the stack comes up and kb-svc answers health
+    checks with this file absent. It is only needed to turn on LLM
+    enrichment (an API key) or override defaults; the stack runs fully
+    offline without it.
     """
     if KB_ENV_PATH.is_file():
-        return Check("kb.env", True, True, f"found at {KB_ENV_PATH}", "")
+        return Check("kb.env", False, True, f"found at {KB_ENV_PATH}", "")
     return Check(
-        "kb.env", True, False, f"not found at {KB_ENV_PATH}",
-        f"mkdir -p {KB_ENV_PATH.parent} && cp {KB_ENV_EXAMPLE} {KB_ENV_PATH} "
-        "(from the repo root); compose declares it as an env_file, so `up` "
-        "fails without it",
+        "kb.env", False, False, f"not found at {KB_ENV_PATH} (optional)",
+        f"only needed for LLM enrichment; to enable it: "
+        f"mkdir -p {KB_ENV_PATH.parent} && "
+        f"cp {_kb_env_example_hint()} {KB_ENV_PATH}",
     )
 
 

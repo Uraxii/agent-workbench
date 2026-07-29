@@ -54,7 +54,7 @@ multiply by notes remaining.
 
 ```bash
 $AW kb init
-# -> {"kb_home": "/home/nicole/.knowledgebase", "initialized": true}
+# -> {"kb_home": "$HOME/.knowledgebase", "initialized": true}
 ```
 
 Idempotent: safe to call again, just re-asserts the vault's own dirs exist.
@@ -63,7 +63,7 @@ Idempotent: safe to call again, just re-asserts the vault's own dirs exist.
 
 ```bash
 $AW kb add gvn
-# -> {"project": "gvn", "path": "/home/nicole/.knowledgebase/gvn"}
+# -> {"project": "gvn", "path": "$HOME/.knowledgebase/gvn"}
 ```
 
 Also idempotent, and implied by `clip`/`put`/`atomize`, which create the
@@ -74,7 +74,7 @@ project.
 
 ```bash
 $AW kb path gvn
-# -> /home/nicole/.knowledgebase/gvn
+# -> $HOME/.knowledgebase/gvn
 ```
 
 Prints the bare path only (the service's `GET /project` actually answers
@@ -84,7 +84,7 @@ Prints the bare path only (the service's `GET /project` actually answers
 
 ```bash
 $AW kb index
-# -> {"indexed": 2370, "embedded": 2370, "db": "/home/nicole/.knowledgebase/index/kb.db"}
+# -> {"indexed": 2370, "embedded": 2370, "db": "$HOME/.knowledgebase/index/kb.db"}
 ```
 
 Rebuilds the whole derived layer (FTS5 rows and vectors) from the vault
@@ -96,8 +96,8 @@ rerunning this.
 
 ```bash
 $AW kb clip "https://example.com/article" --project gvn
-# -> {"path": "/home/nicole/.knowledgebase/gvn/sources/article.md",
-#     "children": ["/home/nicole/.knowledgebase/gvn/sources/article--intro.md"],
+# -> {"path": "$HOME/.knowledgebase/gvn/sources/article.md",
+#     "children": ["$HOME/.knowledgebase/gvn/sources/article--intro.md"],
 #     "method": "llm", "indexed": 2371, "embedded": 2371,
 #     "usage": {"calls": 1, "prompt_tokens": 284, "completion_tokens": 293,
 #               "total_tokens": 577,
@@ -116,7 +116,7 @@ tier is controlled by `KB_ENRICH`.
 ```bash
 echo "Body text goes here." | $AW kb put gvn "My Note" --type note \
   --source "https://example.com"
-# -> {"path": "/home/nicole/.knowledgebase/gvn/notes/my-note.md",
+# -> {"path": "$HOME/.knowledgebase/gvn/notes/my-note.md",
 #     "children": [], "method": "already-atomic", "indexed": 2372,
 #     "embedded": 2372}
 ```
@@ -135,9 +135,9 @@ appends `-2`, `-3` to the path, producing duplicate notes with both indexed.
 ```bash
 $AW kb atomize --url "https://example.com/article" --project gvn \
   --title "Article title" --type source
-# -> {"parent": "/home/nicole/.knowledgebase/gvn/sources/article.md",
-#     "path": "/home/nicole/.knowledgebase/gvn/sources/article.md",
-#     "children": ["/home/nicole/.knowledgebase/gvn/sources/article--intro.md"],
+# -> {"parent": "$HOME/.knowledgebase/gvn/sources/article.md",
+#     "path": "$HOME/.knowledgebase/gvn/sources/article.md",
+#     "children": ["$HOME/.knowledgebase/gvn/sources/article--intro.md"],
 #     "method": "llm", "indexed": 2373, "embedded": 2373,
 #     "usage": {"calls": 1, "prompt_tokens": 284, "completion_tokens": 293,
 #               "total_tokens": 577,
@@ -157,7 +157,7 @@ outcomes, never an error.
 
 ```bash
 $AW kb query "information architecture" --project agent-workbench
-# -> {"results": [{"path": "/home/nicole/.knowledgebase/agent-workbench/research/....md",
+# -> {"results": [{"path": "$HOME/.knowledgebase/agent-workbench/research/....md",
 #     "project": "agent-workbench", "type": "research",
 #     "title": "Information Architecture and Route Model Axis",
 #     "date": "2026-07-24", "status": "active",
@@ -176,7 +176,7 @@ keyword ranking. Turn it on by setting `KB_EMBED_MODEL` in
 
 ```bash
 $AW kb status
-# -> {"kb_home": "/home/nicole/.knowledgebase", "initialized": true,
+# -> {"kb_home": "$HOME/.knowledgebase", "initialized": true,
 #     "projects": ["agent-workbench", "gvn", "lodestar"]}
 ```
 
@@ -187,18 +187,18 @@ $AW kb decision record --project gvn --topic base-body-slices \
   --title "<title>" --text "<decision statement>" \
   [--rationale "<why>"] [--refs "<paths/tickets>"] [--tags "a, b"] \
   [--supersedes "<path>"]
-# -> {"path": "/home/nicole/.knowledgebase/gvn/decisions/base-body-slices__2026-07-22.md",
+# -> {"path": "$HOME/.knowledgebase/gvn/decisions/base-body-slices__2026-07-22.md",
 #     "children": [], "method": "already-atomic", "indexed": 2374,
 #     "embedded": 2374, "supersedes": ""}
 
 $AW kb decision audit base-body-slices --project gvn
 # -> [{"date": "2026-07-22", "status": "superseded",
 #     "title": "Base body is six mesh-deformed slices, not per-feature cuts",
-#     "path": "/home/nicole/.knowledgebase/gvn/decisions/base-body-slices__2026-07-22.md",
+#     "path": "$HOME/.knowledgebase/gvn/decisions/base-body-slices__2026-07-22.md",
 #     "supersedes": ""},
 #     {"date": "2026-07-22", "status": "active",
 #     "title": "Base body is six overlap-margin mesh slices ...",
-#     "path": "/home/nicole/.knowledgebase/gvn/decisions/base-body-slices__2026-07-22-2.md",
+#     "path": "$HOME/.knowledgebase/gvn/decisions/base-body-slices__2026-07-22-2.md",
 #     "supersedes": ".../base-body-slices__2026-07-22.md"}]
 ```
 
@@ -242,7 +242,7 @@ writes quoted `type/title/source/...` frontmatter.
 
 ```bash
 $AW kb enrich --project gvn
-# -> {"enriched": 3, "notes": ["/home/nicole/.knowledgebase/gvn/notes/foo.md", ...],
+# -> {"enriched": 3, "notes": ["$HOME/.knowledgebase/gvn/notes/foo.md", ...],
 #     "usage": {"calls": 4, "prompt_tokens": 891, "completion_tokens": 325,
 #               "total_tokens": 1216,
 #               "generation_ids": ["gen-1785253601-bd4xKoLL1axNWEBasA4w", "..."],

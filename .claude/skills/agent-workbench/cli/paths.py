@@ -28,20 +28,26 @@ __all__ = [
 # This module sits at <repo>/.claude/skills/agent-workbench/cli/paths.py, so
 # the repo root is four parents up. Resolved once at import.
 # Under a symlink install, this resolves to the actual repo root.
-# Under a --copy install, this resolves to ~/.claude, which has no scripts/.
-# That is OK -- resolution is lazy, and only repo_root() will raise if needed.
+# Under a --copy install, this resolves to $HOME, which has no scripts/ or
+# docker-compose.yml. That is OK -- resolution is lazy, and only repo_root()
+# will raise if needed.
 REPO_ROOT: Path | None = None
 _attempted = False
 
 
 def _compute_root() -> Path | None:
-    """Compute the repo root by trying parents[4] and checking for scripts/.
-    
+    """Compute the repo root by trying parents[4] and checking it looks
+    like this repo (has scripts/ and docker-compose.yml).
+
     Returns the root if found, None if this is likely a copy install.
     Does not raise.
     """
     candidate = Path(__file__).resolve().parents[4]
-    if (candidate / "scripts").is_dir():
+    looks_like_repo = (
+        (candidate / "scripts").is_dir()
+        and (candidate / "docker-compose.yml").is_file()
+    )
+    if looks_like_repo:
         return candidate
     # Copy install or misc misconfiguration -- return None, let caller decide
     return None
