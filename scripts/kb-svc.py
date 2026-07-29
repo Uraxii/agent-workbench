@@ -318,7 +318,7 @@ def _finish_ingest(
     note into the vault through this function without its children, its
     index rows and its vectors being produced in the same request. That
     is not every vault write, though: ``kb decision record`` flips a
-    PRIOR note's status to ``superseded`` in place, outside this
+    PRIOR note's status to ``revised`` in place, outside this
     function, so that note's vector goes stale (not deleted, not wrong,
     just stale) until the next ``/embed`` or ``/reindex`` pass picks
     it up. Embedding is scoped to ``[note_path] + children`` rather than

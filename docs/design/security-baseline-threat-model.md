@@ -227,7 +227,7 @@ Reported, not implemented, because it belongs to another workstream:
 
 ## 7. Is authentication still deferrable?
 
-**Yes. Authentication is optional and off by default.** See `~/.knowledgebase/agent-workbench/decisions/security-baseline__2026-07-28.md`, which supersedes the prior note treating a bearer-token layer as no-longer-deferrable. The bearer-token design was never implemented, and the user has ruled it out as a requirement: "make auth optional." The reasoning in section 3 applies: a process running as the user can read the token file exactly as easily as it can read `~/.knowledgebase`. For a personal, single-user project, a token layer that only defends against browser-origin attackers and other users on a shared machine was judged not worth building.
+**Yes. Authentication is optional and off by default.** See `~/.knowledgebase/agent-workbench/decisions/security-baseline__2026-07-28.md`, which revises the prior note treating a bearer-token layer as no-longer-deferrable. The bearer-token design was never implemented, and the user has ruled it out as a requirement: "make auth optional." The reasoning in section 3 applies: a process running as the user can read the token file exactly as easily as it can read `~/.knowledgebase`. For a personal, single-user project, a token layer that only defends against browser-origin attackers and other users on a shared machine was judged not worth building.
 
 Section 4's controls close the drive-by browser case and remain the standing mitigation. If future use or threat model changes make an authentication layer desirable, the minimal design below describes what adding one would look like:
 

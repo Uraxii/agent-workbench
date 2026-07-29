@@ -272,7 +272,7 @@ The Django backend serves the React build from `REVIEW_SERVE_SPA_ROOT`. Decided 
 | Any other unmatched top-level path that is not `/_/api`, `/_/assets`, `/_/app`, `/_/review`, `/_/tiles`, and does not resolve as a two-segment `/<project>/<subdir>/...` artifact path | Return the SPA `index.html` so client-side view state (mode, query params, hash) can render. Registered last in urls.py. |
 | Reserved backend path | Never fall through to the SPA. Bad `/_/api`, `/_/assets`, `/_/app`, `/_/review`, and `/_/tiles` paths return backend 404 or 405. |
 
-This prefix is now fixed by decision `artifact-server-spa-mount` (`~/.knowledgebase/agent-workbench/decisions/`); do not change it without recording a superseding decision and updating both the frontend `vite.config.ts` `base` and this table in the same commit.
+This prefix is now fixed by decision `artifact-server-spa-mount` (`~/.knowledgebase/agent-workbench/decisions/`); do not change it without recording a revising decision and updating both the frontend `vite.config.ts` `base` and this table in the same commit.
 
 ### Artifact-id resolution
 
