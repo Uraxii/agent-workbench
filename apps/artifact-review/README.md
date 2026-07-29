@@ -1,5 +1,8 @@
 # Artifact Review Container
 
+See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the publish flow, storage
+roots, and sandbox policy this service enforces.
+
 This directory builds the `localhost/artifact-review:latest` image used by the
 `artifact-svc` compose service. The image contains the Django backend, a
 production React/Vite SPA bundle served by Django, and gunicorn.

@@ -26,10 +26,7 @@ def test_entrypoint_line_never_bakes_a_port_flag(containerfile: Path) -> None:
 
 
 # The author's own machine, never a real prerequisite -- a path that only
-# breaks on someone else's install. Excluded directories, and why:
-#   spikes/ -- owned by a concurrent agent's in-flight work.
-#   vault/  -- historical decision records; their frontmatter carries the
-#              recording author's path by design and must stay untouched.
+# breaks on someone else's install.
 # Built by concatenation, not one literal, so this very check does not
 # trip on its own source when git-tracked.
 _AUTHOR_NAME = "nic" + "ole"
@@ -38,7 +35,6 @@ _AUTHOR_HOME_MARKERS = (
     f"/var/home/{_AUTHOR_NAME}",
     "~" + "/Projects/agent-workbench",
 )
-_EXCLUDED_DIR_PREFIXES = ("spikes/", "vault/")
 
 
 def _tracked_files() -> list[Path]:
@@ -58,8 +54,6 @@ def test_no_tracked_file_hardcodes_the_author_home() -> None:
     offenders: list[str] = []
     for path in _tracked_files():
         rel = path.relative_to(_REPO_ROOT).as_posix()
-        if rel.startswith(_EXCLUDED_DIR_PREFIXES):
-            continue
         try:
             text = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:

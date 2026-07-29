@@ -7,7 +7,6 @@ apps/artifact-review/backend/spa/
 *.egg-info/
 .claudex-worktrees/
 .claude/worktrees/
-spikes/frontend-directions/.render-unified/
 
 # Host-specific compose overrides (tailnet hostnames, local paths). Never tracked.
 .env

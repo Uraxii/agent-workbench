@@ -9,8 +9,9 @@ the artifact store, manage Tailscale exposure, or fall back to local disk.
 Start and stop the service with the stack tooling:
 
 ```bash
-docker-compose up artifact-review
-$HOME/.claude/skills/agent-workbench/agent-workbench deploy status
+podman-compose -f docker-compose.yml up -d artifact-svc
+# or: docker-compose -f docker-compose.yml up -d artifact-svc
+$HOME/.claude/skills/agent-workbench/agent-workbench artifact status
 ```
 
 The artifact client talks to:
