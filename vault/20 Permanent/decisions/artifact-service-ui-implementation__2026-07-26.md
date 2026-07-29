@@ -15,4 +15,4 @@ The user reviewed the updated URLs, said they were good, and asked to implement 
 
 ## Refs
 
-/var/home/nicole/Projects/agent-workbench/spikes/frontend-directions/direction-unified-app.html,/var/home/nicole/Projects/agent-workbench/.claude/skills/artifact-serve/assets/css/theme.css,/var/home/nicole/Projects/agent-workbench/.claude/skills/artifact-serve/scripts/review-serve.py
+/var/home/nicole/Projects/agent-workbench/docs/design/artifact-server-frontend-approved-design/direction-unified-app.html,/var/home/nicole/Projects/agent-workbench/.claude/skills/artifact-serve/assets/css/theme.css,/var/home/nicole/Projects/agent-workbench/.claude/skills/artifact-serve/scripts/review-serve.py

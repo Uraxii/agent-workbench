@@ -4,7 +4,7 @@
 
 This document designs the React and TypeScript single page app for the artifact review server rewrite. The SPA is built with Vite, served as static files by the C# backend, and replaces the current separate gallery, image, code, and injected feedback experiences with one unified review shell.
 
-The approved design is `spikes/frontend-directions/direction-unified-app.html` (repo-root-relative). The real app must reproduce its product shape: one shell, a top-bar mode switcher, a shared work queue, threaded resolvable comments, and light plus Material-dark themes.
+The approved design is `docs/design/artifact-server-frontend-approved-design/direction-unified-app.html` (repo-root-relative). The real app must reproduce its product shape: one shell, a top-bar mode switcher, a shared work queue, threaded resolvable comments, and light plus Material-dark themes.
 
 ## Goals and constraints
 

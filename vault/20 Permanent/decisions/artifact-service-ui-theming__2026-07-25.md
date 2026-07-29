@@ -15,4 +15,4 @@ The user said the last requested change was to incorporate Lodestar theming and 
 
 ## Refs
 
-/var/home/nicole/Projects/agent-workbench/spikes/frontend-directions/direction-unified-app.html,/var/home/nicole/Projects/lodestar/workstreams/artifact-service-ui-brief.md
+/var/home/nicole/Projects/agent-workbench/docs/design/artifact-server-frontend-approved-design/direction-unified-app.html,/var/home/nicole/Projects/lodestar/workstreams/artifact-service-ui-brief.md
