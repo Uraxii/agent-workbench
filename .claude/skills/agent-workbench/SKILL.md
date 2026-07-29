@@ -46,7 +46,7 @@ copy-installed skill has no repo beside it and should not be verifying
 services at all:
 
 ```bash
-scripts/scratch.py <kb|bd|artifact> -- <command...>
+scripts/scratch.py <kb|bd|artifact> [--no-build] -- <command...>
 ```
 
 This brings up ONE throwaway container for that service against a fresh
@@ -57,18 +57,36 @@ instance, runs it, and tears the container + temp dir down in a `finally`
 -- self-cleaning even on failure or Ctrl-C. Exit code is the command's
 exit code. There is no separate up/down mode.
 
+Scratch runs its own `localhost/<service>:scratch` image tag, never
+`:latest` -- a scratch verification can never silently run whatever the
+live stack happens to have pinned, and there's no reason to retag
+`:latest` just to get a fresh one. That tag alone does NOT guarantee
+freshness: `podman-compose up -d` only builds a missing image, so a
+`:scratch` tag left over from an earlier branch would otherwise be
+reused forever. Freshness instead comes from scratch building the image
+from the working tree by default on EVERY run; pass `--no-build` only
+when you already know the tag is current (a no-change rebuild is a
+layer-cache hit, seconds, not the multi-minute cost of a cold build).
+Every run prints the image actually used to stderr as a tripwire:
+
+```
+scratch: kb-svc image localhost/kb-svc:scratch id <sha> created <timestamp>
+```
+
 **`scratch` isolates only the ONE service named at invocation.** The
 other two services are pointed at a `.invalid` sentinel host, so a call
 to them fails immediately with a DNS error naming the cause (e.g.
 `bd-svc-not-started-by-this-scratch-run.invalid`) instead of silently
 reaching the live stack. Do NOT chain a call to a different service
 inside the wrapped command (`scratch.py bd -- ... && $AW kb ...` will
-fail loudly, by design). To verify two services at once, nest `scratch`
-calls -- the outer service stays live inside the inner one:
+fail loudly, by design), and do not nest `scratch` runs -- there is no
+bookkeeping to keep an outer run's service live inside an inner one, so a
+nested call re-sentinels it and fails loudly on the `.invalid` DNS error.
 
-```bash
-scripts/scratch.py kb -- scripts/scratch.py bd -- $AW kb status
-```
+**There is therefore no supported way to probe two services in one
+`scratch` run.** Run `scratch` once per service. Within a single run you
+can chain as many steps as you like against *that* service, e.g.
+`-- bash -c 'first && second'`.
 
 Requires a repo checkout (it reuses `docker-compose.yml` +
 `docker-compose.scratch.yml` at the repo root) and `podman-compose` on
@@ -89,9 +107,35 @@ install: a real copy pinned to the source commit, stamped into a marker
 file the CLI reads back. `--link` is a dev symlink, and it makes the
 installed skill track whatever branch that working tree has checked out
 -- that's why `--copy` is the default recommendation. `--uninstall`
-removes a repo-owned install (symlink or stamped copy). `doctor` reports
-which of the two you have, and flags it when a pinned copy has gone
-stale relative to the repo. `init-workspace` scaffolds `docs/kb/` +
+removes a repo-owned install (symlink or stamped copy).
+
+A `--copy` reinstall produces **exactly** the source tree: a module the
+source has since deleted does not survive the upgrade. It only ever
+replaces its own installs. If the target is a real directory with no
+marker, or is not a directory at all, it refuses, leaves the target
+untouched, and **exits 1** -- move the path aside yourself and re-run:
+
+```
+$ $AW install --copy
+agent-workbench: refusing to overwrite /home/you/.claude/skills/agent-workbench
+ -- real dir with no install marker, not this repo's own copy install.
+ Move it aside yourself, then re-run install --copy.
+$ echo $?
+1
+```
+
+`doctor` reports which install shape you have and compares the pinned
+commit against the source repo the marker records:
+
+```
+[OK]   skill install: pinned at c1b549c5c5af, matches repo HEAD
+[WARN] skill install: stale -- installed at deadbeefdead, repo HEAD is now c1b549c5c5af
+[WARN] skill install: pinned at deadbeefdead, installed from /gone/repo which no longer exists; staleness could not be checked
+```
+
+A check that could not actually compare is always `[WARN]`, never `[OK]`.
+
+`init-workspace` scaffolds `docs/kb/` +
 `workstreams/` + a bd board into a target repo. It builds no repo-local
 search index: the searchable knowledgebase is the vault under `KB_HOME`,
 indexed by the one indexer (`scripts/kb-index.py`) and searched with

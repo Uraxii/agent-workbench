@@ -7,7 +7,9 @@ Replaces hand-managed symlinks with a scripted, reversible step:
                  symlink there; refuses a real dir or file)
     --copy       same target, but a recursive copy instead of a symlink
                  (__pycache__ excluded); stamps the install with a marker
-                 file so --uninstall can safely remove it
+                 file so --uninstall can safely remove it. A reinstall over
+                 a prior marked copy produces exactly the source tree (no
+                 stale orphans); refuses on a real dir with no marker
     --uninstall  remove ~/.claude/skills/agent-workbench; succeeds on a
                  symlink pointing at this repo's skill dir, or on a real
                  dir stamped by --copy; refuses otherwise to avoid
@@ -19,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -112,17 +115,61 @@ def read_marker(target: Path) -> dict[str, object] | None:
     return data if isinstance(data, dict) else {}
 
 
-def _install_copy(target: Path, source: Path) -> None:
-    """Recursively copy ``source`` over ``target`` (__pycache__ excluded).
+def _install_copy(target: Path, source: Path) -> int:
+    """Recursively copy ``source`` over ``target`` (__pycache__ excluded),
+    producing exactly the source tree -- a reinstall leaves no orphan file
+    that the source no longer has.
 
-    Stamps the install with INSTALL_MARKER so --uninstall can safely
-    remove it later.
+    Builds the fresh copy in a sibling temp dir and swaps it in rather than
+    clearing ``target`` first: a copy that fails partway (disk full,
+    permission, interrupt) leaves the previous install intact instead of a
+    half-deleted target, for a handful of extra lines.
+
+    Refuses -- and leaves ``target`` untouched -- if ``target`` exists but
+    is neither this repo's own symlink nor a real dir carrying
+    INSTALL_MARKER (a foreign real dir, or a plain file): not ours to
+    clear.
+
+    Stamps the fresh install with INSTALL_MARKER so --uninstall (and the
+    next --copy) can recognize it as ours.
+
+    The temp dir is always removed on the way out, success or failure --
+    ``~/.claude/skills/`` is exactly the directory Claude Code enumerates
+    for skills, so a surviving ``*.tmp-<pid>`` there (it carries a valid
+    marker once ``_write_marker`` has run) would register as a second,
+    permanently stale copy of the skill.
+
+    Returns 0 on success, 1 if refused.
     """
     if target.is_symlink():
         target.unlink()
-    shutil.copytree(source, target, dirs_exist_ok=True, ignore=_ignore_pycache)
-    _write_marker(target, source)
+    elif target.exists() and not target.is_dir():
+        print(
+            f"agent-workbench: refusing to overwrite {target} -- not a "
+            "directory, not this repo's own copy install. Move it aside "
+            "yourself, then re-run install --copy.",
+        )
+        return 1
+    elif target.is_dir() and read_marker(target) is None:
+        print(
+            f"agent-workbench: refusing to overwrite {target} -- real dir "
+            "with no install marker, not this repo's own copy install. "
+            "Move it aside yourself, then re-run install --copy.",
+        )
+        return 1
+
+    tmp = target.with_name(f"{target.name}.tmp-{os.getpid()}")
+    shutil.rmtree(tmp, ignore_errors=True)
+    try:
+        shutil.copytree(source, tmp, ignore=_ignore_pycache)
+        _write_marker(tmp, source)
+        if target.exists():
+            shutil.rmtree(target)
+        tmp.replace(target)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
     print(f"agent-workbench: copied {source} -> {target}")
+    return 0
 
 
 def _uninstall(target: Path, source: Path) -> bool:
@@ -181,8 +228,7 @@ def cmd_install(args: argparse.Namespace) -> int:
         except RuntimeError as e:
             print(f"agent-workbench: {e}")
             return 1
-        _install_copy(target, source)
-        return 0
+        return _install_copy(target, source)
     
     else:  # args.uninstall
         try:

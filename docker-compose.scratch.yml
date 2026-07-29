@@ -27,6 +27,17 @@
 # exactly the live-data exposure this command exists to prevent.
 services:
   kb-svc:
+    # Own tag, never :latest -- decouples a scratch run from whatever the
+    # live stack happens to have pinned (and removes any reason to retag
+    # :latest just to get a fresh one). This tag alone does NOT guarantee
+    # freshness: podman-compose's `up` only builds a missing image, so a
+    # `:scratch` left over from an earlier branch would otherwise be
+    # reused forever. Freshness comes from scripts/scratch.py building by
+    # default on every run (`--no-build` opts out). Plain scalar key, not
+    # `!override`: compose only APPENDS list-valued keys (ports/volumes
+    # below), a scalar like `image` is simply replaced -- verified via
+    # `podman-compose ... config`.
+    image: localhost/kb-svc:scratch
     # Decouples scratch from the real, optional ~/.knowledgebase/kb.env:
     # absent on a fresh host, present or not it never affects scratch.
     env_file: !override []
@@ -40,6 +51,7 @@ services:
     restart: "no"
 
   bd-svc:
+    image: localhost/bd-svc:scratch
     ports: !override
       - "127.0.0.1::9101"
     volumes: !override
@@ -49,6 +61,7 @@ services:
     restart: "no"
 
   artifact-svc:
+    image: localhost/artifact-review:scratch
     ports: !override
       - "127.0.0.1::9099"
     volumes: !override

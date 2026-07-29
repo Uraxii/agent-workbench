@@ -37,6 +37,7 @@ down when it returns:
 AW=$HOME/.claude/skills/agent-workbench/agent-workbench
 scripts/scratch.py artifact -- $AW artifact status
 # -> scratch: artifact-svc up at 127.0.0.1:<random port>
+# -> scratch: artifact-svc image localhost/artifact-review:scratch id <sha> created <timestamp>
 # -> {"artifacts": [], "endpoint": "http://127.0.0.1:<random port>",
 #     "health": {"status": "ok"}}
 ```
@@ -45,11 +46,11 @@ Same response shape as a live `artifact status`, except `artifacts` is
 empty (the scratch store is brand new) and `endpoint` points at the
 scratch port. `scratch artifact` isolates ONLY artifact-svc: a `kb`/`bd`
 call made inside the wrapped command still fails loudly (sentinel
-`.invalid` host), never reaches the live stack. See `SKILL.md` for the
-full `scratch` contract (any `artifact` verb, including `publish`, works
-the same way inside it, and nesting
-`scripts/scratch.py kb -- scripts/scratch.py bd -- ...` covers two
-services).
+`.invalid` host), never reaches the live stack. `scratch` rebuilds the
+image from the working tree by default on every run; pass `--no-build`
+before `--` only when you already know `:scratch` is current. See
+`SKILL.md` for the full `scratch` contract (any `artifact` verb,
+including `publish`, works the same way inside it).
 
 ## Publish
 

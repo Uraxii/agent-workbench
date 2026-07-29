@@ -416,17 +416,26 @@ def test_skill_install_broken_symlink_is_not_ok(
     assert result.fix_hint.endswith("install --copy")
 
 
+def _mkdir_marker_source(repo_root: Path) -> str:
+    """Create `<repo_root>/.claude/skills/agent-workbench` plus a
+    `<repo_root>/scripts` dir (the plausibility test `check_skill_install`
+    requires before trusting a derived repo root) on disk, and return the
+    skill dir as the marker `source` string."""
+    skill_dir = repo_root / ".claude" / "skills" / "agent-workbench"
+    skill_dir.mkdir(parents=True)
+    (repo_root / "scripts").mkdir()
+    return str(skill_dir.resolve())
+
+
 def test_skill_install_matches_repo_head_is_ok(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
     """Marker commit == repo HEAD -> ok, short SHA shown, no fix hint."""
     target = tmp_path / "target"
-    repo_root = tmp_path / "repo"
     commit = "deadbeef" * 5
-    source = str((repo_root / ".claude" / "skills" / "agent-workbench").resolve())
+    source = _mkdir_marker_source(tmp_path / "repo")
     _write_marker(target, commit, source=source)
     monkeypatch.setattr(doctor.install, "install_target", lambda: target)
-    monkeypatch.setattr(doctor.paths, "repo_root", lambda: repo_root)
     monkeypatch.setattr(doctor.paths, "git_head", lambda root: commit)
 
     result = doctor.check_skill_install()
@@ -436,24 +445,26 @@ def test_skill_install_matches_repo_head_is_ok(
     assert result.fix_hint == ""
 
 
-def test_skill_install_head_unreadable_is_ok_not_stale(
+def test_skill_install_head_unreadable_is_warn_not_ok(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
-    """Marker source matches but `paths.git_head` returns None (HEAD could
-    not be read, e.g. a tarball checkout) -> ok, pinned short SHA shown,
-    never called "stale", no fix hint."""
+    """Marker source exists but `paths.git_head` returns None (HEAD could
+    not be read, e.g. a tarball checkout) -> not-ok (WARN, never gated on
+    required), pinned short SHA shown, never called "stale", no fix hint.
+
+    `ok=True` here used to render `[OK]` on a check that had just said it
+    did not check -- indistinguishable from a verified match."""
     target = tmp_path / "target"
-    repo_root = tmp_path / "repo"
     commit = "deadbeef" * 5
-    source = str((repo_root / ".claude" / "skills" / "agent-workbench").resolve())
+    source = _mkdir_marker_source(tmp_path / "repo")
     _write_marker(target, commit, source=source)
     monkeypatch.setattr(doctor.install, "install_target", lambda: target)
-    monkeypatch.setattr(doctor.paths, "repo_root", lambda: repo_root)
     monkeypatch.setattr(doctor.paths, "git_head", lambda root: None)
 
     result = doctor.check_skill_install()
 
-    assert result.ok is True
+    assert result.ok is False
+    assert result.required is False
     assert "stale --" not in result.detail
     assert commit[:12] in result.detail
     assert "could not be read" in result.detail
@@ -465,13 +476,11 @@ def test_skill_install_stale_marker_is_not_ok(
 ) -> None:
     """Marker commit != repo HEAD -> not-ok, both short SHAs shown."""
     target = tmp_path / "target"
-    repo_root = tmp_path / "repo"
     installed = "aaaa" * 10
     current = "bbbb" * 10
-    source = str((repo_root / ".claude" / "skills" / "agent-workbench").resolve())
+    source = _mkdir_marker_source(tmp_path / "repo")
     _write_marker(target, installed, source=source)
     monkeypatch.setattr(doctor.install, "install_target", lambda: target)
-    monkeypatch.setattr(doctor.paths, "repo_root", lambda: repo_root)
     monkeypatch.setattr(doctor.paths, "git_head", lambda root: current)
 
     result = doctor.check_skill_install()
@@ -483,50 +492,153 @@ def test_skill_install_stale_marker_is_not_ok(
     assert result.fix_hint != ""
 
 
-def test_skill_install_source_mismatch_is_not_stale(
+def test_skill_install_derives_repo_root_from_marker_source(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
-    """A repo resolves here (e.g. an unrelated ~/scripts dir) but it is not
-    the repo this copy came from -- must not compare HEAD, must not report
-    stale, and must not emit a fix hint."""
+    """`check_skill_install` must call `paths.git_head` with the repo root
+    derived from the marker's recorded source (its grandparent's parent),
+    not from this file's own on-disk location -- the actual root cause of
+    the defect (`paths._compute_root` walking up from cli/doctor.py itself
+    lands under $HOME on a --copy install, which has no scripts/)."""
     target = tmp_path / "target"
-    repo_root = tmp_path / "unrelated-repo"
-    _write_marker(
-        target, "cccc" * 10,
-        source="/real/repo/.claude/skills/agent-workbench",
-    )
+    repo_root = tmp_path / "repo"
+    commit = "deadbeef" * 5
+    source = _mkdir_marker_source(repo_root)
+    _write_marker(target, commit, source=source)
     monkeypatch.setattr(doctor.install, "install_target", lambda: target)
-    monkeypatch.setattr(doctor.paths, "repo_root", lambda: repo_root)
-    monkeypatch.setattr(doctor.paths, "git_head", lambda root: "bbbb" * 10)
+    seen_roots: list[Path] = []
+
+    def fake_git_head(root: Path) -> str:
+        seen_roots.append(root)
+        return commit
+
+    monkeypatch.setattr(doctor.paths, "git_head", fake_git_head)
 
     result = doctor.check_skill_install()
 
+    assert seen_roots == [repo_root.resolve()]
     assert result.ok is True
+
+
+def test_skill_install_source_resolves_to_target_itself_is_warn(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """Degenerate case: the marker's source resolves to the install target
+    itself (a stray $HOME that happens to look like a repo). Must not
+    compare HEAD -- comparing against whatever unrelated repo happens to
+    live at $HOME (a dotfiles repo, say) could false-report "stale" --
+    WARN instead, and `git_head` must never even be called."""
+    target = tmp_path / "target"
+    target.mkdir(parents=True)
+    _write_marker(target, "cccc" * 10, source=str(target))
+
+    def fail_git_head(root: Path) -> str:
+        raise AssertionError("git_head must not be called for a "
+                              "self-referencing source")
+
+    monkeypatch.setattr(doctor.install, "install_target", lambda: target)
+    monkeypatch.setattr(doctor.paths, "git_head", fail_git_head)
+
+    result = doctor.check_skill_install()
+
+    assert result.ok is False
+    assert result.required is False
     assert "stale --" not in result.detail
-    assert "not reachable from here" in result.detail
     assert result.fix_hint == ""
 
 
-def test_skill_install_source_resolves_to_target_itself_is_not_stale(
+def test_skill_install_source_too_shallow_is_warn_not_crash(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
-    """Degenerate case from the reviewer's repro: the resolved repo root's
-    skill dir IS the install target (a stray ~/scripts dir on a --copy
-    install). Must not report stale, and must never hint at
-    `copytree(src, src)`."""
-    fake_home = tmp_path / "fakehome"
-    target = fake_home / ".claude" / "skills" / "agent-workbench"
-    _write_marker(
-        target, "cccc" * 10,
-        source="/real/repo/.claude/skills/agent-workbench",
-    )
+    """A marker source resolving to a path with fewer than 3 parents (so
+    a naive `.parents[2]` would raise `IndexError`) must WARN, never
+    crash -- `doctor` reports a broken machine, it does not fall over on
+    one, the same argument this file already makes for `check_compose`."""
+    target = tmp_path / "target"
+    shallow = tmp_path / "root-link"
+    shallow.symlink_to("/")
+    _write_marker(target, "cccc" * 10, source=str(shallow))
     monkeypatch.setattr(doctor.install, "install_target", lambda: target)
-    monkeypatch.setattr(doctor.paths, "repo_root", lambda: fake_home)
 
     result = doctor.check_skill_install()
 
-    assert result.ok is True
+    assert result.ok is False
+    assert result.required is False
     assert "stale --" not in result.detail
+    assert result.fix_hint == ""
+
+
+def test_skill_install_source_repo_root_missing_scripts_is_warn(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """The computed repo root (source's grandparent's parent) has no
+    scripts/ dir -- not a plausible source repo, the same test
+    `paths._compute_root` uses -- WARN, never a HEAD comparison against
+    whatever unrelated repo might happen to live there."""
+    target = tmp_path / "target"
+    repo_root = tmp_path / "not-a-repo"
+    skill_dir = repo_root / ".claude" / "skills" / "agent-workbench"
+    skill_dir.mkdir(parents=True)  # no repo_root/scripts
+    _write_marker(target, "cccc" * 10, source=str(skill_dir.resolve()))
+    monkeypatch.setattr(doctor.install, "install_target", lambda: target)
+
+    def fail_git_head(root: Path) -> str:
+        raise AssertionError("git_head must not be called for an "
+                              "implausible repo root")
+
+    monkeypatch.setattr(doctor.paths, "git_head", fail_git_head)
+
+    result = doctor.check_skill_install()
+
+    assert result.ok is False
+    assert result.required is False
+    assert "stale --" not in result.detail
+    assert result.fix_hint == ""
+
+
+def test_skill_install_marker_source_missing_is_warn(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """A pinned copy whose marker records no `source` at all -> not-ok
+    (renders WARN, since the check is not required), no fix hint, and
+    `paths.repo_root` is never consulted."""
+    target = tmp_path / "target"
+    target.mkdir(parents=True)
+    (target / install.INSTALL_MARKER).write_text(
+        json.dumps({"commit": "cccc" * 10, "installed_at": "t"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(doctor.install, "install_target", lambda: target)
+    monkeypatch.setattr(doctor.paths, "repo_root", _raise_repo_root_unreachable)
+
+    result = doctor.check_skill_install()
+
+    assert result.ok is False
+    assert result.required is False
+    assert "no recorded source" in result.detail
+    assert result.fix_hint == ""
+
+
+def test_skill_install_marker_source_no_longer_exists_is_warn(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """The real bug this fix targets: on a --copy install, the source repo
+    genuinely IS reachable, but a marker whose recorded source path was
+    since moved or deleted must still report WARN (not silently OK) --
+    "staleness could not be checked" must never look identical to a
+    verified match."""
+    target = tmp_path / "target"
+    _write_marker(
+        target, "cccc" * 10,
+        source=str(tmp_path / "repo" / ".claude" / "skills" / "agent-workbench"),
+    )
+    monkeypatch.setattr(doctor.install, "install_target", lambda: target)
+
+    result = doctor.check_skill_install()
+
+    assert result.ok is False
+    assert result.required is False
+    assert "no longer exists" in result.detail
     assert result.fix_hint == ""
 
 
@@ -546,19 +658,22 @@ def test_skill_install_legacy_empty_marker_is_not_ok(
     assert result.fix_hint != ""
 
 
-def test_skill_install_repo_unreachable_pinned_copy_is_ok(
+def test_skill_install_unreachable_source_is_warn_not_ok(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
-    """Marker has a commit but the source repo can't be reached from here
-    -- the normal healthy state for a production install, not a failure."""
+    """Marker has a commit but its recorded source path does not exist on
+    disk -- this used to report `[OK] ... staleness could not be checked`
+    (the defect: a silent decline that reads identical to a verified
+    match). It must now report not-ok (WARN), never gated on required."""
     target = tmp_path / "target"
-    _write_marker(target, "cccc" * 10)
+    _write_marker(target, "cccc" * 10)  # default source="s": not a real dir
     monkeypatch.setattr(doctor.install, "install_target", lambda: target)
     monkeypatch.setattr(doctor.paths, "repo_root", _raise_repo_root_unreachable)
 
     result = doctor.check_skill_install()
 
-    assert result.ok is True
+    assert result.ok is False
+    assert result.required is False
     assert "staleness could not be checked" in result.detail
     assert result.fix_hint == ""
 

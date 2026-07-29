@@ -28,16 +28,18 @@ down when it returns:
 ```bash
 scripts/scratch.py kb -- $AW kb status
 # -> scratch: kb-svc up at 127.0.0.1:<random port>
+# -> scratch: kb-svc image localhost/kb-svc:scratch id <sha> created <timestamp>
 # -> {"kb_home": "/tmp/aw-scratch-XXXXXXXX", "initialized": true, "projects": []}
 ```
 
 Same response shape as a live `kb status`, except `kb_home` points at the
 scratch dir instead of the real vault. `scratch kb` isolates ONLY kb-svc:
 a `bd`/`artifact` call made inside the wrapped command still fails loudly
-(sentinel `.invalid` host), never reaches the live stack. See `SKILL.md`
-for the full `scratch` contract (any `kb` verb works the same way inside
-it, and nesting `scripts/scratch.py kb -- scripts/scratch.py bd -- ...`
-covers two services).
+(sentinel `.invalid` host), never reaches the live stack. `scratch`
+rebuilds the image from the working tree by default on every run; pass
+`--no-build` before `--` only when you already know `:scratch` is
+current. See `SKILL.md` for the full `scratch` contract (any `kb` verb
+works the same way inside it).
 
 When a request makes at least one model call, the response includes a `usage`
 key with `calls` (HTTP calls made), token counts (summed across calls),

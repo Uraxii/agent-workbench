@@ -7,6 +7,7 @@ touched.
 """
 from __future__ import annotations
 
+import argparse
 import subprocess
 import sys
 from datetime import datetime
@@ -139,6 +140,120 @@ def test_install_copy_replaces_existing_symlink(source: Path, target: Path) -> N
 
     assert not target.is_symlink()
     assert (target / "SKILL.md").read_text(encoding="utf-8") == "marker\n"
+
+
+def test_install_copy_reinstall_removes_orphan_file_not_in_source(
+    source: Path, target: Path,
+) -> None:
+    """A reinstall over a prior marked copy produces exactly the source
+    tree: a file the old install had that source no longer has (e.g. a
+    retired module) must not survive."""
+    install._install_copy(target, source)
+    orphan = target / "cli" / "scratch.py"
+    orphan.parent.mkdir(parents=True, exist_ok=True)
+    orphan.write_text("pass\n", encoding="utf-8")
+    assert orphan.exists()
+
+    exit_code = install._install_copy(target, source)
+
+    assert exit_code == 0
+    assert not orphan.exists()
+    assert (target / "SKILL.md").read_text(encoding="utf-8") == "marker\n"
+    assert install.read_marker(target) is not None
+
+
+def test_install_copy_refuses_foreign_real_dir_and_leaves_it_intact(
+    source: Path, target: Path,
+) -> None:
+    """A real dir at target with no INSTALL_MARKER is not this repo's own
+    copy install -- refuse, exit 1, and never touch its contents."""
+    target.mkdir(parents=True)
+    (target / "unrelated.txt").write_text("keep me\n", encoding="utf-8")
+
+    exit_code = install._install_copy(target, source)
+
+    assert exit_code == 1
+    assert target.is_dir()
+    assert (target / "unrelated.txt").read_text(encoding="utf-8") == "keep me\n"
+    assert not (target / "SKILL.md").exists()
+    assert install.read_marker(target) is None
+
+
+def test_install_copy_refuses_plain_file_target_and_leaves_it_untouched(
+    source: Path, target: Path,
+) -> None:
+    """A target that is a regular file -- neither a symlink nor a dir --
+    falls through both existing guards and must be refused outright, not
+    copied over and then `rmtree`'d (which raises NotADirectoryError)."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("not a skill dir\n", encoding="utf-8")
+
+    exit_code = install._install_copy(target, source)
+
+    assert exit_code == 1
+    assert target.is_file()
+    assert target.read_text(encoding="utf-8") == "not a skill dir\n"
+
+
+def test_install_copy_removes_temp_dir_when_copytree_fails(
+    source: Path, target: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Any failure past `copytree` must not leave the sibling temp dir
+    behind -- ``~/.claude/skills/`` is exactly what Claude Code enumerates
+    for skills, so a surviving ``*.tmp-<pid>`` there (carrying a valid
+    marker once `_write_marker` has run) would register as a second,
+    permanently stale copy of the skill."""
+    # Fail AFTER copytree has populated the temp dir. Failing copytree
+    # itself leaves nothing on disk to clean up, so such a test passes
+    # even with the `finally` deleted -- it can never catch the defect.
+    def fail_write_marker(*_args: object, **_kwargs: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(install, "_write_marker", fail_write_marker)
+
+    with pytest.raises(OSError, match="disk full"):
+        install._install_copy(target, source)
+
+    leftovers = list(target.parent.glob(f"{target.name}.tmp-*"))
+    assert leftovers == [], f"temp dir survived: {leftovers}"
+
+
+def test_cmd_install_copy_propagates_refusal_as_exit_1(
+    source: Path, target: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`install --copy` onto a foreign dir must EXIT 1, not just print.
+
+    `_install_copy` returning 1 is worthless if `cmd_install` drops it:
+    the caller sees success for an install that never happened, which is
+    the exact "a failed operation must not look like a success" failure
+    this branch exists to remove. Nothing else exercises `cmd_install`.
+    """
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.mkdir()
+    (target / "unrelated.txt").write_text("not ours\n", encoding="utf-8")
+
+    monkeypatch.setattr(install, "install_target", lambda: target)
+    monkeypatch.setattr(install, "source_dir", lambda: source)
+
+    args = argparse.Namespace(link=False, copy=True, uninstall=False)
+
+    assert install.cmd_install(args) == 1
+    assert (target / "unrelated.txt").read_text(encoding="utf-8") == "not ours\n"
+    assert not (target / "SKILL.md").exists()
+
+
+def test_cmd_install_copy_returns_0_on_success(
+    source: Path, target: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The success direction of the same seam, so the refusal test above
+    cannot pass by `cmd_install` simply always returning 1."""
+    monkeypatch.setattr(install, "install_target", lambda: target)
+    monkeypatch.setattr(install, "source_dir", lambda: source)
+
+    args = argparse.Namespace(link=False, copy=True, uninstall=False)
+
+    assert install.cmd_install(args) == 0
+    assert (target / "SKILL.md").exists()
 
 
 def test_uninstall_removes_correctly_pointing_symlink(
