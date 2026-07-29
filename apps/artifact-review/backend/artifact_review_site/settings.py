@@ -14,7 +14,9 @@ DEBUG = os.environ.get("DJANGO_DEBUG", "0") == "1"
 
 ARTIFACT_SVC_HOST = os.environ.get("ARTIFACT_SVC_HOST", "127.0.0.1")
 ARTIFACT_SVC_PORT = int(os.environ.get("ARTIFACT_SVC_PORT", "9099"))
-ARTIFACT_SVC_STAGE_ROOT = Path(os.environ.get("ARTIFACT_SVC_STAGE_ROOT", "/tmp/artifacts")).expanduser()
+ARTIFACT_SVC_STAGE_ROOT = Path(
+    os.environ.get("ARTIFACT_SVC_STAGE_ROOT", "~/.local/share/artifacts/stage")
+).expanduser()
 ARTIFACT_SVC_FEEDBACK_ROOT = Path(
     os.environ.get("ARTIFACT_SVC_FEEDBACK_ROOT", "~/.local/share/artifacts")
 ).expanduser()

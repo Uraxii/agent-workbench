@@ -30,7 +30,7 @@ The CLI never writes into the artifact store. The service extracts safe
 regular files and directories under:
 
 ```text
-/tmp/artifacts
+$HOME/.local/share/artifacts/stage
 ```
 
 Durable feedback and uploads live under:
@@ -38,6 +38,10 @@ Durable feedback and uploads live under:
 ```text
 $HOME/.local/share/artifacts
 ```
+
+The stage root is a subdirectory of the feedback root, not the feedback
+root itself: `views_static.py` serves files straight out of the stage
+root, so `feedback.db` must stay outside the served tree.
 
 ## Review Flow
 

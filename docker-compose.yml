@@ -149,19 +149,24 @@ services:
       ARTIFACT_SVC_HOST: "0.0.0.0"
       ARTIFACT_SVC_PORT: "9099"
       ARTIFACT_SVC_ALLOWED_HOSTS: "${ARTIFACT_SVC_ALLOWED_HOSTS:-127.0.0.1,localhost}"
-      ARTIFACT_SVC_STAGE_ROOT: "/tmp/artifacts"
-      ARTIFACT_SVC_FEEDBACK_ROOT: "${HOME}/.local/share/artifacts"
+      ARTIFACT_SVC_FEEDBACK_ROOT: "${ARTIFACT_SVC_FEEDBACK_ROOT:-${HOME}/.local/share/artifacts}"
+      # Nests under FEEDBACK_ROOT by default, so overriding FEEDBACK_ROOT
+      # alone (e.g. to relocate the whole artifacts tree to another disk)
+      # relocates the stage tree too and stays covered by the one volume
+      # mount below. Overriding STAGE_ROOT on its own to a path outside
+      # FEEDBACK_ROOT needs its own volume line added by hand -- not done
+      # here, see .env.example.
+      ARTIFACT_SVC_STAGE_ROOT: "${ARTIFACT_SVC_STAGE_ROOT:-${ARTIFACT_SVC_FEEDBACK_ROOT:-${HOME}/.local/share/artifacts}/stage}"
       DJANGO_DEBUG: "0"
       HOME: "${HOME}"
     ports:
       - "127.0.0.1:9099:9099"
     volumes:
-      # /tmp is otherwise tmpfs inside the read-only container; verified
-      # this bind mount survives that tmpfs and remains visible on the host.
-      # Shared SELinux relabel is required for both mounts; without it,
-      # publish hit EACCES on the feedback root despite correct DAC perms.
-      - /tmp/artifacts:/tmp/artifacts:rw,z
-      - "${HOME}/.local/share/artifacts:${HOME}/.local/share/artifacts:rw,z"
+      # Stage root lives under the feedback root's bind, so this one mount
+      # covers both -- no separate /tmp bind needed. Shared SELinux
+      # relabel is required; without it, publish hit EACCES on the
+      # feedback root despite correct DAC perms.
+      - "${ARTIFACT_SVC_FEEDBACK_ROOT:-${HOME}/.local/share/artifacts}:${ARTIFACT_SVC_FEEDBACK_ROOT:-${HOME}/.local/share/artifacts}:rw,z"
     read_only: true
     cap_drop:
       - ALL

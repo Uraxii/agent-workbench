@@ -26,7 +26,6 @@ podman run --rm -p 127.0.0.1:9099:9099 \
   -e ARTIFACT_SVC_HOST=0.0.0.0 \
   -e ARTIFACT_SVC_PORT=9099 \
   -e ARTIFACT_SVC_ALLOWED_HOSTS=127.0.0.1,localhost \
-  -v /tmp/artifacts:/tmp/artifacts:rw \
   -v "$HOME/.local/share/artifacts:$HOME/.local/share/artifacts:rw" \
   --read-only --tmpfs /tmp --cap-drop ALL \
   --security-opt no-new-privileges:true \
@@ -38,7 +37,8 @@ Environment variables:
 - `ARTIFACT_SVC_HOST`: host setting read by Django. Compose sets `0.0.0.0`.
 - `ARTIFACT_SVC_PORT`: gunicorn and healthcheck port. Defaults to `9099`.
 - `ARTIFACT_SVC_ALLOWED_HOSTS`: comma-separated Django allowed hosts.
-- `ARTIFACT_SVC_STAGE_ROOT`: published artifact root. Defaults to `/tmp/artifacts`.
+- `ARTIFACT_SVC_STAGE_ROOT`: published artifact root. Defaults to
+  `~/.local/share/artifacts/stage`.
 - `ARTIFACT_SVC_FEEDBACK_ROOT`: sqlite feedback and upload root. Defaults to `~/.local/share/artifacts`.
 - `ARTIFACT_SVC_SPA_ROOT`: built SPA root. Defaults to `backend/spa` inside the app.
 - `ARTIFACT_SVC_ASSETS_ROOT`: backend asset root.

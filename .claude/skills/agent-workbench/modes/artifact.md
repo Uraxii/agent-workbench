@@ -27,7 +27,8 @@ filesystem fallback.
 ## Never verify against the live stack
 
 Never probe the live artifact-svc (port 9099, the real
-`/tmp/artifacts` + `~/.local/share/artifacts`) to verify a change works --
+`~/.local/share/artifacts`, which holds both the staged tree under
+`stage/` and the feedback database) to verify a change works --
 that leaves permanent residue in the real artifact store. See `SKILL.md`
 for the ephemeral-service verification rule and how to invoke it
 (`scripts/ephemeral-service.py artifact -- ...`) from a repo checkout;
@@ -268,11 +269,12 @@ as a human out-of-band process. All artifact storage paths and metadata are list
 
 ### Published artifact tree
 
-The published artifact tree is stored at `/tmp/artifacts/{project}/{subdir}`.
+The published artifact tree is stored at
+`$HOME/.local/share/artifacts/stage/{project}/{subdir}`.
 
 Remove with:
 ```bash
-rm -rf /tmp/artifacts/e2e/tree
+rm -rf "$HOME/.local/share/artifacts/stage/e2e/tree"
 ```
 
 Note: The artifact_index row and all feedback threads survive the tree deletion. To
@@ -308,7 +310,7 @@ Use the commands above (substituting your project/subdir) to clean them up.
 
 ## Storage Paths
 
-- Published artifacts: `/tmp/artifacts`
+- Published artifacts: `$HOME/.local/share/artifacts/stage`
 - Feedback database: `$HOME/.local/share/artifacts/feedback.db`
 - Uploaded files: `$HOME/.local/share/artifacts/uploads/`
 

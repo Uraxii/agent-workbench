@@ -159,8 +159,8 @@ Live runtime data stays where it already lives. This split does **not** move or 
 
 - `~/.beads-hub/`
 - `~/.knowledgebase/`
-- `~/.local/share/artifacts/`
-- `/tmp/artifacts/`
+- `~/.local/share/artifacts/` (staged artifact bytes live under its `stage/`
+  subdirectory)
 - `~/.local/share/n8n/`
 
 ## Repo layout

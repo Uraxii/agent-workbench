@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -286,6 +287,72 @@ def check_kb_env() -> Check:
     )
 
 
+def _dotenv_overrides() -> dict[str, str]:
+    """Parse the repo-root `.env` file the same KEY=VALUE way compose
+    reads it, into a plain dict. Empty when no repo root or no `.env` is
+    found -- a copy install has no repo-root `.env` to read, matching how
+    compose itself never sees one from that install either.
+    """
+    try:
+        env_path = paths.repo_root() / ".env"
+    except RuntimeError:
+        return {}
+    if not env_path.is_file():
+        return {}
+    overrides: dict[str, str] = {}
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        overrides[key.strip()] = value.strip()
+    return overrides
+
+
+def _resolved_root(var: str, default: str, overrides: dict[str, str]) -> Path:
+    """The same precedence docker-compose.yml's `${VAR:-default}` gives a
+    setting: a real shell-exported env var wins, then the repo's `.env`
+    file, then the compose default."""
+    raw = os.environ.get(var) or overrides.get(var) or default
+    return Path(raw).expanduser()
+
+
+def check_data_roots() -> Check:
+    """Report each service's resolved durable data root, so a stray
+    ``/tmp`` default (or override) is visible instead of silently
+    inferred. Never required -- this is visibility, not a prerequisite --
+    but WARNs if any resolved root sits under ``/tmp``, since ``/tmp``
+    clears on reboot and every root here is meant to survive that.
+
+    kb-svc's KB_HOME and bd-svc's BEADS_HUB_DIR are not `.env`-overridable
+    today (docker-compose.yml hardcodes them to ``$HOME``-relative
+    paths), so those two are always reported at their fixed location.
+    """
+    overrides = _dotenv_overrides()
+    feedback_root = _resolved_root(
+        "ARTIFACT_SVC_FEEDBACK_ROOT", str(Path.home() / ".local/share/artifacts"),
+        overrides,
+    )
+    stage_root = _resolved_root(
+        "ARTIFACT_SVC_STAGE_ROOT", str(feedback_root / "stage"), overrides,
+    )
+    roots = {
+        "kb-svc KB_HOME": Path.home() / ".knowledgebase",
+        "bd-svc BEADS_HUB_DIR": Path.home() / ".beads-hub",
+        "artifact-svc FEEDBACK_ROOT": feedback_root,
+        "artifact-svc STAGE_ROOT": stage_root,
+    }
+    under_tmp = [name for name, root in roots.items() if root.is_relative_to("/tmp")]
+    detail = "; ".join(f"{name}={root}" for name, root in roots.items())
+    if under_tmp:
+        return Check(
+            "data roots", False, False, detail,
+            f"{', '.join(under_tmp)} resolve under /tmp, which clears on "
+            "reboot -- durable data must live elsewhere",
+        )
+    return Check("data roots", False, True, detail, "")
+
+
 def check_tailscale() -> Check:
     """Optional: `tailscale` on PATH (mesh-networked access path)."""
     return _binary_check(
@@ -450,6 +517,7 @@ def run_checks() -> list[Check]:
         check_git(),
         check_python(),
         check_kb_env(),
+        check_data_roots(),
         check_tailscale(),
         check_skill_install(),
     ]
