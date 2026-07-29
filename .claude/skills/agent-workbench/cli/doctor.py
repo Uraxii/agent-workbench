@@ -123,20 +123,24 @@ COMPOSE_CANDIDATES = (
 
 
 def _parse_major_minor(text: str) -> tuple[int, int] | None:
-    """Parse a leading `major.minor` out of one compose version token.
+    """Parse `major.minor` out of the LAST parseable `major.minor` token
+    in `text`, scanning every whitespace-separated token.
 
     Tolerant of a leading `v`, trailing build metadata (`+build`, `-rc1`),
-    and surrounding words (e.g. `Docker Compose version v2.29.7`). Returns
-    None on anything unparseable -- callers must then ACCEPT the candidate:
+    and surrounding words (e.g. `Docker Compose version v2.29.7`). Taking
+    the last token (not the first) survives contaminated multi-line stdout
+    where an earlier line carries an unrelated numeric token. Returns None
+    on anything unparseable -- callers must then ACCEPT the candidate:
     under-detecting a working host is worse than the false MISSING this
     floor exists to fix.
     """
+    found: tuple[int, int] | None = None
     for token in text.split():
         major, _, rest = token.lstrip("v").partition(".")
         minor = rest.split(".", 1)[0].split("-", 1)[0].split("+", 1)[0]
         if major.isdigit() and minor.isdigit():
-            return (int(major), int(minor))
-    return None
+            found = (int(major), int(minor))
+    return found
 
 
 def _compose_sibling_note(outdated: list[str], broken: list[str]) -> str:

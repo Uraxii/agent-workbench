@@ -54,7 +54,7 @@ object for scripts and agents.
 ### 4. Bring the stack up
 
 ```bash
-podman-compose up -d    # or: docker compose up -d
+podman-compose up -d    # or: docker compose up -d    # or: docker-compose up -d
 ```
 
 That starts `kb-svc` (127.0.0.1:9100), `bd-svc` (127.0.0.1:9101),

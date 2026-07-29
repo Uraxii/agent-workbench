@@ -285,6 +285,24 @@ def test_compose_check_unparseable_version_output_is_accepted(
     assert "docker compose" in result.detail
 
 
+def test_compose_check_contaminated_stdout_uses_last_token_not_first(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Multi-line stdout with an earlier unrelated `major.minor` token
+    (e.g. a stray warning line) must not make the parser latch onto that
+    earlier, lower tuple and falsely report "too old"."""
+    monkeypatch.setattr(doctor.shutil, "which", _which_only("docker"))
+    monkeypatch.setattr(
+        doctor.subprocess, "run",
+        _fake_run_version(b"WARNING: 1.0 something\nv2.29.7"),
+    )
+
+    result = doctor.check_compose()
+
+    assert result.ok is True
+    assert "too old" not in result.detail
+
+
 def test_compose_check_podman_compose_not_rejected_for_its_version(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
