@@ -107,9 +107,35 @@ install: a real copy pinned to the source commit, stamped into a marker
 file the CLI reads back. `--link` is a dev symlink, and it makes the
 installed skill track whatever branch that working tree has checked out
 -- that's why `--copy` is the default recommendation. `--uninstall`
-removes a repo-owned install (symlink or stamped copy). `doctor` reports
-which of the two you have, and flags it when a pinned copy has gone
-stale relative to the repo. `init-workspace` scaffolds `docs/kb/` +
+removes a repo-owned install (symlink or stamped copy).
+
+A `--copy` reinstall produces **exactly** the source tree: a module the
+source has since deleted does not survive the upgrade. It only ever
+replaces its own installs. If the target is a real directory with no
+marker, or is not a directory at all, it refuses, leaves the target
+untouched, and **exits 1** -- move the path aside yourself and re-run:
+
+```
+$ $AW install --copy
+agent-workbench: refusing to overwrite /home/you/.claude/skills/agent-workbench
+ -- real dir with no install marker, not this repo's own copy install.
+ Move it aside yourself, then re-run install --copy.
+$ echo $?
+1
+```
+
+`doctor` reports which install shape you have and compares the pinned
+commit against the source repo the marker records:
+
+```
+[OK]   skill install: pinned at c1b549c5c5af, matches repo HEAD
+[WARN] skill install: stale -- installed at deadbeefdead, repo HEAD is now c1b549c5c5af
+[WARN] skill install: pinned at deadbeefdead, installed from /gone/repo which no longer exists; staleness could not be checked
+```
+
+A check that could not actually compare is always `[WARN]`, never `[OK]`.
+
+`init-workspace` scaffolds `docs/kb/` +
 `workstreams/` + a bd board into a target repo. It builds no repo-local
 search index: the searchable knowledgebase is the vault under `KB_HOME`,
 indexed by the one indexer (`scripts/kb-index.py`) and searched with

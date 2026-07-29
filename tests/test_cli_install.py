@@ -7,6 +7,7 @@ touched.
 """
 from __future__ import annotations
 
+import argparse
 import subprocess
 import sys
 from datetime import datetime
@@ -215,6 +216,44 @@ def test_install_copy_removes_temp_dir_when_copytree_fails(
 
     leftovers = list(target.parent.glob(f"{target.name}.tmp-*"))
     assert leftovers == [], f"temp dir survived: {leftovers}"
+
+
+def test_cmd_install_copy_propagates_refusal_as_exit_1(
+    source: Path, target: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`install --copy` onto a foreign dir must EXIT 1, not just print.
+
+    `_install_copy` returning 1 is worthless if `cmd_install` drops it:
+    the caller sees success for an install that never happened, which is
+    the exact "a failed operation must not look like a success" failure
+    this branch exists to remove. Nothing else exercises `cmd_install`.
+    """
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.mkdir()
+    (target / "unrelated.txt").write_text("not ours\n", encoding="utf-8")
+
+    monkeypatch.setattr(install, "install_target", lambda: target)
+    monkeypatch.setattr(install, "source_dir", lambda: source)
+
+    args = argparse.Namespace(link=False, copy=True, uninstall=False)
+
+    assert install.cmd_install(args) == 1
+    assert (target / "unrelated.txt").read_text(encoding="utf-8") == "not ours\n"
+    assert not (target / "SKILL.md").exists()
+
+
+def test_cmd_install_copy_returns_0_on_success(
+    source: Path, target: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The success direction of the same seam, so the refusal test above
+    cannot pass by `cmd_install` simply always returning 1."""
+    monkeypatch.setattr(install, "install_target", lambda: target)
+    monkeypatch.setattr(install, "source_dir", lambda: source)
+
+    args = argparse.Namespace(link=False, copy=True, uninstall=False)
+
+    assert install.cmd_install(args) == 0
+    assert (target / "SKILL.md").exists()
 
 
 def test_uninstall_removes_correctly_pointing_symlink(

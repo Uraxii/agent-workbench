@@ -139,8 +139,14 @@ def _split_argv(argv: list[str]) -> tuple[list[str], list[str]]:
 
 
 def _command_args(raw: list[str], service: str) -> list[str]:
-    """Strip a leading `--` and require a non-empty command."""
-    command = raw[1:] if raw[:1] == ["--"] else list(raw)
+    """Require a non-empty command.
+
+    Does NOT strip a leading `--`: `_split_argv` has already consumed the
+    separator, so a `--` still present here is the caller's own argument
+    (`scratch.py kb -- -- foo`) and eating it would silently drop a token
+    the wrapped command was meant to receive.
+    """
+    command = list(raw)
     if not command:
         raise RuntimeError(
             "scratch: no command given, e.g. "
@@ -217,26 +223,53 @@ def _build(
     )
 
 
-def _print_image_identity(spec: ServiceSpec) -> None:
-    """Print the image tag/id/created timestamp actually running, to
-    stderr -- the tripwire that makes a stale scratch image diagnosable
-    from the transcript instead of silently passing.
+def _print_image_identity(project: str, spec: ServiceSpec) -> None:
+    """Print the image the CREATED CONTAINER is running, to stderr -- the
+    tripwire that makes a wrong scratch image diagnosable from the
+    transcript instead of silently passing.
+
+    Deliberately inspects the container, not `_scratch_image(spec)`. The
+    `:scratch` tag is global to this host while builds are per-worktree,
+    so two concurrent scratch runs race for it: last writer wins, `up`
+    resolves the tag at container-create time, and inspecting the tag
+    afterwards can report an image the container is not running. Reading
+    the container's own `.Image` is the only answer that cannot disagree
+    with what is actually serving the requests.
     """
-    tag = _scratch_image(spec)
     try:
-        result = subprocess.run(
-            ["podman", "image", "inspect", tag, "--format", "{{.Id}} {{.Created}}"],
+        # `podman-compose ps` takes no service argument (verified: it
+        # accepts only -q/-f and exits 2 on one), so ask podman directly
+        # via the labels compose stamps on every container it creates.
+        ps = subprocess.run(
+            [
+                "podman", "ps", "-aq",
+                "--filter", f"label=io.podman.compose.project={project}",
+                "--filter", f"label=io.podman.compose.service={spec.compose_name}",
+            ],
             capture_output=True, text=True, check=True,
         )
-        image_id, created = result.stdout.strip().split(" ", 1)
+        container = ps.stdout.split()[-1]
+        result = subprocess.run(
+            [
+                "podman", "container", "inspect", container,
+                "--format", "{{.Image}} {{.ImageName}}",
+            ],
+            capture_output=True, text=True, check=True,
+        )
+        image_id, image_name = result.stdout.strip().split(" ", 1)
+        created = subprocess.run(
+            ["podman", "image", "inspect", image_id, "--format", "{{.Created}}"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
         print(
-            f"scratch: {spec.compose_name} image {tag} id {image_id} "
+            f"scratch: {spec.compose_name} image {image_name} id {image_id} "
             f"created {created}",
             file=sys.stderr,
         )
-    except (subprocess.CalledProcessError, ValueError) as exc:
+    except (subprocess.CalledProcessError, IndexError, ValueError) as exc:
         print(
-            f"scratch: warning: could not inspect image {tag}: {exc}",
+            f"scratch: warning: could not inspect the running container for "
+            f"{spec.compose_name}: {exc}",
             file=sys.stderr,
         )
 
@@ -270,7 +303,7 @@ def _bring_up(
         f"scratch: {spec.compose_name} up at 127.0.0.1:{port}",
         file=sys.stderr,
     )
-    _print_image_identity(spec)
+    _print_image_identity(project, spec)
     _wait_healthy(port, spec)
     return port
 
