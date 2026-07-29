@@ -32,67 +32,18 @@ see the corresponding mode doc:
 - `modes/bd.md` for bd verbs (init/add/sync/repos/path/status + issue operations + ui status)
 - `modes/artifact.md` for artifact verbs (publish/feedback/status + new comment/reply/resolve)
 
-## Verification goes through `scratch`, never the live stack
+## Never verify against the live stack
 
-Probing the live stack (curling `127.0.0.1:9099`/`9100`/`9101`, or any
-`kb`/`bd`/`artifact` verb with no `KB_SVC_*`/`BD_SVC_*`/`ARTIFACT_SVC_*`
-override) to verify a change is NOT an acceptable verification method. It
-permanently mutates the real vault, the real board hub, or the real
-artifact store. HTTP-surface verification of kb-svc/bd-svc/artifact-svc
-goes through `scripts/scratch.py` instead -- this is repo dev/test
-tooling, NOT a CLI verb (the shipped CLI is a pure HTTP client with no
-container-runtime access), so it only exists in a repo checkout; a
-copy-installed skill has no repo beside it and should not be verifying
-services at all:
+Verifying a change by probing the live stack -- curling
+`127.0.0.1:9099`/`9100`/`9101`, or running any `kb`/`bd`/`artifact` verb
+without a `KB_SVC_*`/`BD_SVC_*`/`ARTIFACT_SVC_*` override -- is NOT an
+acceptable verification method. It permanently mutates the real vault, the
+real board hub, or the real artifact store, and there is no delete verb to
+undo it.
 
-```bash
-scripts/scratch.py <kb|bd|artifact> [--no-build] -- <command...>
-```
-
-This brings up ONE throwaway container for that service against a fresh
-temp data dir on a random free host port, exports the same
-`KB_SVC_HOST`/`KB_SVC_PORT` (etc.) env vars the `kb`/`bd`/`artifact`
-clients already read so `<command...>` transparently talks to the scratch
-instance, runs it, and tears the container + temp dir down in a `finally`
--- self-cleaning even on failure or Ctrl-C. Exit code is the command's
-exit code. There is no separate up/down mode.
-
-Scratch runs its own `localhost/<service>:scratch` image tag, never
-`:latest` -- a scratch verification can never silently run whatever the
-live stack happens to have pinned, and there's no reason to retag
-`:latest` just to get a fresh one. That tag alone does NOT guarantee
-freshness: `podman-compose up -d` only builds a missing image, so a
-`:scratch` tag left over from an earlier branch would otherwise be
-reused forever. Freshness instead comes from scratch building the image
-from the working tree by default on EVERY run; pass `--no-build` only
-when you already know the tag is current (a no-change rebuild is a
-layer-cache hit, seconds, not the multi-minute cost of a cold build).
-Every run prints the image actually used to stderr as a tripwire:
-
-```
-scratch: kb-svc image localhost/kb-svc:scratch id <sha> created <timestamp>
-```
-
-**`scratch` isolates only the ONE service named at invocation.** The
-other two services are pointed at a `.invalid` sentinel host, so a call
-to them fails immediately with a DNS error naming the cause (e.g.
-`bd-svc-not-started-by-this-scratch-run.invalid`) instead of silently
-reaching the live stack. Do NOT chain a call to a different service
-inside the wrapped command (`scratch.py bd -- ... && $AW kb ...` will
-fail loudly, by design), and do not nest `scratch` runs -- there is no
-bookkeeping to keep an outer run's service live inside an inner one, so a
-nested call re-sentinels it and fails loudly on the `.invalid` DNS error.
-
-**There is therefore no supported way to probe two services in one
-`scratch` run.** Run `scratch` once per service. Within a single run you
-can chain as many steps as you like against *that* service, e.g.
-`-- bash -c 'first && second'`.
-
-Requires a repo checkout (it reuses `docker-compose.yml` +
-`docker-compose.scratch.yml` at the repo root) and `podman-compose` on
-PATH; fails loudly and non-zero, never falling back to the live stack, if
-either is missing. See `modes/kb.md`, `modes/bd.md`, `modes/artifact.md`
-for a worked example against each service.
+Verify against a throwaway instance instead. In a repo checkout that is
+`scripts/ephemeral-service.py`, and `--help` documents it. A copy-installed
+skill has no repo beside it and should not be verifying services at all.
 
 ## install / init-workspace
 

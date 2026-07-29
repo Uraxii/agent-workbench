@@ -23,34 +23,14 @@ If the service is down or returns bad data, the command exits non-zero and
 prints the failed verb, full URL, and underlying error to stderr. There is no
 filesystem fallback.
 
-## Verifying against a scratch instance (not the live stack)
+## Never verify against the live stack
 
 Never probe the live artifact-svc (port 9099, the real
 `/tmp/artifacts` + `~/.local/share/artifacts`) to verify a change works --
-that leaves permanent residue in the real artifact store. Use
-`scripts/scratch.py` (repo dev/test tooling, not a CLI verb -- only
-available from a repo checkout), which brings up a throwaway artifact-svc
-against a fresh temp data dir, runs the wrapped command, and tears both
-down when it returns:
-
-```bash
-AW=$HOME/.claude/skills/agent-workbench/agent-workbench
-scripts/scratch.py artifact -- $AW artifact status
-# -> scratch: artifact-svc up at 127.0.0.1:<random port>
-# -> scratch: artifact-svc image localhost/artifact-review:scratch id <sha> created <timestamp>
-# -> {"artifacts": [], "endpoint": "http://127.0.0.1:<random port>",
-#     "health": {"status": "ok"}}
-```
-
-Same response shape as a live `artifact status`, except `artifacts` is
-empty (the scratch store is brand new) and `endpoint` points at the
-scratch port. `scratch artifact` isolates ONLY artifact-svc: a `kb`/`bd`
-call made inside the wrapped command still fails loudly (sentinel
-`.invalid` host), never reaches the live stack. `scratch` rebuilds the
-image from the working tree by default on every run; pass `--no-build`
-before `--` only when you already know `:scratch` is current. See
-`SKILL.md` for the full `scratch` contract (any `artifact` verb,
-including `publish`, works the same way inside it).
+that leaves permanent residue in the real artifact store. See `SKILL.md`
+for the ephemeral-service verification rule and how to invoke it
+(`scripts/ephemeral-service.py artifact -- ...`) from a repo checkout;
+`--help` documents the mechanics.
 
 ## Publish
 
