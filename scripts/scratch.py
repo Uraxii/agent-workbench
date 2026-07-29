@@ -223,10 +223,15 @@ def _build(
     )
 
 
-def _print_image_identity(project: str, spec: ServiceSpec) -> None:
+def _print_image_identity(
+    project: str, spec: ServiceSpec,
+) -> tuple[str, str] | None:
     """Print the image the CREATED CONTAINER is running, to stderr -- the
     tripwire that makes a wrong scratch image diagnosable from the
-    transcript instead of silently passing.
+    transcript instead of silently passing. Returns (image_id, created),
+    or None if the inspection itself failed, so a caller (the container-
+    backed test tier) can assert on the real identity instead of only
+    the swallowed stderr line.
 
     Deliberately inspects the container, not `_scratch_image(spec)`. The
     `:scratch` tag is global to this host while builds are per-worktree,
@@ -266,11 +271,58 @@ def _print_image_identity(project: str, spec: ServiceSpec) -> None:
             f"created {created}",
             file=sys.stderr,
         )
+        return image_id, created
     except (subprocess.CalledProcessError, IndexError, ValueError) as exc:
         print(
             f"scratch: warning: could not inspect the running container for "
             f"{spec.compose_name}: {exc}",
             file=sys.stderr,
+        )
+        return None
+
+
+def _just_built_image_id(spec: ServiceSpec) -> str:
+    """The id of the image `_build` just produced for this service's
+    `:scratch` tag, read immediately after `_build` returns -- before `up`
+    has run, so no concurrent scratch run has had a chance to repoint the
+    tag first (see `_print_image_identity`'s own race note).
+    """
+    result = subprocess.run(
+        [
+            "podman", "image", "inspect", _scratch_image(spec),
+            "--format", "{{.Id}}",
+        ],
+        capture_output=True, text=True, check=True,
+    )
+    return result.stdout.strip()
+
+
+def _assert_container_runs_the_build(
+    identity: tuple[str, str] | None, built_image_id: str, spec: ServiceSpec,
+) -> None:
+    """Reject a bring-up whose container isn't running the image `_build`
+    just produced -- e.g. `up` resolving a different tag/image than the
+    one this run just built. Only called when `build` was True; there is
+    nothing to compare a `--no-build` run against (see `_bring_up`).
+
+    Compares image IDs, not `.Created` timestamps: verified empirically
+    (`podman build` on this repo's own kb-container image, unchanged
+    source, run twice) that a same-content rebuild reuses the exact prior
+    image id AND `.Created` -- a "`.Created` must be >= now" check would
+    misfire on every ordinary cache-hit rebuild, which is the normal case
+    whenever the working tree hasn't changed since the last scratch run.
+    """
+    if identity is None:
+        raise RuntimeError(
+            f"scratch: could not verify {spec.compose_name} ran the image "
+            "just built (see the inspection warning above)"
+        )
+    running_image_id, _created = identity
+    if running_image_id != built_image_id:
+        raise RuntimeError(
+            f"scratch: {spec.compose_name} is running image "
+            f"{running_image_id}, not the {built_image_id} this run just "
+            "built -- refusing a stale image"
         )
 
 
@@ -287,8 +339,10 @@ def _bring_up(
     stale image. `--no-build` waives this only when the caller already
     knows the tag is current.
     """
+    built_image_id = None
     if build:
         _build(base, override, project, spec)
+        built_image_id = _just_built_image_id(spec)
     up_cmd = [
         "podman-compose", "-p", project, "-f", str(base), "-f", str(override),
         "up", "-d", spec.compose_name,
@@ -303,7 +357,9 @@ def _bring_up(
         f"scratch: {spec.compose_name} up at 127.0.0.1:{port}",
         file=sys.stderr,
     )
-    _print_image_identity(project, spec)
+    identity = _print_image_identity(project, spec)
+    if built_image_id is not None:
+        _assert_container_runs_the_build(identity, built_image_id, spec)
     _wait_healthy(port, spec)
     return port
 
@@ -355,9 +411,17 @@ def cmd_scratch(args: argparse.Namespace) -> int:
         template.read_text().replace(SCRATCH_PLACEHOLDER, str(scratch_dir))
     )
     project = f"aw-scratch-{uuid.uuid4().hex[:10]}"
+    # No trailing service name: `down <service>` only ever removes that
+    # one container, leaking the project's own pod + network forever
+    # (verified: podman-compose 1.6.0 creates one pod + one bridge
+    # network per PROJECT, not per service, and only a project-wide
+    # `down` tears either down). The other services declared in the
+    # compose files were never started for this project, so podman-
+    # compose prints a harmless "no container ... found" per absent
+    # service and still exits 0.
     down_cmd = [
         "podman-compose", "-p", project, "-f", str(base), "-f", str(override),
-        "down", "-v", "-t", str(DOWN_TIMEOUT_SEC), spec.compose_name,
+        "down", "-v", "-t", str(DOWN_TIMEOUT_SEC),
     ]
     # ponytail: only SIGINT unwinds this `finally`; SIGTERM/SIGKILL bypass
     # it, leaking the container + tmpdir. Add a signal handler if scratch
