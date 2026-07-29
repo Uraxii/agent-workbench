@@ -19,15 +19,18 @@ work on any host with a container runtime.
 
 ## Build
 
+From this repo's root:
+
 ```bash
-cd ~/Projects/agent-workbench/scripts
-podman build -t localhost/kb-svc:latest -f kb-container/Containerfile .
+podman build -t localhost/kb-svc:latest -f scripts/kb-container/Containerfile scripts
 ```
 
 ## Config: `~/.knowledgebase/kb.env`
 
+From this repo's root:
+
 ```bash
-cp ~/Projects/agent-workbench/scripts/kb-container/kb.env.example ~/.knowledgebase/kb.env
+cp scripts/kb-container/kb.env.example ~/.knowledgebase/kb.env
 chmod 600 ~/.knowledgebase/kb.env
 $EDITOR ~/.knowledgebase/kb.env
 ```
@@ -79,8 +82,9 @@ put/clip/query/atomize path never depends on any of this.
 
 ## Run it
 
+From this repo's root:
+
 ```bash
-cd ~/Projects/agent-workbench
 podman-compose up -d kb-svc    # or: docker compose up -d kb-svc
 ```
 

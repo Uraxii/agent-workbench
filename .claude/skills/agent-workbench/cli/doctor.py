@@ -3,8 +3,15 @@ to bring the agent-workbench stack up, printing one line per item with a
 concrete fix hint, and exiting non-zero if anything REQUIRED is missing.
 
 Required: a container runtime (docker or podman), a compose implementation
-(``docker compose`` CLI plugin, ``podman-compose``, or ``docker-compose``),
+(``docker compose`` CLI plugin >= 2.24, or ``podman-compose`` >= 1.1),
 ``git``, and a Python new enough to run this CLI.
+
+``docker-compose`` v1 is NOT a supported implementation: docker-compose.yml
+uses the compose-spec 2.24+ long ``env_file`` form (``required: false``) so a
+missing optional kb.env never blocks startup, and v1 validates against the
+older v3 schema where that form fails the whole compose model. A
+``docker-compose`` binary that is actually a v2 shim is fine; only the real
+v1 (final 1.29.2, EOL) is excluded.
 
 Optional, reported but never failing the exit code: ``tailscale`` and
 ``~/.knowledgebase/kb.env`` (only needed to turn on LLM enrichment; the
@@ -86,10 +93,16 @@ def check_container_runtime() -> Check:
 # can sit on PATH while its package is broken. Presence is not workingness --
 # trusting PATH alone is what made the retired rootless check report a
 # working host as broken.
+#
+# `docker-compose` (v1) is deliberately NOT a candidate: `version` exits 0
+# on v1 too, so it would greenlight a binary that then fails to parse
+# docker-compose.yml's compose-spec 2.24+ long `env_file` form and kills the
+# whole compose model on `up`. There is no version-parsing here to tell a v1
+# binary from a v2 shim reached via the same name -- the false green is
+# worse than under-detecting, so the candidate is dropped, not inspected.
 COMPOSE_CANDIDATES = (
     ("docker compose", "docker", ["docker", "compose", "version"]),
     ("podman-compose", "podman-compose", ["podman-compose", "version"]),
-    ("docker-compose", "docker-compose", ["docker-compose", "version"]),
 )
 
 
@@ -132,8 +145,14 @@ def check_compose() -> Check:
 
     return Check(
         "compose", True, False, "no compose implementation found",
-        "install podman-compose (`sudo dnf install podman-compose` or "
-        "`pip install --user podman-compose`) or the docker compose CLI plugin",
+        "install podman-compose >= 1.1 (`sudo dnf install podman-compose` or "
+        "`pip install --user podman-compose`) or the docker compose CLI "
+        "plugin >= 2.24 (`docker compose version`). docker-compose v1 does "
+        "NOT count: docker-compose.yml uses the compose-spec 2.24+ long "
+        "env_file form so a missing optional kb.env never blocks startup, "
+        "and v1 fails the whole compose model on that syntax. A "
+        "`docker-compose` binary that is actually a v2 shim is fine -- "
+        "only the real v1 is excluded",
     )
 
 

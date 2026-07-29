@@ -19,7 +19,7 @@ beyond the prerequisites below.
 | Need | Why | Get it |
 | --- | --- | --- |
 | A container runtime: `podman` or `docker` | The services only ever run as containers | `sudo dnf install podman` / `sudo apt install podman`, or https://docs.docker.com/engine/install/ |
-| A compose implementation: `podman-compose`, `docker compose`, or `docker-compose` | Brings the stack up | `sudo dnf install podman-compose`, or the docker compose CLI plugin |
+| A compose implementation: `podman-compose >= 1.1` or `docker compose >= 2.24` | Brings the stack up. The floor exists because `docker-compose.yml` uses the compose-spec 2.24+ long `env_file` form so a missing optional kb.env does not block startup; older compose fails the whole file on that syntax. `docker-compose` v1 does NOT count (a v2 shim reached via that name is fine) | `sudo dnf install podman-compose`, or the docker compose CLI plugin |
 | `git` | Cloning this repo | your package manager |
 | Python 3.9 or newer | Runs the CLI. It is stdlib-only, so there is no venv and nothing to `pip install` | your package manager |
 

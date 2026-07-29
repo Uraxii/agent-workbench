@@ -210,6 +210,23 @@ def test_compose_check_distinguishes_docker_present_but_compose_failing(
     assert result.fix_hint != ""
 
 
+def test_compose_check_docker_compose_v1_binary_alone_does_not_satisfy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`docker-compose` (v1) alone on PATH, even a working one, must NOT
+    satisfy the compose check: it is not a candidate any more, because a
+    `version` exit-0 does not distinguish v1 (parses docker-compose.yml's
+    long `env_file` form wrong and kills the whole model) from a v2 shim."""
+    monkeypatch.setattr(doctor.shutil, "which", _which_only("docker-compose"))
+    monkeypatch.setattr(doctor.subprocess, "run", _fake_run_ok)
+
+    result = doctor.check_compose()
+
+    assert result.ok is False
+    assert result.required is True
+    assert result.detail == "no compose implementation found"
+
+
 def test_compose_check_ok_when_docker_compose_version_succeeds(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

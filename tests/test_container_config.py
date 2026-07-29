@@ -33,7 +33,11 @@ def test_entrypoint_line_never_bakes_a_port_flag(containerfile: Path) -> None:
 # Built by concatenation, not one literal, so this very check does not
 # trip on its own source when git-tracked.
 _AUTHOR_NAME = "nic" + "ole"
-_AUTHOR_HOME_MARKERS = (f"/home/{_AUTHOR_NAME}", f"/var/home/{_AUTHOR_NAME}")
+_AUTHOR_HOME_MARKERS = (
+    f"/home/{_AUTHOR_NAME}",
+    f"/var/home/{_AUTHOR_NAME}",
+    "~" + "/Projects/agent-workbench",
+)
 _EXCLUDED_DIR_PREFIXES = ("spikes/", "vault/")
 
 
