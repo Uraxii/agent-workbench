@@ -1,0 +1,80 @@
+# Override for `scripts/ephemeral-service.py <kb|bd|artifact> -- <command...>`.
+# Brings up ONE throwaway instance of a service against an
+# ephemeral data dir, published on a random free host port, torn down
+# (`down -v`) by the same run. Never used standalone -- always layered on
+# top of docker-compose.yml with `-f docker-compose.yml -f
+# docker-compose.ephemeral.yml`, so every service keeps that file's
+# hardening (read_only rootfs, cap_drop ALL, no-new-privileges, tmpfs
+# /tmp, healthcheck) unchanged. Only ports/volumes/environment/restart are
+# overridden here, to point at the ephemeral dir instead of the real data
+# root and publish on an ephemeral port instead of the fixed 9099/9100/9101.
+#
+# The __AW_EPHEMERAL__ placeholder is substituted by
+# scripts/ephemeral-service.py with the real ephemeral dir path via plain
+# string replace BEFORE this file is ever handed to podman-compose --
+# deliberately NOT a compose `${VAR}`.
+# podman-compose 1.6.0's `!override` YAML tag captures each scalar's RAW
+# pre-substitution text, so a `${VAR}` written inside an `!override:` block
+# is never resolved (verified: both `up` and `config` raise `RuntimeError:
+# volume [${VAR}] not defined in top level`, because the unresolved
+# "${VAR}" string doesn't look like a bind-mount path and gets treated as
+# an undeclared named volume instead).
+#
+# `!override` itself (rather than a plain key) is required because
+# compose's default list-merge behavior APPENDS `ports`/`volumes` instead
+# of replacing them -- verified via `podman-compose ... config`: a plain
+# override left BOTH the real 127.0.0.1:9100:9100 publish AND the real
+# ~/.knowledgebase bind mount active alongside the ephemeral ones, which is
+# exactly the live-data exposure this command exists to prevent.
+services:
+  kb-svc:
+    # Own tag, never :latest -- decouples an ephemeral-service run from
+    # whatever the live stack happens to have pinned (and removes any
+    # reason to retag :latest just to get a fresh one). This tag alone
+    # does NOT guarantee freshness: podman-compose's `up` only builds a
+    # missing image, so a `:ephemeral` left over from an earlier branch
+    # would otherwise be reused forever. Freshness comes from
+    # scripts/ephemeral-service.py building by default on every run
+    # (`--no-build` opts out). Plain scalar key, not `!override`: compose
+    # only APPENDS list-valued keys (ports/volumes below), a scalar like
+    # `image` is simply replaced -- verified via `podman-compose ...
+    # config`.
+    image: localhost/kb-svc:ephemeral
+    # Decouples the ephemeral run from the real, optional
+    # ~/.knowledgebase/kb.env: absent on a fresh host, present or not it
+    # never affects an ephemeral run.
+    env_file: !override []
+    ports: !override
+      - "127.0.0.1::9100"
+    volumes: !override
+      - "__AW_EPHEMERAL__:__AW_EPHEMERAL__:rw,z"
+    environment:
+      KB_HOME: "__AW_EPHEMERAL__"
+      HOME: "__AW_EPHEMERAL__"
+    restart: "no"
+
+  bd-svc:
+    image: localhost/bd-svc:ephemeral
+    ports: !override
+      - "127.0.0.1::9101"
+    volumes: !override
+      - "__AW_EPHEMERAL__:__AW_EPHEMERAL__:rw"
+    environment:
+      BEADS_HUB_DIR: "__AW_EPHEMERAL__"
+    restart: "no"
+
+  artifact-svc:
+    image: localhost/artifact-review:ephemeral
+    ports: !override
+      - "127.0.0.1::9099"
+    volumes: !override
+      - "__AW_EPHEMERAL__/stage:__AW_EPHEMERAL__/stage:rw,z"
+      - "__AW_EPHEMERAL__/feedback:__AW_EPHEMERAL__/feedback:rw,z"
+    environment:
+      ARTIFACT_SVC_STAGE_ROOT: "__AW_EPHEMERAL__/stage"
+      ARTIFACT_SVC_FEEDBACK_ROOT: "__AW_EPHEMERAL__/feedback"
+      # Mirrors bd-svc/bdui's own container-internal HOME=/tmp -- the
+      # ephemeral run never needs the real host HOME here, only the tmpfs
+      # /tmp already granted by docker-compose.yml.
+      HOME: "/tmp"
+    restart: "no"

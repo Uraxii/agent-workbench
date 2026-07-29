@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""scratch -- repo dev/test harness: run a command against a throwaway
-service instance instead of the live stack.
+"""ephemeral-service -- repo dev/test harness: run a command against a
+throwaway service instance instead of the live stack.
 
-    scripts/scratch.py <kb|bd|artifact> [--no-build] -- <command...>
+    scripts/ephemeral-service.py <kb|bd|artifact> [--no-build] -- <command...>
 
-e.g. ``scripts/scratch.py kb -- "$AW" kb status``
+e.g. ``scripts/ephemeral-service.py kb -- "$AW" kb status``
 
-Builds the scratch image from the working tree by default on every run
+Builds the ephemeral image from the working tree by default on every run
 (pass ``--no-build`` to skip it) -- see ``_bring_up`` for why this can't
 default off.
 
@@ -14,7 +14,7 @@ This is repo tooling, not a CLI verb -- it is NOT part of the shipped
 agent-workbench skill (see ../.claude/skills/agent-workbench/cli/), which
 is a pure HTTP client with no container-runtime access. Only useful from a
 repo checkout: it shells out to `podman-compose` and reuses this repo's
-own docker-compose.yml + docker-compose.scratch.yml.
+own docker-compose.yml + docker-compose.ephemeral.yml.
 
 Brings up ONE disposable container for the named service on a free host
 port against a fresh temp data dir, exports the env vars the existing
@@ -29,9 +29,9 @@ or the real ~/.knowledgebase / ~/.beads-hub / feedback dirs) leaves
 permanent residue and is not an acceptable substitute.
 
 Reuses ``docker-compose.yml`` (the one place the SELinux/rootless-podman
-mount fixes live) via a small override, ``docker-compose.scratch.yml``, so
-none of that hardening is reimplemented here. See that file's header for
-why it does its own placeholder substitution instead of a compose
+mount fixes live) via a small override, ``docker-compose.ephemeral.yml``,
+so none of that hardening is reimplemented here. See that file's header
+for why it does its own placeholder substitution instead of a compose
 ``${VAR}``.
 
 No separate up/down mode: chain multi-step probes inside the single
@@ -58,18 +58,19 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 HEALTH_POLL_TRIES = 20
 HEALTH_POLL_DELAY_SEC = 0.5
 DOWN_TIMEOUT_SEC = 5
-SCRATCH_PLACEHOLDER = "__AW_SCRATCH__"
+EPHEMERAL_PLACEHOLDER = "__AW_EPHEMERAL__"
 
 
 class ServiceSpec(NamedTuple):
-    """Everything `scratch` needs to know about one compose service."""
+    """Everything `ephemeral-service` needs to know about one compose
+    service."""
 
     compose_name: str
     internal_port: int
     health_path: str
     host_env: str
     port_env: str
-    data_subdirs: tuple[str, ...]  # relative to the scratch dir; "" = root
+    data_subdirs: tuple[str, ...]  # relative to the ephemeral dir; "" = root
     image_repo: str  # local image repo name, e.g. "kb-svc"
 
 
@@ -90,47 +91,72 @@ SERVICES: dict[str, ServiceSpec] = {
 }
 
 
-def _scratch_image(spec: ServiceSpec) -> str:
-    """The scratch overlay's own tag for this service -- never :latest."""
-    return f"localhost/{spec.image_repo}:scratch"
+def _ephemeral_image(spec: ServiceSpec) -> str:
+    """The ephemeral overlay's own tag for this service -- never :latest."""
+    return f"localhost/{spec.image_repo}:ephemeral"
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Build the `scratch.py` parser: SERVICE followed by `-- COMMAND...`."""
+    """Build the `ephemeral-service.py` parser: SERVICE followed by
+    `-- COMMAND...`."""
     # `_split_argv` consumes the wrapped command before argparse ever sees
     # it, so there is no `command` positional for argparse to document.
     # Spell the `-- COMMAND...` half in `usage` by hand, or `--help` would
     # advertise an invocation that always errors.
     parser = argparse.ArgumentParser(
-        prog="scratch.py",
-        usage="scratch.py [-h] [--no-build] {artifact,bd,kb} -- COMMAND...",
+        prog="ephemeral-service.py",
+        usage="ephemeral-service.py [-h] [--no-build] {artifact,bd,kb} -- "
+              "COMMAND...",
         description="run a command against a throwaway service instance, "
                      "never the live stack",
         epilog="COMMAND is everything after the literal `--`, e.g. "
-               "`scratch.py kb -- kb query 'foo'`. Chain multi-step probes "
-               "inside one command: `-- bash -c 'first && second'`.",
+               "`ephemeral-service.py kb -- kb query 'foo'`. Chain "
+               "multi-step probes inside one command: "
+               "`-- bash -c 'first && second'`.\n\n"
+               "Brings up ONE disposable container for SERVICE on a "
+               "random free host port against a fresh temp data dir -- "
+               "never the fixed live ports 9099 (artifact) / 9100 (kb) / "
+               "9101 (bd) -- and exports the matching "
+               "KB_SVC_HOST/KB_SVC_PORT, BD_SVC_HOST/BD_SVC_PORT, or "
+               "ARTIFACT_SVC_HOST/ARTIFACT_SVC_PORT pair so COMMAND "
+               "transparently talks to it.\n\n"
+               "Isolates only the ONE service named at invocation: the "
+               "other two get a `.invalid` sentinel host, so a call to "
+               "them inside COMMAND fails loudly with a DNS error instead "
+               "of silently reaching the live stack. There is no nesting "
+               "-- running ephemeral-service.py again inside COMMAND "
+               "re-sentinels the outer run's own service and fails the "
+               "same way; chain multi-step probes against ONE service "
+               "inside COMMAND instead.\n\n"
+               "Every run prints the CREATED CONTAINER's actual running "
+               "image id and creation time to stderr as a freshness "
+               "tripwire, and (default `build=True`) refuses to proceed "
+               "if the container isn't running the image this run just "
+               "built.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("service", choices=sorted(SERVICES))
     parser.add_argument(
         "--no-build", dest="build", action="store_false", default=True,
-        help="skip the default rebuild of the scratch image from the "
+        help="skip the default rebuild of the ephemeral image from the "
              "working tree before `up` (opt out only when you already "
-             "know the :scratch tag is current -- podman-compose's own "
+             "know the :ephemeral tag is current -- podman-compose's own "
              "`up` build-if-missing only triggers when the tag is "
-             "entirely absent, so without a rebuild a stale :scratch tag "
-             "from an earlier branch is reused forever)",
+             "entirely absent, so without a rebuild a stale :ephemeral "
+             "tag from an earlier branch is reused forever)",
     )
     return parser
 
 
 def _split_argv(argv: list[str]) -> tuple[list[str], list[str]]:
-    """Split argv on the first literal `--`: scratch's own flags before it,
-    the wrapped command after.
+    """Split argv on the first literal `--`: ephemeral-service's own flags
+    before it, the wrapped command after.
 
     Done by hand rather than via argparse `nargs=REMAINDER` on a trailing
     `command` argument: REMAINDER swallows any later recognized flag (e.g.
     `--no-build`) into the wrapped command once positional matching begins,
-    breaking `scratch.py kb --no-build -- true` (flag after the service).
+    breaking `ephemeral-service.py kb --no-build -- true` (flag after the
+    service).
     """
     if "--" in argv:
         idx = argv.index("--")
@@ -143,36 +169,39 @@ def _command_args(raw: list[str], service: str) -> list[str]:
 
     Does NOT strip a leading `--`: `_split_argv` has already consumed the
     separator, so a `--` still present here is the caller's own argument
-    (`scratch.py kb -- -- foo`) and eating it would silently drop a token
-    the wrapped command was meant to receive.
+    (`ephemeral-service.py kb -- -- foo`) and eating it would silently drop
+    a token the wrapped command was meant to receive.
     """
     command = list(raw)
     if not command:
         raise RuntimeError(
-            "scratch: no command given, e.g. "
-            f"`scratch.py {service} -- kb status`"
+            "ephemeral-service: no command given, e.g. "
+            f"`ephemeral-service.py {service} -- kb status`"
         )
     return command
 
 
 def _compose_files() -> tuple[Path, Path]:
-    """Locate docker-compose.yml + docker-compose.scratch.yml at the repo root.
+    """Locate docker-compose.yml + docker-compose.ephemeral.yml at the
+    repo root.
 
     Raises:
         RuntimeError: naming what is missing, if either file is absent.
     """
     base = REPO_ROOT / "docker-compose.yml"
-    override = REPO_ROOT / "docker-compose.scratch.yml"
+    override = REPO_ROOT / "docker-compose.ephemeral.yml"
     missing = [p for p in (base, override) if not p.is_file()]
     if missing:
         names = ", ".join(str(p) for p in missing)
-        raise RuntimeError(f"scratch: missing {names}.")
+        raise RuntimeError(f"ephemeral-service: missing {names}.")
     return base, override
 
 
 def _require_podman_compose() -> None:
     if shutil.which("podman-compose") is None:
-        raise RuntimeError("scratch: `podman-compose` not found on PATH.")
+        raise RuntimeError(
+            "ephemeral-service: `podman-compose` not found on PATH."
+        )
 
 
 def _http_status(url: str) -> int | None:
@@ -190,7 +219,7 @@ def _wait_healthy(port: int, spec: ServiceSpec) -> None:
             return
         time.sleep(HEALTH_POLL_DELAY_SEC)
     raise RuntimeError(
-        f"scratch: {spec.compose_name} never answered "
+        f"ephemeral-service: {spec.compose_name} never answered "
         f"{url} after {HEALTH_POLL_TRIES * HEALTH_POLL_DELAY_SEC:.0f}s"
     )
 
@@ -213,7 +242,7 @@ def _host_port(base: Path, override: Path, project: str, spec: ServiceSpec) -> i
 def _build(
     base: Path, override: Path, project: str, spec: ServiceSpec,
 ) -> None:
-    """Build the scratch image from the working tree."""
+    """Build the ephemeral image from the working tree."""
     subprocess.run(
         [
             "podman-compose", "-p", project, "-f", str(base), "-f", str(override),
@@ -227,16 +256,16 @@ def _print_image_identity(
     project: str, spec: ServiceSpec,
 ) -> tuple[str, str] | None:
     """Print the image the CREATED CONTAINER is running, to stderr -- the
-    tripwire that makes a wrong scratch image diagnosable from the
+    tripwire that makes a wrong ephemeral image diagnosable from the
     transcript instead of silently passing. Returns (image_id, created),
     or None if the inspection itself failed, so a caller (the container-
     backed test tier) can assert on the real identity instead of only
     the swallowed stderr line.
 
-    Deliberately inspects the container, not `_scratch_image(spec)`. The
-    `:scratch` tag is global to this host while builds are per-worktree,
-    so two concurrent scratch runs race for it: last writer wins, `up`
-    resolves the tag at container-create time, and inspecting the tag
+    Deliberately inspects the container, not `_ephemeral_image(spec)`. The
+    `:ephemeral` tag is global to this host while builds are per-worktree,
+    so two concurrent ephemeral-service runs race for it: last writer wins,
+    `up` resolves the tag at container-create time, and inspecting the tag
     afterwards can report an image the container is not running. Reading
     the container's own `.Image` is the only answer that cannot disagree
     with what is actually serving the requests.
@@ -267,15 +296,15 @@ def _print_image_identity(
             capture_output=True, text=True, check=True,
         ).stdout.strip()
         print(
-            f"scratch: {spec.compose_name} image {image_name} id {image_id} "
-            f"created {created}",
+            f"ephemeral-service: {spec.compose_name} image {image_name} "
+            f"id {image_id} created {created}",
             file=sys.stderr,
         )
         return image_id, created
     except (subprocess.CalledProcessError, IndexError, ValueError) as exc:
         print(
-            f"scratch: warning: could not inspect the running container for "
-            f"{spec.compose_name}: {exc}",
+            f"ephemeral-service: warning: could not inspect the running "
+            f"container for {spec.compose_name}: {exc}",
             file=sys.stderr,
         )
         return None
@@ -283,13 +312,14 @@ def _print_image_identity(
 
 def _just_built_image_id(spec: ServiceSpec) -> str:
     """The id of the image `_build` just produced for this service's
-    `:scratch` tag, read immediately after `_build` returns -- before `up`
-    has run, so no concurrent scratch run has had a chance to repoint the
-    tag first (see `_print_image_identity`'s own race note).
+    `:ephemeral` tag, read immediately after `_build` returns -- before
+    `up` has run, so no concurrent ephemeral-service run has had a chance
+    to repoint the tag first (see `_print_image_identity`'s own race
+    note).
     """
     result = subprocess.run(
         [
-            "podman", "image", "inspect", _scratch_image(spec),
+            "podman", "image", "inspect", _ephemeral_image(spec),
             "--format", "{{.Id}}",
         ],
         capture_output=True, text=True, check=True,
@@ -310,17 +340,18 @@ def _assert_container_runs_the_build(
     source, run twice) that a same-content rebuild reuses the exact prior
     image id AND `.Created` -- a "`.Created` must be >= now" check would
     misfire on every ordinary cache-hit rebuild, which is the normal case
-    whenever the working tree hasn't changed since the last scratch run.
+    whenever the working tree hasn't changed since the last ephemeral-
+    service run.
     """
     if identity is None:
         raise RuntimeError(
-            f"scratch: could not verify {spec.compose_name} ran the image "
-            "just built (see the inspection warning above)"
+            f"ephemeral-service: could not verify {spec.compose_name} ran "
+            "the image just built (see the inspection warning above)"
         )
     running_image_id, _created = identity
     if running_image_id != built_image_id:
         raise RuntimeError(
-            f"scratch: {spec.compose_name} is running image "
+            f"ephemeral-service: {spec.compose_name} is running image "
             f"{running_image_id}, not the {built_image_id} this run just "
             "built -- refusing a stale image"
         )
@@ -334,9 +365,9 @@ def _bring_up(
 
     Build defaults ON. podman-compose (1.6.0) only builds automatically
     inside `up` when the tag is entirely absent (its own source:
-    ``if_not_exists=(not args.build)``) -- a `:scratch` tag left over from
-    an earlier branch is otherwise reused forever, silently verifying a
-    stale image. `--no-build` waives this only when the caller already
+    ``if_not_exists=(not args.build)``) -- a `:ephemeral` tag left over
+    from an earlier branch is otherwise reused forever, silently verifying
+    a stale image. `--no-build` waives this only when the caller already
     knows the tag is current.
     """
     built_image_id = None
@@ -349,12 +380,12 @@ def _bring_up(
     ]
     # stdout=sys.stderr: podman-compose writes container IDs / project
     # lines to stdout. The wrapped command's stdout must be the ONLY
-    # thing on scratch's own stdout (agents pipe it to `jq`), so
-    # podman-compose's own chatter goes to stderr instead.
+    # thing on ephemeral-service's own stdout (agents pipe it to `jq`),
+    # so podman-compose's own chatter goes to stderr instead.
     subprocess.run(up_cmd, stdout=sys.stderr, check=True)
     port = _host_port(base, override, project, spec)
     print(
-        f"scratch: {spec.compose_name} up at 127.0.0.1:{port}",
+        f"ephemeral-service: {spec.compose_name} up at 127.0.0.1:{port}",
         file=sys.stderr,
     )
     identity = _print_image_identity(project, spec)
@@ -366,19 +397,19 @@ def _bring_up(
 
 def _sentinel_host(spec: ServiceSpec) -> str:
     """RFC-2606 `.invalid` host naming the cause in the DNS error itself."""
-    return f"{spec.compose_name}-not-started-by-this-scratch-run.invalid"
+    return f"{spec.compose_name}-not-started-by-this-ephemeral-service-run.invalid"
 
 
-def _scratch_env(spec: ServiceSpec, port: int, service: str) -> dict[str, str]:
+def _ephemeral_env(spec: ServiceSpec, port: int, service: str) -> dict[str, str]:
     """Env for the wrapped command.
 
-    The target service gets the scratch port. The other two get a
+    The target service gets the ephemeral port. The other two get a
     `.invalid` sentinel host so a cross-service call fails immediately
     instead of silently reaching the live stack. Chain multi-step probes
-    inside the single wrapped command instead of nesting `scratch` runs
-    (see the module docstring) -- a nested run now fails loudly on this
-    same `.invalid` DNS error, the correct failure mode for an
-    unsupported workflow.
+    inside the single wrapped command instead of nesting
+    `ephemeral-service` runs (see the module docstring) -- a nested run
+    now fails loudly on this same `.invalid` DNS error, the correct
+    failure mode for an unsupported workflow.
     """
     env = os.environ.copy()
     for name, other in SERVICES.items():
@@ -391,7 +422,7 @@ def _scratch_env(spec: ServiceSpec, port: int, service: str) -> dict[str, str]:
     return env
 
 
-def cmd_scratch(args: argparse.Namespace) -> int:
+def cmd_ephemeral_service(args: argparse.Namespace) -> int:
     """Bring up a throwaway service instance, run the command, tear down.
 
     Returns the wrapped command's exit code. Raises RuntimeError if the
@@ -403,14 +434,14 @@ def cmd_scratch(args: argparse.Namespace) -> int:
     _require_podman_compose()
     base, template = _compose_files()
 
-    scratch_dir = Path(tempfile.mkdtemp(prefix="aw-scratch-"))
+    ephemeral_dir = Path(tempfile.mkdtemp(prefix="aw-ephemeral-"))
     for sub in spec.data_subdirs:
-        (scratch_dir / sub).mkdir(parents=True, exist_ok=True)
-    override = scratch_dir / "compose.override.yml"
+        (ephemeral_dir / sub).mkdir(parents=True, exist_ok=True)
+    override = ephemeral_dir / "compose.override.yml"
     override.write_text(
-        template.read_text().replace(SCRATCH_PLACEHOLDER, str(scratch_dir))
+        template.read_text().replace(EPHEMERAL_PLACEHOLDER, str(ephemeral_dir))
     )
-    project = f"aw-scratch-{uuid.uuid4().hex[:10]}"
+    project = f"aw-ephemeral-{uuid.uuid4().hex[:10]}"
     # No trailing service name: `down <service>` only ever removes that
     # one container, leaking the project's own pod + network forever
     # (verified: podman-compose 1.6.0 creates one pod + one bridge
@@ -424,11 +455,12 @@ def cmd_scratch(args: argparse.Namespace) -> int:
         "down", "-v", "-t", str(DOWN_TIMEOUT_SEC),
     ]
     # ponytail: only SIGINT unwinds this `finally`; SIGTERM/SIGKILL bypass
-    # it, leaking the container + tmpdir. Add a signal handler if scratch
-    # ever runs somewhere it gets killed rather than Ctrl-C'd.
+    # it, leaking the container + tmpdir. Add a signal handler if
+    # ephemeral-service ever runs somewhere it gets killed rather than
+    # Ctrl-C'd.
     try:
         port = _bring_up(base, override, project, spec, args.build)
-        env = _scratch_env(spec, port, args.service)
+        env = _ephemeral_env(spec, port, args.service)
         result = subprocess.run(command, env=env, check=False)
         return result.returncode
     finally:
@@ -437,18 +469,19 @@ def cmd_scratch(args: argparse.Namespace) -> int:
         # warn on stderr if this ever bites in practice.
         # Same stdout=sys.stderr reasoning as `up` in _bring_up above.
         subprocess.run(down_cmd, stdout=sys.stderr, check=False)
-        shutil.rmtree(scratch_dir, ignore_errors=True)
+        shutil.rmtree(ephemeral_dir, ignore_errors=True)
 
 
 def main(argv: list[str]) -> int:
-    """Parse argv and run `scratch`. Never falls back to the live stack."""
-    scratch_argv, command_argv = _split_argv(argv)
-    args = build_parser().parse_args(scratch_argv)
+    """Parse argv and run `ephemeral-service`. Never falls back to the
+    live stack."""
+    own_argv, command_argv = _split_argv(argv)
+    args = build_parser().parse_args(own_argv)
     args.command = command_argv
     try:
-        return cmd_scratch(args)
+        return cmd_ephemeral_service(args)
     except (RuntimeError, ValueError, OSError, subprocess.CalledProcessError) as exc:
-        print(f"scratch: {exc}", file=sys.stderr)
+        print(f"ephemeral-service: {exc}", file=sys.stderr)
         return 1
 
 

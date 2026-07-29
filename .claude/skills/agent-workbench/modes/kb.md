@@ -16,30 +16,13 @@ Service address: `KB_SVC_HOST` (default `127.0.0.1`) and
 AW=$HOME/.claude/skills/agent-workbench/agent-workbench
 ```
 
-## Verifying against a scratch instance (not the live stack)
+## Never verify against the live stack
 
 Never probe the live kb-svc (port 9100, the real `~/.knowledgebase`) to
 verify a change works -- that leaves permanent residue in the real vault.
-Use `scripts/scratch.py` (repo dev/test tooling, not a CLI verb -- only
-available from a repo checkout), which brings up a throwaway kb-svc
-against a fresh temp data dir, runs the wrapped command, and tears both
-down when it returns:
-
-```bash
-scripts/scratch.py kb -- $AW kb status
-# -> scratch: kb-svc up at 127.0.0.1:<random port>
-# -> scratch: kb-svc image localhost/kb-svc:scratch id <sha> created <timestamp>
-# -> {"kb_home": "/tmp/aw-scratch-XXXXXXXX", "initialized": true, "projects": []}
-```
-
-Same response shape as a live `kb status`, except `kb_home` points at the
-scratch dir instead of the real vault. `scratch kb` isolates ONLY kb-svc:
-a `bd`/`artifact` call made inside the wrapped command still fails loudly
-(sentinel `.invalid` host), never reaches the live stack. `scratch`
-rebuilds the image from the working tree by default on every run; pass
-`--no-build` before `--` only when you already know `:scratch` is
-current. See `SKILL.md` for the full `scratch` contract (any `kb` verb
-works the same way inside it).
+See `SKILL.md` for the ephemeral-service verification rule and how to
+invoke it (`scripts/ephemeral-service.py kb -- ...`) from a repo
+checkout; `--help` documents the mechanics.
 
 When a request makes at least one model call, the response includes a `usage`
 key with `calls` (HTTP calls made), token counts (summed across calls),
@@ -388,7 +371,8 @@ To re-atomize a parent note:
 2. Remove those child markdown files by hand.
 3. Re-run the atomizer on the parent:
    `scripts/kb-atomize.py <path-to-parent>.md --kb-home $HOME/.knowledgebase`
-   (repo dev tooling, not a CLI verb -- same tier as `scripts/scratch.py`).
+   (repo dev tooling, not a CLI verb -- same tier as
+   `scripts/ephemeral-service.py`).
 4. Rebuild the derived layer with `$AW kb index`.
 
 Skipping step 2 is the trap: `build_note_path` treats every freshly

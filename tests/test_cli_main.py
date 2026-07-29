@@ -74,7 +74,7 @@ def run_cli(*args: str) -> subprocess.CompletedProcess[str]:
 
 def test_top_level_help_lists_expected_subcommands() -> None:
     """--help lists kb/bd/artifact/install/init-workspace/doctor,
-    not hub/board/deploy/scratch."""
+    not hub/board/deploy/ephemeral-service."""
     result = run_cli("--help")
     assert result.returncode == 0
     assert "kb" in result.stdout
@@ -87,13 +87,14 @@ def test_top_level_help_lists_expected_subcommands() -> None:
     # `bd`; the exact choices set proves they no longer appear as top-level
     # subcommands (a stray "hub"/"board" would only show up folded inside
     # `bd`'s own help text, checked separately in test_bd_help_lists_*).
-    # `scratch` is repo dev tooling now (scripts/scratch.py), not a CLI
-    # subcommand -- its absence here proves that.
+    # `ephemeral-service` is repo dev tooling now
+    # (scripts/ephemeral-service.py), not a CLI subcommand -- its absence
+    # here proves that.
     assert (
         "{kb,bd,artifact,install,init-workspace,doctor}"
         in result.stdout
     )
-    assert "scratch" not in result.stdout
+    assert "ephemeral" not in result.stdout
 
 
 @pytest.mark.parametrize("flag", ["--help", "-h"])
