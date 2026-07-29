@@ -2,13 +2,16 @@
 """ephemeral-service -- repo dev/test harness: run a command against a
 throwaway service instance instead of the live stack.
 
-    scripts/ephemeral-service.py <kb|bd|artifact> [--no-build] -- <command...>
+    scripts/ephemeral-service.py <kb|bd|artifact> -- <command...>
 
 e.g. ``scripts/ephemeral-service.py kb -- "$AW" kb status``
 
-Builds the ephemeral image from the working tree by default on every run
-(pass ``--no-build`` to skip it) -- see ``_bring_up`` for why this can't
-default off.
+Builds the ephemeral image from the working tree on every run,
+unconditionally -- there is no flag to skip it. Each run mints its own
+image tag (see `EPHEMERAL_TAG_PLACEHOLDER`), so there is no missing-tag
+fast path to opt into and no stale tag left over from an earlier run to
+guard against: the tag namespace itself makes staleness structurally
+impossible. See `_bring_up`.
 
 This is repo tooling, not a CLI verb -- it is NOT part of the shipped
 agent-workbench skill (see ../.claude/skills/agent-workbench/cli/), which
@@ -20,8 +23,9 @@ Brings up ONE disposable container for the named service on a free host
 port against a fresh temp data dir, exports the env vars the existing
 ``kb``/``bd``/``artifact`` clients already read (``KB_SVC_HOST`` etc.) so
 ``<command...>`` transparently talks to it, runs the command, and tears the
-container + temp dir down in a ``finally`` -- self-cleaning even on failure
-or Ctrl-C. Exit code is the command's exit code.
+container + temp dir + this run's own image tag down in a ``finally`` --
+self-cleaning even on failure or Ctrl-C. Exit code is the command's exit
+code.
 
 This is the ONLY sanctioned way to HTTP-probe kb-svc/bd-svc/artifact-svc
 for verification. Probing the live stack (the real ports 9099/9100/9101,
@@ -59,6 +63,13 @@ HEALTH_POLL_TRIES = 20
 HEALTH_POLL_DELAY_SEC = 0.5
 DOWN_TIMEOUT_SEC = 5
 EPHEMERAL_PLACEHOLDER = "__AW_EPHEMERAL__"
+# Substituted with this run's own project name, so each run's image tag
+# is unique to it (see `_ephemeral_image`) instead of a single tag shared
+# by every invocation on the host. Same plain str.replace mechanism as
+# EPHEMERAL_PLACEHOLDER, for the same reason (see docker-compose.ephemeral
+# .yml's header): `!override` captures the RAW pre-substitution text, so a
+# compose `${VAR}` inside one never resolves.
+EPHEMERAL_TAG_PLACEHOLDER = "__AW_EPHEMERAL_TAG__"
 
 
 class ServiceSpec(NamedTuple):
@@ -91,9 +102,13 @@ SERVICES: dict[str, ServiceSpec] = {
 }
 
 
-def _ephemeral_image(spec: ServiceSpec) -> str:
-    """The ephemeral overlay's own tag for this service -- never :latest."""
-    return f"localhost/{spec.image_repo}:ephemeral"
+def _ephemeral_image(spec: ServiceSpec, project: str) -> str:
+    """This run's own tag for this service -- never :latest, and unique
+    to `project` so no other run (concurrent or later) ever shares or
+    repoints it. Never reused across invocations: `project` is minted
+    fresh (`uuid.uuid4()`) every `cmd_ephemeral_service` call.
+    """
+    return f"localhost/{spec.image_repo}:{project}"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -105,8 +120,7 @@ def build_parser() -> argparse.ArgumentParser:
     # advertise an invocation that always errors.
     parser = argparse.ArgumentParser(
         prog="ephemeral-service.py",
-        usage="ephemeral-service.py [-h] [--no-build] {artifact,bd,kb} -- "
-              "COMMAND...",
+        usage="ephemeral-service.py [-h] {artifact,bd,kb} -- COMMAND...",
         description="run a command against a throwaway service instance, "
                      "never the live stack",
         epilog="COMMAND is everything after the literal `--`, e.g. "
@@ -128,23 +142,17 @@ def build_parser() -> argparse.ArgumentParser:
                "re-sentinels the outer run's own service and fails the "
                "same way; chain multi-step probes against ONE service "
                "inside COMMAND instead.\n\n"
-               "Every run prints the CREATED CONTAINER's actual running "
-               "image id and creation time to stderr as a freshness "
-               "tripwire, and (default `build=True`) refuses to proceed "
-               "if the container isn't running the image this run just "
-               "built.",
+               "Every run builds a fresh image under its OWN unique tag "
+               "(never shared with any other run, never :latest) and "
+               "prints the CREATED CONTAINER's actual running image id "
+               "and creation time to stderr as a freshness tripwire, "
+               "refusing to proceed if the container isn't running the "
+               "image this run just built. The container, its image tag, "
+               "and the temp data dir are all removed on exit, including "
+               "on failure or Ctrl-C.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("service", choices=sorted(SERVICES))
-    parser.add_argument(
-        "--no-build", dest="build", action="store_false", default=True,
-        help="skip the default rebuild of the ephemeral image from the "
-             "working tree before `up` (opt out only when you already "
-             "know the :ephemeral tag is current -- podman-compose's own "
-             "`up` build-if-missing only triggers when the tag is "
-             "entirely absent, so without a rebuild a stale :ephemeral "
-             "tag from an earlier branch is reused forever)",
-    )
     return parser
 
 
@@ -153,10 +161,10 @@ def _split_argv(argv: list[str]) -> tuple[list[str], list[str]]:
     before it, the wrapped command after.
 
     Done by hand rather than via argparse `nargs=REMAINDER` on a trailing
-    `command` argument: REMAINDER swallows any later recognized flag (e.g.
-    `--no-build`) into the wrapped command once positional matching begins,
-    breaking `ephemeral-service.py kb --no-build -- true` (flag after the
-    service).
+    `command` argument: REMAINDER swallows any later recognized flag into
+    the wrapped command once positional matching begins, which would
+    break a future flag added after the service positional (e.g.
+    `ephemeral-service.py kb --some-flag -- true`).
     """
     if "--" in argv:
         idx = argv.index("--")
@@ -242,7 +250,7 @@ def _host_port(base: Path, override: Path, project: str, spec: ServiceSpec) -> i
 def _build(
     base: Path, override: Path, project: str, spec: ServiceSpec,
 ) -> None:
-    """Build the ephemeral image from the working tree."""
+    """Build this run's own tagged image from the working tree."""
     subprocess.run(
         [
             "podman-compose", "-p", project, "-f", str(base), "-f", str(override),
@@ -256,19 +264,18 @@ def _print_image_identity(
     project: str, spec: ServiceSpec,
 ) -> tuple[str, str] | None:
     """Print the image the CREATED CONTAINER is running, to stderr -- the
-    tripwire that makes a wrong ephemeral image diagnosable from the
-    transcript instead of silently passing. Returns (image_id, created),
-    or None if the inspection itself failed, so a caller (the container-
-    backed test tier) can assert on the real identity instead of only
-    the swallowed stderr line.
+    tripwire that makes a wrong image diagnosable from the transcript
+    instead of silently passing. Returns (image_id, created), or None if
+    the inspection itself failed, so a caller (the container-backed test
+    tier) can assert on the real identity instead of only the swallowed
+    stderr line.
 
-    Deliberately inspects the container, not `_ephemeral_image(spec)`. The
-    `:ephemeral` tag is global to this host while builds are per-worktree,
-    so two concurrent ephemeral-service runs race for it: last writer wins,
-    `up` resolves the tag at container-create time, and inspecting the tag
-    afterwards can report an image the container is not running. Reading
-    the container's own `.Image` is the only answer that cannot disagree
-    with what is actually serving the requests.
+    Deliberately inspects the container, not the tag (`_ephemeral_image`).
+    Each run's tag is unique to it, so nothing else on the host should
+    ever repoint it -- but reading the container's own `.Image` is still
+    the only answer that cannot disagree with what is actually serving
+    the requests, independent of that assumption holding (e.g. a human
+    manually retagging it for debugging).
     """
     try:
         # `podman-compose ps` takes no service argument (verified: it
@@ -310,16 +317,18 @@ def _print_image_identity(
         return None
 
 
-def _just_built_image_id(spec: ServiceSpec) -> str:
-    """The id of the image `_build` just produced for this service's
-    `:ephemeral` tag, read immediately after `_build` returns -- before
-    `up` has run, so no concurrent ephemeral-service run has had a chance
-    to repoint the tag first (see `_print_image_identity`'s own race
-    note).
+def _just_built_image_id(spec: ServiceSpec, project: str) -> str:
+    """The id of the image `_build` just produced for this run's own tag
+    (`_ephemeral_image`), read immediately after `_build` returns.
+
+    Nothing else on the host shares this tag (it is derived from
+    `project`, unique per run), so there is no race to read it before a
+    concurrent run repoints it -- unlike a tag shared across every
+    invocation.
     """
     result = subprocess.run(
         [
-            "podman", "image", "inspect", _ephemeral_image(spec),
+            "podman", "image", "inspect", _ephemeral_image(spec, project),
             "--format", "{{.Id}}",
         ],
         capture_output=True, text=True, check=True,
@@ -332,16 +341,18 @@ def _assert_container_runs_the_build(
 ) -> None:
     """Reject a bring-up whose container isn't running the image `_build`
     just produced -- e.g. `up` resolving a different tag/image than the
-    one this run just built. Only called when `build` was True; there is
-    nothing to compare a `--no-build` run against (see `_bring_up`).
+    one this run just built (the class of defect a swapped `-f base
+    -f override` order in `_bring_up` would cause: the override's `image:`
+    would lose to docker-compose.yml's `:latest`). Called on every
+    bring-up: build is unconditional now, so there is no longer a
+    `--no-build` path with nothing to compare against.
 
     Compares image IDs, not `.Created` timestamps: verified empirically
     (`podman build` on this repo's own kb-container image, unchanged
     source, run twice) that a same-content rebuild reuses the exact prior
     image id AND `.Created` -- a "`.Created` must be >= now" check would
     misfire on every ordinary cache-hit rebuild, which is the normal case
-    whenever the working tree hasn't changed since the last ephemeral-
-    service run.
+    whenever the working tree hasn't changed since the last build.
     """
     if identity is None:
         raise RuntimeError(
@@ -358,22 +369,19 @@ def _assert_container_runs_the_build(
 
 
 def _bring_up(
-    base: Path, override: Path, project: str, spec: ServiceSpec, build: bool,
+    base: Path, override: Path, project: str, spec: ServiceSpec,
 ) -> int:
-    """Build (unless `--no-build`), then `up -d` the service, wait for
+    """Build this run's own tagged image, `up -d` the service, wait for
     health, return its host port.
 
-    Build defaults ON. podman-compose (1.6.0) only builds automatically
-    inside `up` when the tag is entirely absent (its own source:
-    ``if_not_exists=(not args.build)``) -- a `:ephemeral` tag left over
-    from an earlier branch is otherwise reused forever, silently verifying
-    a stale image. `--no-build` waives this only when the caller already
-    knows the tag is current.
+    Build is unconditional -- there is no flag to skip it. Each run's
+    image tag (`_ephemeral_image`) is unique to that run, so there is no
+    "tag already exists" fast path to opt into and no stale tag left over
+    from an earlier run to guard against: staleness across runs is
+    structurally impossible when no run ever reuses another run's tag.
     """
-    built_image_id = None
-    if build:
-        _build(base, override, project, spec)
-        built_image_id = _just_built_image_id(spec)
+    _build(base, override, project, spec)
+    built_image_id = _just_built_image_id(spec, project)
     up_cmd = [
         "podman-compose", "-p", project, "-f", str(base), "-f", str(override),
         "up", "-d", spec.compose_name,
@@ -389,8 +397,7 @@ def _bring_up(
         file=sys.stderr,
     )
     identity = _print_image_identity(project, spec)
-    if built_image_id is not None:
-        _assert_container_runs_the_build(identity, built_image_id, spec)
+    _assert_container_runs_the_build(identity, built_image_id, spec)
     _wait_healthy(port, spec)
     return port
 
@@ -422,6 +429,20 @@ def _ephemeral_env(spec: ServiceSpec, port: int, service: str) -> dict[str, str]
     return env
 
 
+def _remove_image(spec: ServiceSpec, project: str) -> None:
+    """Best-effort removal of this run's own per-run image tag
+    (`_ephemeral_image`), alongside the container and temp dir in the
+    same `finally` -- a per-run tag is a per-run resource, so leaving it
+    behind would leak one image onto the host on every invocation. Never
+    raises: a run whose `_build` itself failed never created the tag, and
+    an `rmi` failure here must not mask whatever the real error was.
+    """
+    subprocess.run(
+        ["podman", "rmi", "-f", _ephemeral_image(spec, project)],
+        stdout=sys.stderr, stderr=sys.stderr, check=False,
+    )
+
+
 def cmd_ephemeral_service(args: argparse.Namespace) -> int:
     """Bring up a throwaway service instance, run the command, tear down.
 
@@ -434,14 +455,20 @@ def cmd_ephemeral_service(args: argparse.Namespace) -> int:
     _require_podman_compose()
     base, template = _compose_files()
 
+    # Minted before the override is written: the override's `image:`
+    # line substitutes this same value (EPHEMERAL_TAG_PLACEHOLDER), so
+    # this run's compose project name and its image tag are the same
+    # string -- one mint, two uses, nothing to keep in sync by hand.
+    project = f"aw-ephemeral-{uuid.uuid4().hex[:10]}"
     ephemeral_dir = Path(tempfile.mkdtemp(prefix="aw-ephemeral-"))
     for sub in spec.data_subdirs:
         (ephemeral_dir / sub).mkdir(parents=True, exist_ok=True)
     override = ephemeral_dir / "compose.override.yml"
     override.write_text(
-        template.read_text().replace(EPHEMERAL_PLACEHOLDER, str(ephemeral_dir))
+        template.read_text()
+        .replace(EPHEMERAL_PLACEHOLDER, str(ephemeral_dir))
+        .replace(EPHEMERAL_TAG_PLACEHOLDER, project)
     )
-    project = f"aw-ephemeral-{uuid.uuid4().hex[:10]}"
     # No trailing service name: `down <service>` only ever removes that
     # one container, leaking the project's own pod + network forever
     # (verified: podman-compose 1.6.0 creates one pod + one bridge
@@ -455,11 +482,14 @@ def cmd_ephemeral_service(args: argparse.Namespace) -> int:
         "down", "-v", "-t", str(DOWN_TIMEOUT_SEC),
     ]
     # ponytail: only SIGINT unwinds this `finally`; SIGTERM/SIGKILL bypass
-    # it, leaking the container + tmpdir. Add a signal handler if
+    # it, leaking the container + tmpdir + per-run image tag. A leaked
+    # tag is unique to this dead run and never reused (see
+    # `_ephemeral_image`), so it is inert litter, not a hazard -- no
+    # future run can mistake it for current. Add a signal handler if
     # ephemeral-service ever runs somewhere it gets killed rather than
-    # Ctrl-C'd.
+    # Ctrl-C'd and the litter itself becomes a problem.
     try:
-        port = _bring_up(base, override, project, spec, args.build)
+        port = _bring_up(base, override, project, spec)
         env = _ephemeral_env(spec, port, args.service)
         result = subprocess.run(command, env=env, check=False)
         return result.returncode
@@ -470,6 +500,7 @@ def cmd_ephemeral_service(args: argparse.Namespace) -> int:
         # Same stdout=sys.stderr reasoning as `up` in _bring_up above.
         subprocess.run(down_cmd, stdout=sys.stderr, check=False)
         shutil.rmtree(ephemeral_dir, ignore_errors=True)
+        _remove_image(spec, project)
 
 
 def main(argv: list[str]) -> int:

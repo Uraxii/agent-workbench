@@ -19,12 +19,12 @@ covered here:
 - `_split_argv` splits ephemeral-service's own flags from the wrapped
   command on the FIRST `--` only, regardless of flag position or a `--`
   inside the wrapped command itself
-- build runs by default and only `--no-build` skips it
+- every run builds this run's own image -- there is no flag to skip it
 - the image-identity line lands on stderr, never stdout
 - `_assert_container_runs_the_build` (the freshness check) actually
   rejects a mismatched or unverifiable running image, in isolation, no
-  container needed -- the gate proved a no-op, or a self-vs-self
-  comparison, of this function left the full 498-test suite green
+  container needed -- a no-op, or a self-vs-self comparison, of this
+  function must not leave the suite green
 """
 from __future__ import annotations
 
@@ -55,17 +55,17 @@ def _load_ephemeral_service():
 ephemeral_service = _load_ephemeral_service()
 
 
-def test_overlay_pins_every_service_to_its_ephemeral_tag() -> None:
+def test_overlay_pins_every_service_to_the_ephemeral_tag_placeholder() -> None:
     """The REAL docker-compose.ephemeral.yml must override `image:` to the
-    `:ephemeral` tag for every service ephemeral-service can run.
+    `__AW_EPHEMERAL_TAG__` placeholder for every service ephemeral-service
+    can run -- `cmd_ephemeral_service` substitutes it with this run's own
+    unique tag before handing the file to podman-compose.
 
     This is the whole of defect 1's fix: without the override the overlay
     inherits `image: localhost/kb-svc:latest` from docker-compose.yml and
     an ephemeral-service run exercises whatever the live stack's tag
     points at. Every other test stubs compose out and never reads this
-    file, so nothing else here would notice the override being removed --
-    and `_print_image_identity` would keep printing `:ephemeral` while the
-    container ran `:latest`, certifying the wrong image.
+    file, so nothing else here would notice the override being removed.
     """
     overlay = (
         Path(__file__).resolve().parent.parent / "docker-compose.ephemeral.yml"
@@ -77,8 +77,11 @@ def test_overlay_pins_every_service_to_its_ephemeral_tag() -> None:
     ]
 
     for spec in ephemeral_service.SERVICES.values():
-        assert f"image: {ephemeral_service._ephemeral_image(spec)}" in image_lines, (
-            f"{spec.compose_name} is not pinned to its :ephemeral tag"
+        expected = f"image: localhost/{spec.image_repo}:" \
+            f"{ephemeral_service.EPHEMERAL_TAG_PLACEHOLDER}"
+        assert expected in image_lines, (
+            f"{spec.compose_name} is not pinned to the ephemeral tag "
+            "placeholder"
         )
     # Prose about :latest is fine; an actual `image:` naming it is the defect.
     assert not [line for line in image_lines if ":latest" in line]
@@ -90,8 +93,8 @@ def _stub_compose(
 ) -> list[tuple[list[str], dict[str, object]]]:
     """Fake every subprocess.run call ephemeral-service.py would make
     against podman-compose/podman, recording (cmd, kwargs) pairs. No
-    podman needed: `port`, `ps -q` and the two `inspect` calls get canned
-    stdout, anything else (build/up/down/the wrapped command) just
+    podman needed: `port`, `ps -q`, the two `inspect` calls, and `rmi` get
+    canned stdout, anything else (build/up/down/the wrapped command) just
     succeeds.
 
     The image-identity path is modelled as the three real calls it makes:
@@ -99,8 +102,9 @@ def _stub_compose(
     container actually runs, `image inspect` for that image's timestamp.
     A fourth, `image inspect <tag> --format {{.Id}}`, models
     `_just_built_image_id`'s post-build lookup -- same id as the
-    container's own image, so a `build=True` run's freshness check
-    (`_assert_container_runs_the_build`) sees a match.
+    container's own image, so the freshness check
+    (`_assert_container_runs_the_build`), which now runs on every
+    bring-up, sees a match.
     """
     calls: list[tuple[list[str], dict[str, object]]] = []
 
@@ -112,7 +116,8 @@ def _stub_compose(
             return SimpleNamespace(returncode=0, stdout="containerid123\n")
         if "container" in cmd and "inspect" in cmd:
             return SimpleNamespace(
-                returncode=0, stdout="deadbeef localhost/kb-svc:ephemeral\n",
+                returncode=0,
+                stdout="deadbeef localhost/kb-svc:aw-ephemeral-cafef00d00\n",
             )
         if "inspect" in cmd and "{{.Id}}" in cmd:
             return SimpleNamespace(returncode=0, stdout="deadbeef\n")
@@ -176,13 +181,13 @@ def test_split_argv_wrapped_command() -> None:
 
 
 def test_split_argv_flag_before_separator() -> None:
-    """`kb --no-build -- true`: ephemeral-service's own flag stays out of
-    the wrapped command regardless of where it sits relative to `--`.
+    """`kb -h -- true`: ephemeral-service's own flag stays out of the
+    wrapped command regardless of where it sits relative to `--`.
     """
     own_argv, command_argv = ephemeral_service._split_argv(
-        ["kb", "--no-build", "--", "true"]
+        ["kb", "-h", "--", "true"]
     )
-    assert own_argv == ["kb", "--no-build"]
+    assert own_argv == ["kb", "-h"]
     assert command_argv == ["true"]
 
 
@@ -226,7 +231,7 @@ def test_podman_compose_chatter_stays_off_stdout(
     """
     calls = _stub_compose(tmp_path, monkeypatch)
 
-    args = argparse.Namespace(service="kb", command=["echo", "hi"], build=False)
+    args = argparse.Namespace(service="kb", command=["echo", "hi"])
     returncode = ephemeral_service.cmd_ephemeral_service(args)
     assert returncode == 0
 
@@ -240,28 +245,26 @@ def test_podman_compose_chatter_stays_off_stdout(
     # to the process's own stdout via an explicit stdout= kwarg.
     assert "stdout" not in find("port")
 
-    wrapped_cmd, wrapped_kwargs = calls[-2]  # up, port, inspect, [wrapped], down
+    # up, port, inspect, [wrapped], down, rmi -- the wrapped command is
+    # the third call from the end.
+    wrapped_cmd, wrapped_kwargs = calls[-3]
     assert wrapped_cmd == ["echo", "hi"]
     assert "stdout" not in wrapped_kwargs
 
 
-def test_build_runs_by_default(
+def test_build_always_runs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """No `--no-build` -> `podman-compose ... build <svc>` runs before
-    `up`. Build defaulting ON is load-bearing: podman-compose's `up` only
-    builds a missing image, so without this a stale `:ephemeral` tag left
-    over from an earlier branch would be reused forever.
+    """`podman-compose ... build <svc>` always runs before `up` -- there
+    is no flag to skip it. A per-run image tag means there is nothing to
+    reuse: skipping the build would only leave the container with no
+    image to run. (Replaces the old `--no-build`-flag pair of tests: that
+    flag, and the shared-tag staleness hazard it existed to opt out of,
+    were deleted -- a per-run tag can never be "left over from an earlier
+    branch" because no run ever reuses another run's tag.)
     """
-    # The PARSER DEFAULT is the fix, so assert on it directly. Handing
-    # cmd_ephemeral_service a hand-built `build=True` namespace only
-    # exercises _bring_up's dispatch and passes even with the default
-    # flipped back to opt-in, which is the exact defect this test exists
-    # to catch.
-    assert ephemeral_service.build_parser().parse_args(["kb"]).build is True
-
     calls = _stub_compose(tmp_path, monkeypatch)
-    args = argparse.Namespace(service="kb", command=["true"], build=True)
+    args = argparse.Namespace(service="kb", command=["true"])
     ephemeral_service.cmd_ephemeral_service(args)
 
     build_calls = [cmd for cmd, _ in calls if "build" in cmd]
@@ -269,15 +272,20 @@ def test_build_runs_by_default(
     assert build_calls[0][-2:] == ["build", "kb-svc"]
 
 
-def test_no_build_skips_build_step(
+def test_teardown_removes_this_runs_own_image_tag(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`--no-build` (build=False) must not call `podman-compose ... build`."""
+    """A per-run tag is a per-run resource: `cmd_ephemeral_service`'s
+    `finally` must remove it (`podman rmi -f`) alongside the container and
+    temp dir, or every invocation leaks one image onto the host.
+    """
     calls = _stub_compose(tmp_path, monkeypatch)
-    args = argparse.Namespace(service="kb", command=["true"], build=False)
+    args = argparse.Namespace(service="kb", command=["true"])
     ephemeral_service.cmd_ephemeral_service(args)
 
-    assert not any("build" in cmd for cmd, _ in calls)
+    rmi_calls = [cmd for cmd, _ in calls if cmd[:2] == ["podman", "rmi"]]
+    assert len(rmi_calls) == 1
+    assert rmi_calls[0][-1].startswith("localhost/kb-svc:aw-ephemeral-")
 
 
 def test_image_identity_printed_to_stderr_not_stdout(
@@ -289,53 +297,60 @@ def test_image_identity_printed_to_stderr_not_stdout(
     carry.
     """
     _stub_compose(tmp_path, monkeypatch)
-    args = argparse.Namespace(service="kb", command=["true"], build=False)
+    args = argparse.Namespace(service="kb", command=["true"])
     ephemeral_service.cmd_ephemeral_service(args)
 
     captured = capsys.readouterr()
-    assert "localhost/kb-svc:ephemeral" in captured.err
+    assert "localhost/kb-svc:aw-ephemeral-cafef00d00" in captured.err
     assert "id deadbeef" in captured.err
-    assert "localhost/kb-svc:ephemeral" not in captured.out
+    assert "localhost/kb-svc:aw-ephemeral-cafef00d00" not in captured.out
 
 
 def test_image_identity_inspects_the_container_not_the_tag(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The tripwire must read the CREATED CONTAINER's image, never the
-    `:ephemeral` tag.
+    """The tripwire must read the CREATED CONTAINER's image, never a tag
+    string.
 
-    The tag is global to the host while builds are per-worktree, so two
-    concurrent ephemeral-service runs race for it: `up` resolves the tag
-    at create time, so a later tag read can report an image the container
-    is not running -- the branch's own failure class, re-entered via
-    concurrency instead of staleness.
+    Reading the container's own `.Image` is the only answer that cannot
+    disagree with what is actually serving requests -- independent of
+    whether anything else on the host ever repointed the tag (e.g. a
+    human retagging it by hand for debugging). This still holds even
+    though each run's tag is now unique to it and nothing else should
+    ordinarily touch it.
     """
     calls = _stub_compose(tmp_path, monkeypatch)
-    args = argparse.Namespace(service="kb", command=["true"], build=False)
+    args = argparse.Namespace(service="kb", command=["true"])
     ephemeral_service.cmd_ephemeral_service(args)
 
     inspects = [cmd for cmd, _ in calls if "inspect" in cmd]
     assert any(cmd[:3] == ["podman", "container", "inspect"] for cmd in inspects), (
         "never inspected the running container"
     )
-    # A bare `podman image inspect <tag>` is the defect: it asks the tag,
-    # not the container. Any image inspect must be BY ID, from the
-    # container's own .Image.
-    for cmd in inspects:
-        if cmd[:3] == ["podman", "image", "inspect"]:
-            assert cmd[3] == "deadbeef", (
-                f"image inspected by tag, not by the container's image id: {cmd}"
-            )
+    # `_print_image_identity`'s own image inspect (--format {{.Created}})
+    # is the tripwire under test: it must read the image BY ID, from the
+    # container's own .Image, never by tag. A SEPARATE image inspect
+    # (--format {{.Id}}) legitimately reads the freshly built tag right
+    # after `_build`, in `_just_built_image_id` -- that one is by design
+    # (it is how the id to compare against is learned in the first place)
+    # and is not this test's concern.
+    identity_inspects = [
+        cmd for cmd in inspects
+        if cmd[:3] == ["podman", "image", "inspect"] and "{{.Created}}" in cmd
+    ]
+    assert identity_inspects, "never inspected the identity image by id"
+    for cmd in identity_inspects:
+        assert cmd[3] == "deadbeef", (
+            f"image inspected by tag, not by the container's image id: {cmd}"
+        )
 
 
 def test_freshness_check_rejects_a_mismatched_running_image() -> None:
     """`_assert_container_runs_the_build` must reject a bring-up whose
     container is running a DIFFERENT image than the one `_build` just
-    produced. This is the pure-unit proof the gate found missing: a
-    no-op, or a "compare the running id against itself" rewrite, of this
-    function left all 498 tests green because `_build` alone already
-    changes the running id on every real bring-up -- this test does not
-    depend on `_build` at all.
+    produced -- the pure-unit proof that a no-op, or a "compare the
+    running id against itself" rewrite, of this function cannot pass
+    unnoticed. This test does not depend on `_build` at all.
     """
     with pytest.raises(RuntimeError, match="refusing a stale image"):
         ephemeral_service._assert_container_runs_the_build(

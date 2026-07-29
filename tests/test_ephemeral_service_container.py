@@ -1,9 +1,9 @@
-"""Container-backed tier for scripts/ephemeral-service.py: the ~492-test
-suite never starts a container, so real defects (a broken `podman-compose
-ps <service>` call, the docker-compose.ephemeral.yml override losing the
-merge, a stale `:ephemeral` tag surviving a bring-up, leaked pod/network on
-teardown) could each slip past a suite that stubs `subprocess.run`
-wholesale (see tests/test_ephemeral_service.py's `_stub_compose`).
+"""Container-backed tier for scripts/ephemeral-service.py: the unit suite
+never starts a container, so real defects (a broken `podman-compose ps
+<service>` call, the docker-compose.ephemeral.yml override losing the
+merge, a leaked container/pod/network/image tag on teardown) could each
+slip past a suite that stubs `subprocess.run` wholesale (see
+tests/test_ephemeral_service.py's `_stub_compose`).
 
 kb-svc ONLY -- its build context (`./scripts`) is fast. bd-svc/artifact-svc
 are deliberately out of scope here: artifact-svc alone can take up to 900s
@@ -55,19 +55,18 @@ ephemeral_service = _load_ephemeral_service()
 
 pytestmark = pytest.mark.container
 
-_KB_CONTAINERFILE = _SCRIPTS_DIR / "kb-container" / "Containerfile"
-_BUILD_TIMEOUT_SEC = 180.0
-
-# Runs inside the ephemeral container's OWN process (spawned by
-# ephemeral_service.cmd_ephemeral_service as the wrapped command), not
-# this test process, so it can inspect the running container -- and, for
-# the tag-vs-container check, briefly retag `localhost/kb-svc:ephemeral`
-# -- while the container is still up and before ephemeral-service's own
-# teardown runs. Placeholders are substituted with plain str.replace
-# (never a compose ${VAR}-style hole), same convention as
-# docker-compose.ephemeral.yml's own __AW_EPHEMERAL__ substitution.
-# Loads scripts/ephemeral-service.py via importlib (not a plain `import`
-# statement): the hyphenated filename is not a valid Python identifier.
+# The probe script below is a HOST process: it is what
+# ephemeral_service.cmd_ephemeral_service runs as the WRAPPED COMMAND
+# (`subprocess.run(command, env=env, ...)`, on the host), not code
+# executing inside the container. It talks to the container only the way
+# any host process would -- through the podman CLI and the container's
+# published port -- so it can inspect the running container while it is
+# still up and before ephemeral-service's own teardown runs. Placeholders
+# are substituted with plain str.replace (never a compose ${VAR}-style
+# hole), same convention as docker-compose.ephemeral.yml's own
+# __AW_EPHEMERAL__ substitution. Loads scripts/ephemeral-service.py via
+# importlib (not a plain `import` statement): the hyphenated filename is
+# not a valid Python identifier.
 _PROBE_SRC = '''
 import importlib.util
 import json
@@ -117,20 +116,7 @@ mounts = _run([
     "podman", "container", "inspect", container, "--format", "{{.Mounts}}",
 ]).stdout.strip()
 
-# Decoy retag target for the tag-vs-container check: the build's own
-# immediate parent image, guaranteed already cached locally by the build
-# that just ran -- never pulled or run, only used as a harmless alias.
-with open("__CONTAINERFILE__") as fh:
-    containerfile_lines = fh.read().splitlines()
-base_ref = [
-    line.split(maxsplit=1)[1] for line in containerfile_lines
-    if line.startswith("FROM")
-][0]
-_run(["podman", "tag", base_ref, "localhost/kb-svc:ephemeral"])
-try:
-    identity = ephemeral_service._print_image_identity(project, SPEC)
-finally:
-    _run(["podman", "tag", ground_truth_id, "localhost/kb-svc:ephemeral"])
+identity = ephemeral_service._print_image_identity(project, SPEC)
 
 with open("__RESULT_FILE__", "w") as fh:
     json.dump({
@@ -179,14 +165,14 @@ def _podman(cmd: list[str], timeout: float = 60.0) -> str:
 
 
 def _run_kb_ephemeral_probe(
-    tmp_path_factory: pytest.TempPathFactory, build: bool,
+    tmp_path_factory: pytest.TempPathFactory,
 ) -> ProbeResult:
     """Bring up ONE real kb-svc ephemeral-service container through
-    ephemeral_service.py's own `cmd_ephemeral_service` (health-wait,
+    ephemeral_service.py's own `cmd_ephemeral_service` (build+health-wait,
     teardown in its own `finally`), run the probe script above as the
-    wrapped command, and return what it captured. Shared by every test
-    below that needs a real bring-up -- each call is its own build+up+
-    down, never hand-rolled.
+    wrapped command (a HOST process, see the module comment above), and
+    return what it captured. Shared by every test below that needs a real
+    bring-up.
     """
     work = tmp_path_factory.mktemp("ephemeral-container")
     result_file = work / "result.json"
@@ -203,13 +189,12 @@ def _run_kb_ephemeral_probe(
     probe.write_text(
         _PROBE_SRC
         .replace("__SCRIPTS_DIR__", str(_SCRIPTS_DIR))
-        .replace("__CONTAINERFILE__", str(_KB_CONTAINERFILE))
         .replace("__RESULT_FILE__", str(result_file))
         .replace("__PROJECT__", project)
     )
 
     args = argparse.Namespace(
-        service="kb", command=[sys.executable, str(probe)], build=build,
+        service="kb", command=[sys.executable, str(probe)],
     )
     real_uuid4 = ephemeral_service.uuid.uuid4
     ephemeral_service.uuid.uuid4 = lambda: project_uuid
@@ -217,16 +202,19 @@ def _run_kb_ephemeral_probe(
         returncode = ephemeral_service.cmd_ephemeral_service(args)
     finally:
         ephemeral_service.uuid.uuid4 = real_uuid4
-    assert returncode == 0, "probe script failed inside the ephemeral container"
+    assert returncode == 0, (
+        "probe script (a host process talking to the container over its "
+        "published port) failed"
+    )
 
     return ProbeResult(**json.loads(result_file.read_text()))
 
 
 @pytest.fixture(scope="module")
 def kb_ephemeral_probe(tmp_path_factory: pytest.TempPathFactory) -> ProbeResult:
-    """The tier's one shared, default (`build=True`) bring-up."""
+    """The tier's one shared bring-up."""
     _require_container_runtime()
-    return _run_kb_ephemeral_probe(tmp_path_factory, build=True)
+    return _run_kb_ephemeral_probe(tmp_path_factory)
 
 
 def test_bring_up_reports_image_identity(kb_ephemeral_probe: ProbeResult) -> None:
@@ -238,18 +226,20 @@ def test_bring_up_reports_image_identity(kb_ephemeral_probe: ProbeResult) -> Non
     assert kb_ephemeral_probe.identity is not None
 
 
-def test_effective_image_is_the_ephemeral_tag(
+def test_effective_image_is_this_runs_own_tag(
     kb_ephemeral_probe: ProbeResult,
 ) -> None:
     """Defect 2: swapping the `-f base -f override` order in
     scripts/ephemeral-service.py's `up_cmd` makes the LAST file win the
     merge -- docker-compose.yml's `image: localhost/kb-svc:latest` would
-    then beat the override's `:ephemeral` pin. Reads the EFFECTIVE image
+    then beat the override's per-run tag pin. Reads the EFFECTIVE image
     off the actually created container (`podman container inspect`),
     never the override file's text -- a text-match test cannot see this
     class of bug.
     """
-    assert kb_ephemeral_probe.effective_image == "localhost/kb-svc:ephemeral"
+    assert kb_ephemeral_probe.effective_image == (
+        f"localhost/kb-svc:{kb_ephemeral_probe.project}"
+    )
 
 
 def test_mounts_point_at_ephemeral_tmpdir_never_the_real_vault(
@@ -268,34 +258,17 @@ def test_mounts_point_at_ephemeral_tmpdir_never_the_real_vault(
     assert ".knowledgebase" not in kb_ephemeral_probe.mounts
 
 
-def test_identity_matches_the_container_not_a_retagged_tag(
-    kb_ephemeral_probe: ProbeResult,
-) -> None:
-    """While the container is running, the probe retags
-    `localhost/kb-svc:ephemeral` to a harmless decoy and restores it
-    afterwards. `_print_image_identity` must report the id the CONTAINER
-    is actually running, not whatever the tag happens to point at right
-    now -- exactly the race its own container-inspect (never tag-inspect)
-    design exists to defend against.
-    """
-    assert kb_ephemeral_probe.identity is not None, (
-        "no identity was reported at all -- see "
-        "test_bring_up_reports_image_identity for that failure mode"
-    )
-    identity_id, _created = kb_ephemeral_probe.identity
-    assert identity_id == kb_ephemeral_probe.ground_truth_id
-
-
-def test_teardown_leaves_no_container_pod_or_network(
+def test_teardown_leaves_no_container_pod_network_or_image_tag(
     kb_ephemeral_probe: ProbeResult,
 ) -> None:
     """By the time this fixture value exists, `cmd_ephemeral_service`'s
     own `finally` has already run. Nothing named after this run's project
     may still exist -- neither the container, nor the pod, nor the
-    network podman-compose created for it. `down <service>` (an earlier
-    version's teardown) only ever removed the named container; the
-    project's own pod + bridge network survived every run, accumulating
-    forever.
+    network podman-compose created for it, nor this run's own per-run
+    image tag (`_remove_image`). `down <service>` (an earlier version's
+    teardown) only ever removed the named container; the project's own
+    pod + bridge network survived every run, accumulating forever. A
+    per-run tag left un-removed would do the same to images.
     """
     project = kb_ephemeral_probe.project
 
@@ -318,85 +291,8 @@ def test_teardown_leaves_no_container_pod_or_network(
     ])
     assert networks == "", f"leaked network(s) for {project}: {networks}"
 
-
-def test_no_build_reuses_the_current_tag_without_rebuilding(
-    kb_ephemeral_probe: ProbeResult, tmp_path_factory: pytest.TempPathFactory,
-) -> None:
-    """Exercises `--no-build` (`build=False`), never run by this tier
-    before this fix. The shared fixture above already left
-    `localhost/kb-svc:ephemeral` pointing at a known-good, current-source
-    build -- a second bring-up with `build=False` must run against that
-    SAME image; `--no-build` skipping the rebuild is documented, intended
-    behaviour (scripts/ephemeral-service.py's own `--no-build` help
-    text), not itself a defect. The defect-3 catch below is the
-    `build=True` path.
-    """
-    result = _run_kb_ephemeral_probe(tmp_path_factory, build=False)
-    assert result.ground_truth_id == kb_ephemeral_probe.ground_truth_id
-
-
-def test_default_build_path_does_not_leave_the_stale_tag_running(
-    tmp_path_factory: pytest.TempPathFactory,
-) -> None:
-    """Defect 3, END TO END OUTCOME ONLY: a `:ephemeral` tag left over
-    from a previous, DIFFERENT build (imagine one from an earlier branch)
-    is not what the default `cmd_ephemeral_service(build=True)` bring-up
-    ends up running.
-
-    Does NOT exercise the freshness check
-    (`_assert_container_runs_the_build`) in isolation, and must not be
-    read as covering it: `_build` alone already rebuilds from the working
-    tree on every run, so the running id changing here would hold even
-    with that check reduced to a no-op. See test_ephemeral_service.py's
-    test_freshness_check_rejects_a_mismatched_running_image /
-    test_freshness_check_rejects_an_unverifiable_identity for the actual
-    unit coverage of the check itself.
-
-    Builds a "stale" image from a one-line, harmless, marker-mutated
-    TEMP COPY of scripts/ (never the tracked kb-svc.py in place -- a
-    SIGKILL/timeout/crash mid-build must never leave a tracked file
-    dirty), tags it `:ephemeral` as if it were a leftover from a previous
-    run. Records that stale image's own id, then asserts the default
-    build-on bring-up's running container is a DIFFERENT id -- proof
-    enough that the stale tag did not survive, with no second build to
-    compare against and no assumption that a same-content rebuild is
-    id-stable.
-
-    An earlier version of this test compared ids against a `--no-cache`
-    "reference" build of current source instead, and was flaky: two
-    `--no-cache` builds of identical source produce DIFFERENT image ids
-    for this repo's kb-container, because the Containerfile's `pip
-    install lxml readability-lxml` is unpinned and non-deterministic at
-    the layer level.
-    """
-    _require_container_runtime()
-
-    stale_scripts = tmp_path_factory.mktemp("stale-scripts") / "scripts"
-    shutil.copytree(_SCRIPTS_DIR, stale_scripts)
-    marker = f"\n# ephemeral-service-container-tier stale marker {uuid.uuid4().hex}\n"
-    stale_kb_svc = stale_scripts / "kb-svc.py"
-    stale_kb_svc.write_text(
-        stale_kb_svc.read_text(encoding="utf-8") + marker, encoding="utf-8"
-    )
-
-    _podman(
-        [
-            "podman", "build", "-t", "localhost/kb-svc:ephemeral",
-            "-f", str(stale_scripts / "kb-container" / "Containerfile"),
-            str(stale_scripts),
-        ],
-        timeout=_BUILD_TIMEOUT_SEC,
-    )
-
-    stale_id = _podman(
-        [
-            "podman", "image", "inspect", "localhost/kb-svc:ephemeral",
-            "--format", "{{.Id}}",
-        ]
-    )
-
-    result = _run_kb_ephemeral_probe(tmp_path_factory, build=True)
-    assert result.ground_truth_id != stale_id, (
-        "a stale :ephemeral tag survived the default build-on path -- "
-        f"still running the stale image {stale_id}"
-    )
+    images = _podman([
+        "podman", "images", "--filter", f"reference=localhost/kb-svc:{project}",
+        "--format", "{{.Repository}}:{{.Tag}}",
+    ])
+    assert images == "", f"leaked image tag(s) for {project}: {images}"

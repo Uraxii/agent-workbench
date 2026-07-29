@@ -10,9 +10,11 @@
 # root and publish on an ephemeral port instead of the fixed 9099/9100/9101.
 #
 # The __AW_EPHEMERAL__ placeholder is substituted by
-# scripts/ephemeral-service.py with the real ephemeral dir path via plain
-# string replace BEFORE this file is ever handed to podman-compose --
-# deliberately NOT a compose `${VAR}`.
+# scripts/ephemeral-service.py with the real ephemeral dir path,
+# __AW_EPHEMERAL_TAG__ with this run's own unique image tag (same string
+# as its compose project name), both via plain string replace BEFORE this
+# file is ever handed to podman-compose -- deliberately NOT a compose
+# `${VAR}`.
 # podman-compose 1.6.0's `!override` YAML tag captures each scalar's RAW
 # pre-substitution text, so a `${VAR}` written inside an `!override:` block
 # is never resolved (verified: both `up` and `config` raise `RuntimeError:
@@ -28,18 +30,17 @@
 # exactly the live-data exposure this command exists to prevent.
 services:
   kb-svc:
-    # Own tag, never :latest -- decouples an ephemeral-service run from
-    # whatever the live stack happens to have pinned (and removes any
-    # reason to retag :latest just to get a fresh one). This tag alone
-    # does NOT guarantee freshness: podman-compose's `up` only builds a
-    # missing image, so a `:ephemeral` left over from an earlier branch
-    # would otherwise be reused forever. Freshness comes from
-    # scripts/ephemeral-service.py building by default on every run
-    # (`--no-build` opts out). Plain scalar key, not `!override`: compose
-    # only APPENDS list-valued keys (ports/volumes below), a scalar like
-    # `image` is simply replaced -- verified via `podman-compose ...
-    # config`.
-    image: localhost/kb-svc:ephemeral
+    # Own tag, unique to THIS run, never :latest and never shared with
+    # any other run (concurrent or later) -- decouples an ephemeral-
+    # service run from whatever the live stack happens to have pinned,
+    # and removes the staleness hazard a single shared tag would have: a
+    # per-run tag can never be "left over from an earlier branch" because
+    # no run ever reads another run's tag. Freshness instead comes from
+    # scripts/ephemeral-service.py building, unconditionally, every run.
+    # Plain scalar key, not `!override`: compose only APPENDS list-valued
+    # keys (ports/volumes below), a scalar like `image` is simply
+    # replaced -- verified via `podman-compose ... config`.
+    image: localhost/kb-svc:__AW_EPHEMERAL_TAG__
     # Decouples the ephemeral run from the real, optional
     # ~/.knowledgebase/kb.env: absent on a fresh host, present or not it
     # never affects an ephemeral run.
@@ -54,7 +55,7 @@ services:
     restart: "no"
 
   bd-svc:
-    image: localhost/bd-svc:ephemeral
+    image: localhost/bd-svc:__AW_EPHEMERAL_TAG__
     ports: !override
       - "127.0.0.1::9101"
     volumes: !override
@@ -64,7 +65,7 @@ services:
     restart: "no"
 
   artifact-svc:
-    image: localhost/artifact-review:ephemeral
+    image: localhost/artifact-review:__AW_EPHEMERAL_TAG__
     ports: !override
       - "127.0.0.1::9099"
     volumes: !override
