@@ -3,15 +3,17 @@ to bring the agent-workbench stack up, printing one line per item with a
 concrete fix hint, and exiting non-zero if anything REQUIRED is missing.
 
 Required: a container runtime (docker or podman), a compose implementation
-(``docker compose`` CLI plugin >= 2.24, or ``podman-compose`` >= 1.1),
-``git``, and a Python new enough to run this CLI.
+(the ``docker compose`` CLI plugin or the standalone ``docker-compose``
+binary, both held to ``MIN_DOCKER_COMPOSE``, or ``podman-compose`` at any
+version), ``git``, and a Python new enough to run this CLI.
 
-``docker-compose`` v1 is NOT a supported implementation: docker-compose.yml
-uses the compose-spec 2.24+ long ``env_file`` form (``required: false``) so a
-missing optional kb.env never blocks startup, and v1 validates against the
-older v3 schema where that form fails the whole compose model. A
-``docker-compose`` binary that is actually a v2 shim is fine; only the real
-v1 (final 1.29.2, EOL) is excluded.
+The docker-flavoured candidates are version-checked because
+docker-compose.yml uses the compose-spec 2.24+ long ``env_file`` form
+(``required: false``) so a missing optional kb.env never blocks startup;
+below that floor, ``up`` fails to parse the whole compose model and dies on
+a cryptic schema error instead. There is no defensible podman-compose
+floor -- the only version this repo has ever exercised is 1.6.0 -- so
+podman-compose is only checked for "runs at all".
 
 Optional, reported but never failing the exit code: ``tailscale`` and
 ``~/.knowledgebase/kb.env`` (only needed to turn on LLM enrichment; the
@@ -40,6 +42,13 @@ from cli import install, paths
 __all__ = ["register", "run_checks", "Check"]
 
 MIN_PYTHON = (3, 9)
+
+# compose-spec 2.24 is the first release that parses docker-compose.yml's
+# long `env_file` form (`required: false`); below this, `up` fails to
+# parse the whole compose model. Applies only to the docker-flavoured
+# compose candidates (see COMPOSE_CANDIDATES) -- there is no defensible
+# podman-compose floor.
+MIN_DOCKER_COMPOSE = (2, 24)
 
 KB_ENV_PATH = Path.home() / ".knowledgebase" / "kb.env"
 KB_ENV_EXAMPLE = "scripts/kb-container/kb.env.example"  # repo-root-relative
@@ -87,34 +96,94 @@ def check_container_runtime() -> Check:
     )
 
 
-# Each entry is (label, binary to look for on PATH, command proving it runs).
+# Each entry is (label, binary to look for on PATH, version command, floor).
 # Every candidate has to actually run: `docker compose` is a plugin that may
-# be absent from a docker CLI, and podman-compose is a Python entry point that
-# can sit on PATH while its package is broken. Presence is not workingness --
-# trusting PATH alone is what made the retired rootless check report a
-# working host as broken.
+# be absent from a docker CLI, and podman-compose is a Python entry point
+# that can sit on PATH while its package is broken. Presence is not
+# workingness -- trusting PATH alone is what made the retired rootless check
+# report a working host as broken.
 #
-# `docker-compose` (v1) is deliberately NOT a candidate: `version` exits 0
-# on v1 too, so it would greenlight a binary that then fails to parse
-# docker-compose.yml's compose-spec 2.24+ long `env_file` form and kills the
-# whole compose model on `up`. There is no version-parsing here to tell a v1
-# binary from a v2 shim reached via the same name -- the false green is
-# worse than under-detecting, so the candidate is dropped, not inspected.
+# The two docker-flavoured candidates run `version --short`, which both
+# Compose v1 (prints `1.29.2`) and v2 (prints e.g. `2.29.7`) support, and are
+# held to MIN_DOCKER_COMPOSE. `docker-compose` (the standalone binary name)
+# is a real candidate: Docker's own "Compose standalone" install drops a v2
+# binary under that exact name with no plugin present, so the name alone
+# cannot tell v1 from v2 -- the version check does that now.
+#
+# podman-compose has no defensible floor -- the only version this repo has
+# ever exercised is 1.6.0 -- so it keeps the old "it runs successfully"
+# check with no version comparison.
 COMPOSE_CANDIDATES = (
-    ("docker compose", "docker", ["docker", "compose", "version"]),
-    ("podman-compose", "podman-compose", ["podman-compose", "version"]),
+    ("docker compose", "docker",
+     ["docker", "compose", "version", "--short"], MIN_DOCKER_COMPOSE),
+    ("docker-compose", "docker-compose",
+     ["docker-compose", "version", "--short"], MIN_DOCKER_COMPOSE),
+    ("podman-compose", "podman-compose", ["podman-compose", "version"], None),
 )
 
 
-def check_compose() -> Check:
-    """Required: a compose implementation that actually runs.
+def _parse_major_minor(text: str) -> tuple[int, int] | None:
+    """Parse a leading `major.minor` out of one compose version token.
 
-    Reports a binary that is on PATH but fails to run separately from one
-    that is simply absent, because the two need different fixes.
+    Tolerant of a leading `v`, trailing build metadata (`+build`, `-rc1`),
+    and surrounding words (e.g. `Docker Compose version v2.29.7`). Returns
+    None on anything unparseable -- callers must then ACCEPT the candidate:
+    under-detecting a working host is worse than the false MISSING this
+    floor exists to fix.
+    """
+    for token in text.split():
+        major, _, rest = token.lstrip("v").partition(".")
+        minor = rest.split(".", 1)[0].split("-", 1)[0].split("+", 1)[0]
+        if major.isdigit() and minor.isdigit():
+            return (int(major), int(minor))
+    return None
+
+
+def _compose_sibling_note(outdated: list[str], broken: list[str]) -> str:
+    """Clause naming any non-working candidates; empty when there are
+    none. Shared by the "ok with a broken/outdated sibling" and the
+    "nothing works" branches of `check_compose`."""
+    parts = []
+    if outdated:
+        parts.append(f"too old: {', '.join(outdated)}")
+    if broken:
+        parts.append(f"not runnable: {', '.join(broken)}")
+    return f"on PATH but {'; '.join(parts)}" if parts else ""
+
+
+def _compose_not_working_hint(outdated: list[str], broken: list[str]) -> str:
+    """Fix hint for a compose check where something ran but nothing usable
+    was found -- named per bucket, since upgrade and repair are different
+    fixes."""
+    hints = []
+    if outdated:
+        hints.append(
+            "upgrade to docker compose or docker-compose >= "
+            f"{MIN_DOCKER_COMPOSE[0]}.{MIN_DOCKER_COMPOSE[1]} "
+            "(`docker compose version --short`), or install podman-compose"
+        )
+    if broken:
+        hints.append(
+            "the not-runnable one is installed but fails to start -- run it "
+            "by hand to see why (a broken podman-compose usually means a "
+            "partial pip install; reinstall it), or install another "
+            "implementation"
+        )
+    return "; ".join(hints)
+
+
+def check_compose() -> Check:
+    """Required: a compose implementation that actually runs and, for the
+    docker-flavoured candidates, is not older than MIN_DOCKER_COMPOSE.
+
+    Reports three states distinctly, because each needs a different fix:
+    absent (install one), on PATH but not runnable (repair/reinstall), and
+    on PATH but too old (upgrade).
     """
     working: list[str] = []
+    outdated: list[str] = []
     broken: list[str] = []
-    for label, binary, version_cmd in COMPOSE_CANDIDATES:
+    for label, binary, version_cmd, floor in COMPOSE_CANDIDATES:
         if not shutil.which(binary):
             continue
         try:
@@ -126,33 +195,34 @@ def check_compose() -> Check:
             # exists to report a broken machine, not to fall over on one.
             broken.append(label)
             continue
-        (working if result.returncode == 0 else broken).append(label)
+        if result.returncode != 0:
+            broken.append(label)
+            continue
+        found = _parse_major_minor(result.stdout.decode("utf-8", "replace")) if floor else None
+        if floor and found is not None and found < floor:
+            outdated.append(
+                f"{label} {found[0]}.{found[1]} (need >= {floor[0]}.{floor[1]})"
+            )
+        else:
+            working.append(label)
 
+    note = _compose_sibling_note(outdated, broken)
     if working:
         detail = f"found: {', '.join(working)}"
-        if broken:
-            detail += f" (on PATH but not runnable: {', '.join(broken)})"
-        return Check("compose", True, True, detail, "")
+        return Check("compose", True, True, f"{detail} ({note})" if note else detail, "")
 
-    if broken:
+    if note:
         return Check(
-            "compose", True, False,
-            f"on PATH but not runnable: {', '.join(broken)}",
-            "the compose binary is installed but fails to start -- run it by "
-            "hand to see why (a broken podman-compose usually means a partial "
-            "pip install; reinstall it), or install another implementation",
+            "compose", True, False, note,
+            _compose_not_working_hint(outdated, broken),
         )
 
     return Check(
         "compose", True, False, "no compose implementation found",
-        "install podman-compose >= 1.1 (`sudo dnf install podman-compose` or "
+        "install podman-compose (`sudo dnf install podman-compose` or "
         "`pip install --user podman-compose`) or the docker compose CLI "
-        "plugin >= 2.24 (`docker compose version`). docker-compose v1 does "
-        "NOT count: docker-compose.yml uses the compose-spec 2.24+ long "
-        "env_file form so a missing optional kb.env never blocks startup, "
-        "and v1 fails the whole compose model on that syntax. A "
-        "`docker-compose` binary that is actually a v2 shim is fine -- "
-        "only the real v1 is excluded",
+        f"plugin / docker-compose >= {MIN_DOCKER_COMPOSE[0]}."
+        f"{MIN_DOCKER_COMPOSE[1]} (`docker compose version --short`)",
     )
 
 
