@@ -43,10 +43,6 @@ import scratch  # noqa: E402
 pytestmark = pytest.mark.container
 
 _KB_CONTAINERFILE = _SCRIPTS_DIR / "kb-container" / "Containerfile"
-# A file the Containerfile actually COPYs -- the defect-3 check appends a
-# one-line marker to it, builds, then restores the ORIGINAL content before
-# this module ever returns control to pytest, success or failure.
-_KB_MARKER_FILE = _SCRIPTS_DIR / "kb-svc.py"
 _BUILD_TIMEOUT_SEC = 180.0
 
 # Runs inside the scratch container's OWN process (spawned by
@@ -91,6 +87,10 @@ effective_image = _run([
     "podman", "container", "inspect", container, "--format", "{{.ImageName}}",
 ]).stdout.strip()
 
+mounts = _run([
+    "podman", "container", "inspect", container, "--format", "{{.Mounts}}",
+]).stdout.strip()
+
 # Decoy retag target for the tag-vs-container check: the build's own
 # immediate parent image, guaranteed already cached locally by the build
 # that just ran -- never pulled or run, only used as a harmless alias.
@@ -110,6 +110,7 @@ with open("__RESULT_FILE__", "w") as fh:
         "project": project,
         "ground_truth_id": ground_truth_id,
         "effective_image": effective_image,
+        "mounts": mounts,
         "identity": identity,
     }, fh)
 '''
@@ -126,6 +127,7 @@ class ProbeResult(NamedTuple):
     project: str
     ground_truth_id: str
     effective_image: str
+    mounts: str
     identity: list[str] | None
 
 
@@ -203,6 +205,21 @@ def test_effective_image_is_the_scratch_tag(kb_scratch_probe: ProbeResult) -> No
     assert kb_scratch_probe.effective_image == "localhost/kb-svc:scratch"
 
 
+def test_mounts_point_at_scratch_tmpdir_never_the_real_vault(
+    kb_scratch_probe: ProbeResult,
+) -> None:
+    """Highest-consequence invariant docker-compose.scratch.yml's
+    `volumes: !override` exists to guarantee: the container's own mounts
+    point at scratch's disposable `aw-scratch-*` tmpdir, and never at the
+    developer's real `~/.knowledgebase`. Reads `podman container inspect
+    --format '{{.Mounts}}'` off the actually created container -- the
+    safety half of defect 2 (reasoned-not-executed for the unsafe
+    `-f`-swap end-to-end case, see this task's DO NOT section).
+    """
+    assert "aw-scratch-" in kb_scratch_probe.mounts
+    assert ".knowledgebase" not in kb_scratch_probe.mounts
+
+
 def test_identity_matches_the_container_not_a_retagged_tag(
     kb_scratch_probe: ProbeResult,
 ) -> None:
@@ -268,24 +285,31 @@ def test_no_build_reuses_the_current_tag_without_rebuilding(
     assert result.ground_truth_id == kb_scratch_probe.ground_truth_id
 
 
-def test_default_build_rejects_a_stale_prebuilt_tag(
+def test_default_build_path_does_not_leave_the_stale_tag_running(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> None:
-    """Defect 3, for real: a `:scratch` tag left over from a previous,
-    DIFFERENT build (imagine one from an earlier branch) must not survive
-    a fresh `cmd_scratch(build=True)` run -- the default, build-on-every-
-    run path this tier actually exercises by default. `--no-build`
-    knowingly waives this (see the test above and scripts/scratch.py's own
-    docstring); `build=True` must not.
+    """Defect 3, END TO END OUTCOME ONLY: a `:scratch` tag left over from a
+    previous, DIFFERENT build (imagine one from an earlier branch) is not
+    what the default `cmd_scratch(build=True)` bring-up ends up running.
 
-    Builds a "stale" image from a one-line, harmless, marker-mutated copy
-    of kb-svc.py -- written and reverted here, in this function, before
-    it ever returns control, success or failure -- and tags it `:scratch`
-    as if it were a leftover from a previous run. Records that stale
-    image's own id, then asserts the default build-on bring-up's running
-    container is a DIFFERENT id -- proof enough that the stale tag did
-    not survive, with no second build to compare against and no
-    assumption that a same-content rebuild is id-stable.
+    Does NOT exercise the freshness check
+    (`_assert_container_runs_the_build`) in isolation, and must not be read
+    as covering it: `_build` alone already rebuilds from the working tree
+    on every run, so the running id changing here would hold even with
+    that check reduced to a no-op. See test_scratch.py's
+    test_freshness_check_rejects_a_mismatched_running_image /
+    test_freshness_check_rejects_an_unverifiable_identity for the actual
+    unit coverage of the check itself.
+
+    Builds a "stale" image from a one-line, harmless, marker-mutated
+    TEMP COPY of scripts/ (never the tracked kb-svc.py in place -- a
+    SIGKILL/timeout/crash mid-build must never leave a tracked file
+    dirty), tags it `:scratch` as if it were a leftover from a previous
+    run. Records that stale image's own id, then asserts the default
+    build-on bring-up's running container is a DIFFERENT id -- proof
+    enough that the stale tag did not survive, with no second build to
+    compare against and no assumption that a same-content rebuild is
+    id-stable.
 
     An earlier version of this test compared ids against a `--no-cache`
     "reference" build of current source instead, and was flaky: two
@@ -296,19 +320,22 @@ def test_default_build_rejects_a_stale_prebuilt_tag(
     """
     _require_container_runtime()
 
-    original = _KB_MARKER_FILE.read_text(encoding="utf-8")
+    stale_scripts = tmp_path_factory.mktemp("stale-scripts") / "scripts"
+    shutil.copytree(_SCRIPTS_DIR, stale_scripts)
     marker = f"\n# scratch-container-tier stale marker {uuid.uuid4().hex}\n"
-    try:
-        _KB_MARKER_FILE.write_text(original + marker, encoding="utf-8")
-        _podman(
-            [
-                "podman", "build", "-t", "localhost/kb-svc:scratch",
-                "-f", str(_KB_CONTAINERFILE), str(_SCRIPTS_DIR),
-            ],
-            timeout=_BUILD_TIMEOUT_SEC,
-        )
-    finally:
-        _KB_MARKER_FILE.write_text(original, encoding="utf-8")
+    stale_kb_svc = stale_scripts / "kb-svc.py"
+    stale_kb_svc.write_text(
+        stale_kb_svc.read_text(encoding="utf-8") + marker, encoding="utf-8"
+    )
+
+    _podman(
+        [
+            "podman", "build", "-t", "localhost/kb-svc:scratch",
+            "-f", str(stale_scripts / "kb-container" / "Containerfile"),
+            str(stale_scripts),
+        ],
+        timeout=_BUILD_TIMEOUT_SEC,
+    )
 
     stale_id = _podman(
         [

@@ -18,6 +18,10 @@ silently falling back to the live stack, is covered here:
   wrapped command itself
 - build runs by default and only `--no-build` skips it
 - the image-identity line lands on stderr, never stdout
+- `_assert_container_runs_the_build` (the freshness check) actually
+  rejects a mismatched or unverifiable running image, in isolation, no
+  container needed -- the gate proved a no-op, or a self-vs-self
+  comparison, of this function left the full 498-test suite green
 """
 from __future__ import annotations
 
@@ -298,6 +302,43 @@ def test_image_identity_inspects_the_container_not_the_tag(
             assert cmd[3] == "deadbeef", (
                 f"image inspected by tag, not by the container's image id: {cmd}"
             )
+
+
+def test_freshness_check_rejects_a_mismatched_running_image() -> None:
+    """`_assert_container_runs_the_build` must reject a bring-up whose
+    container is running a DIFFERENT image than the one `_build` just
+    produced. This is the pure-unit proof the gate found missing: a
+    no-op, or a "compare the running id against itself" rewrite, of this
+    function left all 498 tests green because `_build` alone already
+    changes the running id on every real bring-up -- this test does not
+    depend on `_build` at all.
+    """
+    with pytest.raises(RuntimeError, match="refusing a stale image"):
+        scratch._assert_container_runs_the_build(
+            ("running-id", "2026-01-01T00:00:00Z"), "built-id",
+            scratch.SERVICES["kb"],
+        )
+
+
+def test_freshness_check_rejects_an_unverifiable_identity() -> None:
+    """`identity=None` (the container inspection itself failed, see
+    `_print_image_identity`'s own swallowed `CalledProcessError`) must
+    also raise instead of silently passing.
+    """
+    with pytest.raises(RuntimeError, match="could not verify"):
+        scratch._assert_container_runs_the_build(
+            None, "built-id", scratch.SERVICES["kb"],
+        )
+
+
+def test_freshness_check_passes_a_matching_running_image() -> None:
+    """Sanity companion to the two rejections above: identical ids must
+    not raise -- the normal, healthy bring-up.
+    """
+    scratch._assert_container_runs_the_build(
+        ("same-id", "2026-01-01T00:00:00Z"), "same-id",
+        scratch.SERVICES["kb"],
+    )
 
 
 def test_command_args_keeps_a_caller_supplied_separator() -> None:
