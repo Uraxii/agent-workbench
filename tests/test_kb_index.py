@@ -145,6 +145,41 @@ def test_build_index_full_rebuild_indexes_every_good_note(tmp_path: Path) -> Non
     assert indexed == 2
 
 
+# ── query_index: revised notes stay out of default results ───────────────
+
+
+def test_query_index_excludes_revised_by_default_includes_with_all(
+    tmp_path: Path,
+) -> None:
+    decisions_dir = tmp_path / "proj" / "decisions"
+    decisions_dir.mkdir(parents=True)
+    (decisions_dir / "old__2026-07-01.md").write_text(
+        "---\ntitle: Old call\ntopic: some-topic\ndate: 2026-07-01\n"
+        "status: revised\nrevises: \ntags: [x]\n---\n\nOld body.\n",
+        encoding="utf-8",
+    )
+    (decisions_dir / "new__2026-07-27.md").write_text(
+        "---\ntitle: New call\ntopic: some-topic\ndate: 2026-07-27\n"
+        "status: active\nrevises: old__2026-07-01\ntags: [x]\n---\n\n"
+        "New body.\n",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "index" / "kb.db"
+    kb_index.build_index(tmp_path, db_path)
+
+    default_titles = {
+        r["title"]
+        for r in kb_index.query_index(db_path, "body", None, None, False)
+    }
+    assert default_titles == {"New call"}
+
+    all_titles = {
+        r["title"]
+        for r in kb_index.query_index(db_path, "body", None, None, True)
+    }
+    assert all_titles == {"Old call", "New call"}
+
+
 def test_find_markdown_files_skips_anything_resolving_outside_the_vault(
     tmp_path: Path, capsys: pytest.CaptureFixture[str],
 ) -> None:

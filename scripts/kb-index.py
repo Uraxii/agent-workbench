@@ -28,6 +28,12 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from kb_decision import REVISED  # noqa: E402
+
 FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n(.*)$", re.DOTALL)
 TAG_LIST_RE = re.compile(r'"([^"]*)"')
 
@@ -246,7 +252,7 @@ def score_rows(rows: list[sqlite3.Row], include_revised: bool) -> list[dict]:
     revised notes unless asked for, and rank highest-score first."""
     results = []
     for row in rows:
-        if not include_revised and row["status"] == "revised":
+        if not include_revised and row["status"] == REVISED:
             continue
         relevance = -row["bm25_rank"]
         recency_bonus = day_ordinal(row["date"]) / RECENCY_DIVISOR
