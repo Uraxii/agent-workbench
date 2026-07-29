@@ -174,8 +174,7 @@ the env config surface are documented in
 `docs/agent-workbench-hardening-plan.md`.
 
 bdui (the bd board web front end) is on by default in compose and
-publishes at `http://127.0.0.1:3100`. See `modes/bd.md` for how the
-always-on service compares to the bare-host `bd ui-up`.
+publishes at `http://127.0.0.1:3100`. See `modes/bd.md` for details.
 
 Optional data-root overrides live in
 `$HOME/.claude/skills/agent-workbench/agent-workbench.env.example`. NOTE:

@@ -94,6 +94,43 @@ curl -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3100/
 `$HOME/.claude/skills/agent-workbench/agent-workbench <verb>` is the documented
 invocation once the skill is installed.
 
+## First use
+
+Clone, `cd`, `up -d`, `install --copy` -- steps 2, 4, and 5 above -- are all
+that is required to get a running stack. From there, drive it through the
+installed CLI:
+
+```bash
+AW="$HOME/.claude/skills/agent-workbench/agent-workbench"
+
+$AW kb init
+# -> {"kb_home": "$HOME/.knowledgebase", "initialized": true}
+
+echo "Body text goes here." | $AW kb put agent-workbench "My first note" \
+  --type note
+# -> {"path": "$HOME/.knowledgebase/agent-workbench/notes/my-first-note.md", ...}
+
+$AW kb query "first note" --project agent-workbench
+# -> {"results": [{"path": "...my-first-note.md", "project": "agent-workbench",
+#     "type": "note", "title": "My first note", ...}]}
+
+$AW bd status
+# -> {"hub_root": "...", "initialized": true, "repos": [...]}
+
+$AW artifact status
+# -> {"endpoint": "http://127.0.0.1:9099", "health": {"status": "ok"},
+#     "artifacts": [...]}
+```
+
+`SKILL.md` is the full verb reference; the per-service mode docs go deeper:
+
+- [`.claude/skills/agent-workbench/SKILL.md`](.claude/skills/agent-workbench/SKILL.md) overview and cross-cutting rules
+- [`.claude/skills/agent-workbench/modes/kb.md`](.claude/skills/agent-workbench/modes/kb.md) knowledgebase: notes, clips, query, decisions
+- [`.claude/skills/agent-workbench/modes/bd.md`](.claude/skills/agent-workbench/modes/bd.md) bd board hub and issues
+- [`.claude/skills/agent-workbench/modes/artifact.md`](.claude/skills/agent-workbench/modes/artifact.md) artifact publish and review
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) before sending changes.
+
 ## The one ownership caveat
 
 agent-workbench does **not** require a rootless container runtime, and
