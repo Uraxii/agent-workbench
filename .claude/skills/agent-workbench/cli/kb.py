@@ -20,6 +20,8 @@ Subcommands:
     decision record|audit      dated decision notes        [cli/kb_decision.py]
     enrich [--project P]       fill question/summary       POST /enrich
            [--note N]
+    embed missing|all          bounded vector backfill     [cli/kb_embed.py]
+          [--dry-run]
 
 The service address comes from ``KB_SVC_HOST`` (default 127.0.0.1) and
 ``KB_SVC_PORT`` (default 9100).
@@ -34,7 +36,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from cli import kb_decision
+from cli import kb_decision, kb_embed
 
 __all__ = [
     "register",
@@ -83,6 +85,7 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     put_cmd.set_defaults(func=cmd_put)
 
     kb_decision.register(sub)
+    kb_embed.register(sub)
 
     query_cmd = sub.add_parser("query", help="hybrid keyword + vector search")
     query_cmd.add_argument("q")

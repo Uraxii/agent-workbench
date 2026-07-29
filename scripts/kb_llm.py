@@ -133,16 +133,23 @@ def find_unenriched_notes(
 ) -> list[Path]:
     """Notes with an empty question or summary, capped at the batch limit.
 
-    ``note_filter`` targets exactly that path, resolved against kb_home;
+    ``note_filter`` targets exactly that path, checked against kb_home;
     an absolute or ``..``-escaping value that lands outside kb_home is
-    treated as "no matching note" (empty list) and never read.
+    treated as "no matching note" (empty list) and never read. The
+    returned path is the UNRESOLVED ``kb_home / note_filter`` form, not
+    the resolved candidate used only for the containment check: this is
+    the same unresolved shape ``kb-index.find_markdown_files`` returns
+    for the vault-scan case below, so both cases produce exactly one path
+    shape per note. A symlinked project dir would otherwise make the two
+    cases disagree, embedding the same note under two different vector
+    keys (see kb_embed.py's ``sync_vectors``).
     """
     kb_index = load_sibling("kb-index")
     if note_filter:
         candidate = (kb_home / note_filter).resolve()
         if not candidate.is_relative_to(kb_home.resolve()) or not candidate.is_file():
             return []
-        return [candidate]
+        return [kb_home / note_filter]
     unenriched: list[Path] = []
     for path in kb_index.find_markdown_files(kb_home):
         if project and kb_index.derive_project(path, kb_home) != project:

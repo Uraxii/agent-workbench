@@ -16,6 +16,7 @@ import importlib.util
 import json
 import logging
 import socket
+import sqlite3
 import sys
 import threading
 import urllib.error
@@ -55,20 +56,36 @@ def _load_kb_serve():
 
 
 kb_serve = _load_kb_serve()
-# The model-backed passes live in scripts/kb_llm.py; kb-svc.py only
-# re-exports them, so a patch must target the defining module.
+# The model-backed passes live in scripts/kb_llm.py and scripts/kb_embed.py;
+# kb-svc.py only re-exports/imports them, so a patch must target the
+# defining module, never the kb_serve re-export.
 kb_llm = sys.modules["kb_llm"]
+kb_embed = sys.modules["kb_embed"]
 KbServeConfig = kb_serve.KbServeConfig
 
 
-def _config(kb_home: Path, *, enrich_enabled: bool = False, llm_api_key: str | None = None) -> KbServeConfig:
+def _config(
+    kb_home: Path,
+    *,
+    enrich_enabled: bool = False,
+    llm_api_key: str | None = None,
+    embed_model: str | None = None,
+) -> KbServeConfig:
     return KbServeConfig(
         kb_home=kb_home,
         enrich_enabled=enrich_enabled,
         llm_base_url="https://example.invalid/v1",
         llm_model="fake/model",
         llm_api_key=llm_api_key,
+        embed_model=embed_model,
     )
+
+
+def _fake_embed_texts(_config: KbServeConfig, texts: list[str]) -> tuple[list[list[float]], list[dict[str, object]]]:
+    """A stand-in for kb_embed.embed_texts: one fixed vector per text,
+    zero call records (most tests here care about count/scope, not
+    usage folding -- see the dedicated usage tests for that)."""
+    return [[1.0, 0.0]] * len(texts), []
 
 
 @pytest.fixture
@@ -551,7 +568,11 @@ def test_find_unenriched_notes_happy_path_returns_candidate(tmp_path: Path) -> N
     note_path = Path(str(put_result["path"]))
     rel = note_path.relative_to(tmp_path)
     result = kb_serve.find_unenriched_notes(tmp_path, None, str(rel))
-    assert result == [note_path.resolve()]
+    # UNRESOLVED (kb_home / note_filter), not .resolve(): this is the same
+    # shape find_markdown_files returns for the vault-scan case, so a
+    # note never gets embedded under two different vector keys (see the
+    # symlinked-kb_home tests below).
+    assert result == [tmp_path / rel]
 
 
 # ── security fix: kb_enrich degrades cleanly on an unreadable note ────────
@@ -1176,3 +1197,559 @@ def test_usage_tolerates_missing_usage_field_in_envelope(tmp_path: Path) -> None
     assert usage["prompt_tokens"] == 0
     assert usage["completion_tokens"] == 0
     assert usage["total_tokens"] == 0
+
+
+# ── incremental embedding: ingest is scoped, not vault-wide ──────────
+#
+# See kb_embed.py's own tests for the pure sync_vectors/stale_notes
+# contracts. Everything here is the HTTP-facing half: which paths
+# actually reach embed_texts on a real /put, /reindex, /enrich or
+# /embed call.
+
+
+def test_ingest_embeds_only_the_new_note_and_its_children(tmp_path: Path) -> None:
+    """THE regression tripwire for the defect this whole change fixes.
+
+    Before this fix, `_finish_ingest` called `rebuild_derived`, which
+    re-embedded EVERY note in the vault on every single `kb put`.
+    Measured in production: 2380 notes, 4,241,700 chars sent to the
+    embeddings backend, for writing ONE note. If this test ever sees
+    more than one embed_texts call, or a payload anywhere near that
+    size, the vault-wide embed path has come back. Asserts only on call
+    counts and payload sizes against a faked backend -- never on timing.
+    """
+    config = _config(tmp_path, embed_model="fake-embed", llm_api_key="fake-key")
+
+    for i in range(50):
+        kb_serve.kb_vault.write_note(
+            tmp_path, "proj1", "note", f"Seed {i}", "", f"seed body {i}",
+        )
+    with patch.object(kb_embed, "embed_texts", side_effect=_fake_embed_texts):
+        kb_serve.rebuild_derived(config)
+    db_path = kb_serve.index_db_path(tmp_path)
+    assert kb_embed.count_vectors(db_path) == 50  # every seed note stored
+
+    with patch.object(
+        kb_embed, "embed_texts", side_effect=_fake_embed_texts,
+    ) as mock_embed:
+        result = kb_serve.kb_put(tmp_path, config, {
+            "project": "proj1", "title": "New Parent", "type": "source",
+            "content": _long_sectioned_body(),
+        })
+
+    assert mock_embed.call_count == 1
+    _, texts = mock_embed.call_args.args
+    assert len(texts) == 1 + len(result["children"])
+    expected_paths = [result["path"], *result["children"]]
+    expected_texts = {
+        Path(str(path)).read_text(encoding="utf-8") for path in expected_paths
+    }
+    assert set(texts) == expected_texts
+    assert sum(len(text) for text in texts) < 50_000  # old behaviour: 4,241,700
+
+
+def test_ingest_with_no_backend_makes_zero_network_calls(tmp_path: Path) -> None:
+    config = _config(tmp_path)  # no embed_model, no key: embeddings disabled
+    with patch.object(kb_embed, "embed_texts") as mock_embed:
+        result = kb_serve.kb_put(tmp_path, config, {
+            "project": "proj1", "title": "Note", "content": "Body text.",
+        })
+    mock_embed.assert_not_called()
+    assert result["embedded"] == 0
+    assert "embed_error" not in result
+
+
+def test_ingest_reports_embed_error_when_the_backend_fails_but_still_writes_the_note(
+    tmp_path: Path,
+) -> None:
+    """The deliberate asymmetry with /embed: an ingest write must
+    never be lost because the embedding backend is down -- the note
+    still lands on disk with a 201, and the failure is surfaced via
+    embed_error rather than silently dropped."""
+    config = _config(tmp_path, embed_model="fake-embed", llm_api_key="fake-key")
+    with (
+        _server_for_config(config) as base_url,
+        patch.object(kb_embed, "embed_texts", side_effect=OSError("no route")),
+    ):
+        status, body = _post(base_url, "/put", {
+            "project": "proj1", "title": "Note", "content": "Body text.",
+        })
+    assert status == 201
+    assert "embed_error" in body
+    note_path = Path(str(body["path"]))
+    assert note_path.is_file()
+    assert "Body text." in note_path.read_text(encoding="utf-8")
+
+
+def test_reindex_makes_zero_backend_calls_when_nothing_changed(tmp_path: Path) -> None:
+    """rebuild_derived (POST /reindex) must not touch the backend once
+    every stored hash is already current -- otherwise the "recovery
+    path" degenerates right back into the whole-vault re-embed this
+    change removes."""
+    config = _config(tmp_path, embed_model="fake-embed", llm_api_key="fake-key")
+    kb_serve.kb_vault.write_note(tmp_path, "proj1", "note", "A", "", "body a")
+
+    with patch.object(kb_embed, "embed_texts", side_effect=_fake_embed_texts):
+        kb_serve.rebuild_derived(config)
+
+    with patch.object(kb_embed, "embed_texts") as mock_embed:
+        kb_serve.rebuild_derived(config)
+    mock_embed.assert_not_called()
+
+
+def test_reindex_prunes_vectors_for_notes_deleted_from_the_vault(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path, embed_model="fake-embed", llm_api_key="fake-key")
+    note_path = kb_serve.kb_vault.write_note(
+        tmp_path, "proj1", "note", "A", "", "body a",
+    )
+    with patch.object(kb_embed, "embed_texts", side_effect=_fake_embed_texts):
+        kb_serve.rebuild_derived(config)
+    db_path = kb_serve.index_db_path(tmp_path)
+    assert kb_embed.count_vectors(db_path) == 1
+
+    Path(note_path).unlink()
+
+    with patch.object(kb_embed, "embed_texts", side_effect=_fake_embed_texts):
+        kb_serve.rebuild_derived(config)
+    assert kb_embed.count_vectors(db_path) == 0
+
+
+def test_enrich_embeds_only_the_notes_it_enriched(tmp_path: Path) -> None:
+    """/enrich must scope its post-enrich embed to exactly the notes it
+    rewrote, mirroring _finish_ingest's fix -- without this, the first
+    post-upgrade /enrich on a live vault would find every stored hash
+    stale and re-embed everything."""
+    config = _config(
+        tmp_path, enrich_enabled=True, llm_api_key="fake-key",
+        embed_model="fake-embed",
+    )
+    for i in range(20):
+        kb_serve.kb_vault.write_note(
+            tmp_path, "proj1", "note", f"Seed {i}", "", f"seed body {i}",
+        )
+    put_result = kb_serve.kb_put(tmp_path, _config(tmp_path), {
+        "project": "proj1", "title": "Target", "content": "Target content.",
+    })
+    target_path = Path(str(put_result["path"]))
+
+    with patch.object(kb_embed, "embed_texts", side_effect=_fake_embed_texts):
+        kb_serve.rebuild_derived(config)  # stores all 21 notes
+
+    with (
+        _server_for_config(config) as base_url,
+        patch.object(
+            kb_llm, "request_enrichment",
+            return_value=({"question": "Q?", "summary": "S."}, {}),
+        ),
+        patch.object(
+            kb_embed, "embed_texts", side_effect=_fake_embed_texts,
+        ) as mock_embed,
+    ):
+        status, body = _post(base_url, "/enrich", {
+            "note": str(target_path.relative_to(tmp_path)),
+        })
+
+    assert status == 200
+    assert body["enriched"] == 1
+    mock_embed.assert_called_once()
+    _, texts = mock_embed.call_args.args
+    assert texts == [target_path.read_text(encoding="utf-8")]
+
+
+# ── /enrich: single-note vector key must match the ingest key (fix 4) ─
+# Before this fix, find_unenriched_notes returned the RESOLVED single-note
+# path while ingest always stores vectors under the UNRESOLVED (vault-scan)
+# path. With a symlinked kb_home the two differ, so /enrich's embed wrote a
+# second, orphaned vector row for the same note.
+
+
+def test_find_unenriched_notes_matches_the_vault_scan_path_shape(
+    tmp_path: Path,
+) -> None:
+    real_home = tmp_path / "real"
+    real_home.mkdir()
+    link_home = tmp_path / "link"
+    link_home.symlink_to(real_home)
+
+    put_result = kb_serve.kb_put(link_home, _config(link_home), {
+        "project": "proj1", "title": "Note", "content": "content",
+    })
+    note_path = Path(str(put_result["path"]))
+    rel = note_path.relative_to(link_home)
+
+    scanned = kb_serve.kb_index_module().find_markdown_files(link_home)
+    result = kb_serve.find_unenriched_notes(link_home, None, str(rel))
+
+    assert result == [note_path]
+    assert [str(p) for p in result] == [str(p) for p in scanned]
+
+
+def test_enrich_does_not_orphan_a_vector_row_when_kb_home_is_symlinked(
+    tmp_path: Path,
+) -> None:
+    """THE fix-4 regression tripwire: a symlinked kb_home must still end
+    up with exactly one vector row per note after /enrich, under the same
+    key ingest used, never a second row fuse_rankings can never match."""
+    real_home = tmp_path / "real"
+    real_home.mkdir()
+    link_home = tmp_path / "link"
+    link_home.symlink_to(real_home)
+    config = _config(
+        link_home, enrich_enabled=True, llm_api_key="fake-key",
+        embed_model="fake-embed",
+    )
+
+    put_result = kb_serve.kb_put(link_home, _config(link_home), {
+        "project": "proj1", "title": "Target", "content": "Target content.",
+    })
+    note_path = Path(str(put_result["path"]))
+    rel = note_path.relative_to(link_home)
+
+    with patch.object(kb_embed, "embed_texts", side_effect=_fake_embed_texts):
+        kb_serve.rebuild_derived(config)  # seeds the one vector row
+    db_path = kb_serve.index_db_path(link_home)
+    assert kb_embed.count_vectors(db_path) == 1
+
+    with (
+        _server_for_config(config) as base_url,
+        patch.object(
+            kb_llm, "request_enrichment",
+            return_value=({"question": "Q?", "summary": "S."}, {}),
+        ),
+        patch.object(kb_embed, "embed_texts", side_effect=_fake_embed_texts),
+    ):
+        status, body = _post(base_url, "/enrich", {"note": str(rel)})
+
+    assert status == 200
+    assert body["enriched"] == 1
+    assert kb_embed.count_vectors(db_path) == 1  # still one row, not two
+    assert set(kb_embed.stored_fingerprints(db_path)) == {str(note_path)}
+
+
+# ── /embed/missing and /embed/all ──────────────────────────────────────
+
+
+def test_embed_missing_is_capped_at_the_batch_limit(tmp_path: Path) -> None:
+    config = _config(tmp_path, embed_model="fake-embed", llm_api_key="fake-key")
+    total_notes = 250
+    for i in range(total_notes):
+        kb_serve.kb_vault.write_note(
+            tmp_path, "proj1", "note", f"N{i}", "", f"body {i}",
+        )
+
+    with patch.object(kb_embed, "embed_texts", side_effect=_fake_embed_texts):
+        result = kb_serve.backfill_embeddings(config, reset=False, dry_run=False)
+
+    limit = kb_embed.BACKFILL_BATCH_LIMIT
+    assert result["embeddings"]["embedded"] == limit
+    assert result["embeddings"]["remaining"] == total_notes - limit
+    assert result["next"] is not None
+
+
+def test_embed_missing_converges_and_clears_next(tmp_path: Path) -> None:
+    """THE anti-wait-loop test. An agent following `next` cannot construct
+    a wait loop: there is no job id, no status route, nothing to poll.
+    This proves the loop actually terminates in the arithmetic number of
+    calls, with a HARD iteration cap so a non-converging implementation
+    fails this test instead of hanging the whole suite.
+    """
+    config = _config(tmp_path, embed_model="fake-embed", llm_api_key="fake-key")
+    total_notes = 250
+    for i in range(total_notes):
+        kb_serve.kb_vault.write_note(
+            tmp_path, "proj1", "note", f"N{i}", "", f"body {i}",
+        )
+
+    limit = kb_embed.BACKFILL_BATCH_LIMIT
+    expected_calls = -(-total_notes // limit)  # ceiling division
+    hard_cap = expected_calls + 2  # margin, but still a hard bound
+
+    calls = 0
+    result: dict[str, object] = {}
+    with patch.object(kb_embed, "embed_texts", side_effect=_fake_embed_texts):
+        while calls < hard_cap:
+            result = kb_serve.backfill_embeddings(config, reset=False, dry_run=False)
+            calls += 1
+            if result["embeddings"]["remaining"] == 0:
+                break
+
+    assert calls < hard_cap, "did not converge within the hard iteration cap"
+    assert calls == expected_calls
+    assert result["embeddings"]["remaining"] == 0
+    assert result["next"] is None
+
+
+def test_embed_all_reembeds_notes_that_missing_would_have_skipped(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path, embed_model="fake-embed", llm_api_key="fake-key")
+    kb_serve.kb_vault.write_note(tmp_path, "proj1", "note", "A", "", "body a")
+
+    with patch.object(kb_embed, "embed_texts", side_effect=_fake_embed_texts):
+        kb_serve.backfill_embeddings(config, reset=False, dry_run=False)
+
+    with patch.object(kb_embed, "embed_texts") as mock_missing:
+        result_missing = kb_serve.backfill_embeddings(config, reset=False, dry_run=False)
+    mock_missing.assert_not_called()
+    assert result_missing["embeddings"]["embedded"] == 0
+
+    with patch.object(
+        kb_embed, "embed_texts", side_effect=_fake_embed_texts,
+    ) as mock_all:
+        result_all = kb_serve.backfill_embeddings(config, reset=True, dry_run=False)
+    mock_all.assert_called_once()
+    assert result_all["embeddings"]["embedded"] == 1
+
+
+def test_embed_all_does_not_empty_the_vector_table(tmp_path: Path) -> None:
+    """mark_all_stale must NULL the hash, never DELETE the row -- a
+    DELETE here would degrade retrieval to keyword-only for the whole
+    duration of an `all` backfill."""
+    config = _config(tmp_path, embed_model="fake-embed", llm_api_key="fake-key")
+    kb_serve.kb_vault.write_note(
+        tmp_path, "proj1", "note", "A", "", "body a widget",
+    )
+    with patch.object(kb_embed, "embed_texts", side_effect=_fake_embed_texts):
+        kb_serve.backfill_embeddings(config, reset=False, dry_run=False)
+    db_path = kb_serve.index_db_path(tmp_path)
+    assert kb_embed.count_vectors(db_path) == 1
+
+    with patch.object(kb_embed, "embed_texts", side_effect=_fake_embed_texts):
+        kb_serve.backfill_embeddings(config, reset=True, dry_run=False)
+
+    assert kb_embed.count_vectors(db_path) == 1
+    with patch.object(kb_embed, "embed_texts", return_value=([[1.0, 0.0]], [])):
+        assert kb_embed.search_ranking(config, db_path, "widget") != []
+
+
+def test_embed_all_dry_run_does_not_reset_any_hash(tmp_path: Path) -> None:
+    config = _config(tmp_path, embed_model="fake-embed", llm_api_key="fake-key")
+    kb_serve.kb_vault.write_note(tmp_path, "proj1", "note", "A", "", "body a")
+    with patch.object(kb_embed, "embed_texts", side_effect=_fake_embed_texts):
+        kb_serve.backfill_embeddings(config, reset=False, dry_run=False)
+    db_path = kb_serve.index_db_path(tmp_path)
+    hashes_before = kb_embed.stored_fingerprints(db_path)
+    assert all(value is not None for value in hashes_before.values())
+
+    with patch.object(kb_embed, "embed_texts") as mock_embed:
+        kb_serve.backfill_embeddings(config, reset=True, dry_run=True)
+
+    mock_embed.assert_not_called()
+    assert kb_embed.stored_fingerprints(db_path) == hashes_before
+
+
+def test_embed_dry_run_makes_zero_network_calls_and_reports_exact_chars(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path, embed_model="fake-embed", llm_api_key="fake-key")
+    for i in range(5):
+        kb_serve.kb_vault.write_note(
+            tmp_path, "proj1", "note", f"N{i}", "", f"body {i} " * 50,
+        )
+    notes = kb_serve._note_texts(tmp_path)
+    # Independently computed, not via embed_payload_chars (the helper
+    # under test): this is what keeps the dry-run figure honest.
+    expected_chars = sum(len(text[:kb_embed.EMBED_CHAR_LIMIT]) for _, text in notes)
+
+    with patch.object(kb_embed, "embed_texts") as mock_embed:
+        result = kb_serve.backfill_embeddings(config, reset=False, dry_run=True)
+
+    mock_embed.assert_not_called()
+    assert result["embeddings"]["chars_to_send"] == expected_chars
+
+
+def test_embed_with_embeddings_disabled_makes_zero_network_calls_and_says_why(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)  # no embed_model, no key
+    kb_serve.kb_vault.write_note(tmp_path, "proj1", "note", "A", "", "body a")
+
+    with patch.object(kb_embed, "embed_texts") as mock_embed:
+        result = kb_serve.backfill_embeddings(config, reset=False, dry_run=False)
+
+    mock_embed.assert_not_called()
+    assert result["embeddings"]["enabled"] is False
+    assert result["embeddings"]["embedded"] == 0
+    assert "embeddings disabled" in result["embeddings"]["message"]
+    assert result["next"] is None
+
+
+def test_embed_returns_502_when_the_backend_fails_with_progress_in_the_body(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path, embed_model="fake-embed", llm_api_key="fake-key")
+    total_notes = kb_embed.EMBED_BATCH_SIZE + 8
+    for i in range(total_notes):
+        kb_serve.kb_vault.write_note(
+            tmp_path, "proj1", "note", f"N{i}", "", f"body {i}",
+        )
+
+    call_count = 0
+
+    def failing_embed(_config: KbServeConfig, texts: list[str]):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 2:
+            raise OSError("no route")
+        return [[1.0, 0.0]] * len(texts), []
+
+    with (
+        _server_for_config(config) as base_url,
+        patch.object(kb_embed, "embed_texts", side_effect=failing_embed),
+    ):
+        status, body = _post(base_url, "/embed/missing", {"dry_run": False})
+
+    assert status == 502
+    assert "error" in body
+    assert body["embeddings"]["embedded"] == kb_embed.EMBED_BATCH_SIZE
+    assert body["embeddings"]["remaining"] == total_notes - kb_embed.EMBED_BATCH_SIZE
+    assert body["next"] is not None
+
+
+def test_embed_response_carries_a_usage_block_with_token_counts(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path, embed_model="fake-embed", llm_api_key="fake-key")
+    kb_serve.kb_vault.write_note(tmp_path, "proj1", "note", "A", "", "body a")
+
+    def fake_embed(_config: KbServeConfig, texts: list[str]):
+        record = {
+            "id": "", "model": "fake-embed",
+            "prompt_tokens": 3, "completion_tokens": 0, "total_tokens": 3,
+        }
+        return [[1.0, 0.0]] * len(texts), [record]
+
+    with patch.object(kb_embed, "embed_texts", side_effect=fake_embed):
+        result = kb_serve.backfill_embeddings(config, reset=False, dry_run=False)
+
+    usage = result["embeddings"]["usage"]
+    assert usage["calls"] == 1
+    assert usage["prompt_tokens"] == 3
+    assert usage["total_tokens"] == 3
+
+
+@pytest.mark.parametrize(
+    ("embed_model", "llm_api_key"),
+    [(None, None), ("fake-embed", "fake-key")],
+)
+def test_embed_response_always_carries_the_atomize_tier_block(
+    tmp_path: Path, embed_model: str | None, llm_api_key: str | None,
+) -> None:
+    """The atomize tier ships disabled regardless of whether embeddings
+    are configured -- it is blocked on a standing no-delete-routes
+    decision, permanently, not a placeholder to fill in later."""
+    config = _config(tmp_path, embed_model=embed_model, llm_api_key=llm_api_key)
+    with patch.object(kb_embed, "embed_texts", side_effect=_fake_embed_texts):
+        result = kb_serve.backfill_embeddings(config, reset=False, dry_run=False)
+    # processed/remaining are null, not 0: a real 0 reads as "nothing to
+    # do", which is false here -- this tier has never run at all.
+    assert result["atomize"] == {
+        "enabled": False, "processed": None, "remaining": None,
+        "message": kb_serve.ATOMIZE_BACKFILL_MESSAGE,
+    }
+
+
+def test_embed_all_next_points_at_missing_not_all(tmp_path: Path) -> None:
+    """`all` resets every hash on every call, so `next` pointing back at
+    `all` would never let a "call until remaining is 0" loop terminate.
+    It must always point at `missing`."""
+    config = _config(tmp_path, embed_model="fake-embed", llm_api_key="fake-key")
+    # More notes than one batch, so remaining stays > 0 after a single
+    # call and next actually has something to name.
+    for i in range(kb_embed.BACKFILL_BATCH_LIMIT + 1):
+        kb_serve.kb_vault.write_note(
+            tmp_path, "proj1", "note", f"N{i}", "", f"body {i}",
+        )
+
+    with patch.object(kb_embed, "embed_texts", side_effect=_fake_embed_texts):
+        result = kb_serve.backfill_embeddings(config, reset=True, dry_run=False)
+
+    assert result["mode"] == "all"
+    assert result["next"] is not None
+    assert "embed missing" in str(result["next"])
+    assert "embed all" not in str(result["next"])
+
+
+# ── concurrency: locked db, and racing /embed calls (fix 1) ───────────
+
+
+def test_locked_database_returns_503_json_not_a_dropped_connection(
+    tmp_path: Path,
+) -> None:
+    """sqlite3.OperationalError is not an OSError, so before this fix a
+    lock held on kb.db during exactly the route documented as a retry
+    loop came back as a dropped connection: no status, no body. Now it
+    is a loud, structured 503."""
+    config = _config(tmp_path, embed_model="fake-embed", llm_api_key="fake-key")
+    kb_serve.kb_vault.write_note(tmp_path, "proj1", "note", "A", "", "body a")
+    with patch.object(kb_embed, "embed_texts", side_effect=_fake_embed_texts):
+        kb_serve.rebuild_derived(config)
+    db_path = kb_serve.index_db_path(tmp_path)
+
+    locker = sqlite3.connect(db_path)
+    locker.execute("BEGIN EXCLUSIVE")
+    try:
+        with (
+            _server_for_config(config) as base_url,
+            patch.object(kb_embed, "BUSY_TIMEOUT_MS", 200),  # keep the test fast
+        ):
+            status, body = _post(
+                base_url, "/embed/missing", {"dry_run": False},
+            )
+    finally:
+        locker.rollback()
+        locker.close()
+
+    assert status == 503
+    assert "error" in body
+
+
+def test_concurrent_embed_calls_the_second_gets_409_not_a_double_embed(
+    tmp_path: Path,
+) -> None:
+    """Two /embed (or /reindex) calls in flight at once would
+    otherwise both embed the same stale notes -- duplicate model spend,
+    the exact cost this workstream exists to remove. The loser gets 409
+    with a `next` naming the command it already has."""
+    config = _config(tmp_path, embed_model="fake-embed", llm_api_key="fake-key")
+    kb_serve.kb_vault.write_note(tmp_path, "proj1", "note", "A", "", "body a")
+
+    entered = threading.Event()
+    release = threading.Event()
+    call_count = 0
+
+    def blocking_embed(_config: KbServeConfig, texts: list[str]):
+        nonlocal call_count
+        call_count += 1
+        entered.set()
+        release.wait(timeout=5)
+        return [[1.0, 0.0]] * len(texts), []
+
+    first_result: dict[str, object] = {}
+
+    def run_first(base_url: str) -> None:
+        first_result["status"], first_result["body"] = _post(
+            base_url, "/embed/missing", {"dry_run": False},
+        )
+
+    with (
+        _server_for_config(config) as base_url,
+        patch.object(kb_embed, "embed_texts", side_effect=blocking_embed),
+    ):
+        first_thread = threading.Thread(target=run_first, args=(base_url,))
+        first_thread.start()
+        assert entered.wait(timeout=5), "first call never reached the backend"
+
+        second_status, second_body = _post(
+            base_url, "/embed/missing", {"dry_run": False},
+        )
+
+        release.set()
+        first_thread.join(timeout=5)
+
+    assert second_status == 409
+    assert "next" in second_body
+    assert first_result["status"] == 200
+    assert call_count == 1  # never double-embedded the same note
