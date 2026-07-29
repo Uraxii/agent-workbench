@@ -15,4 +15,4 @@ The user confirmed a new pass and added that the same UI principles should conve
 
 ## Refs
 
-/var/home/nicole/Projects/agent-workbench/spikes/frontend-directions/direction-unified-app.html,/var/home/nicole/Projects/agent-workbench/.claude/skills/artifact-serve/assets/css/theme.css,/var/home/nicole/Projects/agent-workbench/.claude/skills/artifact-serve/scripts/review-serve.py
+/var/home/nicole/Projects/agent-workbench/docs/design/artifact-server-frontend-approved-design/direction-unified-app.html,/var/home/nicole/Projects/agent-workbench/.claude/skills/artifact-serve/assets/css/theme.css,/var/home/nicole/Projects/agent-workbench/.claude/skills/artifact-serve/scripts/review-serve.py

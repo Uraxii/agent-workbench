@@ -3,16 +3,16 @@ Task: edit exactly these files.
 Target files:
 - /var/home/nicole/Projects/agent-workbench/.claude/skills/artifact-serve/scripts/review-serve.py
 - /var/home/nicole/Projects/agent-workbench/.claude/skills/artifact-serve/assets/css/theme.css
-- /var/home/nicole/Projects/agent-workbench/spikes/frontend-directions/direction-unified-app.html
+- /var/home/nicole/Projects/agent-workbench/docs/design/artifact-server-frontend-approved-design/direction-unified-app.html
 
 Read these first:
 - /var/home/nicole/Projects/lodestar/workstreams/artifact-service-ui-brief.md
 - /var/home/nicole/Projects/agent-workbench/docs/design/avoiding-ai-generated-ui-tells.md
 - /var/home/nicole/Projects/agent-workbench/spikes/frontend-directions/briefs/v5b-dual-theme-SHARED.md
-- /var/home/nicole/Projects/agent-workbench/spikes/frontend-directions/direction-unified-app.html
+- /var/home/nicole/Projects/agent-workbench/docs/design/artifact-server-frontend-approved-design/direction-unified-app.html
 - /var/home/nicole/Projects/agent-workbench/.claude/skills/artifact-serve/scripts/review-serve.py
 - /var/home/nicole/Projects/agent-workbench/.claude/skills/artifact-serve/assets/css/theme.css
-- /var/home/nicole/Projects/agent-workbench/spikes/review-app/DESIGN.md
+- /var/home/nicole/Projects/agent-workbench/apps/artifact-review/DESIGN.md
 
 Context you must preserve:
 - User chose the unified app shape as the base.
