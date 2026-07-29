@@ -68,9 +68,14 @@ def _run(cmd):
     return subprocess.run(cmd, capture_output=True, text=True, check=True)
 
 
+# Filters on BOTH labels, same as scratch._print_image_identity does --
+# a service-only filter would also match a live kb-svc container running
+# under a different compose project.
 ps = _run([
     "podman", "ps", "-q", "--filter",
     "label=io.podman.compose.service=" + SPEC.compose_name,
+    "--filter",
+    "label=io.podman.compose.project=__PROJECT__",
 ])
 container = ps.stdout.split()[-1]
 
@@ -94,9 +99,10 @@ mounts = _run([
 # Decoy retag target for the tag-vs-container check: the build's own
 # immediate parent image, guaranteed already cached locally by the build
 # that just ran -- never pulled or run, only used as a harmless alias.
+with open("__CONTAINERFILE__") as fh:
+    containerfile_lines = fh.read().splitlines()
 base_ref = [
-    line.split(maxsplit=1)[1] for line in
-    open("__CONTAINERFILE__").read().splitlines()
+    line.split(maxsplit=1)[1] for line in containerfile_lines
     if line.startswith("FROM")
 ][0]
 _run(["podman", "tag", base_ref, "localhost/kb-svc:scratch"])
@@ -162,17 +168,31 @@ def _run_kb_scratch_probe(
     work = tmp_path_factory.mktemp("scratch-container")
     result_file = work / "result.json"
     probe = work / "probe.py"
+
+    # cmd_scratch names its own compose project via `uuid.uuid4()` right
+    # before bringing the container up. Pin that value here and force
+    # scratch's uuid4 to return it, so the probe's own filter (above) can
+    # target this run's project specifically, same label pair
+    # scratch._print_image_identity itself filters on.
+    project_uuid = uuid.uuid4()
+    project = f"aw-scratch-{project_uuid.hex[:10]}"
     probe.write_text(
         _PROBE_SRC
         .replace("__SCRIPTS_DIR__", str(_SCRIPTS_DIR))
         .replace("__CONTAINERFILE__", str(_KB_CONTAINERFILE))
         .replace("__RESULT_FILE__", str(result_file))
+        .replace("__PROJECT__", project)
     )
 
     args = argparse.Namespace(
         service="kb", command=[sys.executable, str(probe)], build=build,
     )
-    returncode = scratch.cmd_scratch(args)
+    real_uuid4 = scratch.uuid.uuid4
+    scratch.uuid.uuid4 = lambda: project_uuid
+    try:
+        returncode = scratch.cmd_scratch(args)
+    finally:
+        scratch.uuid.uuid4 = real_uuid4
     assert returncode == 0, "probe script failed inside the scratch container"
 
     return ProbeResult(**json.loads(result_file.read_text()))
