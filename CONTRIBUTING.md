@@ -32,7 +32,11 @@ runtime on PATH; they add roughly 35s. Opt out with:
 Caveat: `-m "not container"` does not fully avoid containers.
 `tests/test_deploy_smoke.py`'s container-boundary tests
 (`test_kb_svc_container_boundary`, `test_artifact_svc_container_boundary`)
-are not marked `container` and always run when podman is present.
+are not marked `container` and always run when podman is present. They build
+both hardened images from scratch, including the artifact-review SPA
+(`npm ci`, `vitest`, `vite build`), so a cold `pytest tests/` on a machine
+without a warm image cache is minutes, not seconds -- the artifact-review
+build alone is allowed up to 900s.
 
 ## Django tests are separate
 

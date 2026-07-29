@@ -1,4 +1,7 @@
-# Review app design note
+# Architecture
+
+The current contract of the shipped `apps/artifact-review/` service: publish
+flow, storage roots, and sandbox policy.
 
 The artifact review app is now the containerized `apps/artifact-review/`
 service. The old bare-host implementation, vendored assets, quadlet, and

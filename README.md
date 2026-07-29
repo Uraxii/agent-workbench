@@ -5,7 +5,7 @@ Standalone home for the local agent-workbench service stack. This repo owns the 
 - `bdui`
 - `kb-svc`
 - `bd-svc`
-- `artifact-review`
+- `artifact-svc` (the artifact-review app)
 - `n8n`
 - the supporting `agent-workbench` CLI that drives them
 
@@ -29,7 +29,7 @@ path. Local-only use does not need it.
 ### 2. Clone
 
 ```bash
-git clone <this-repo>
+git clone https://github.com/Uraxii/agent-workbench.git
 cd agent-workbench
 ```
 
@@ -104,18 +104,21 @@ installed CLI:
 AW="$HOME/.claude/skills/agent-workbench/agent-workbench"
 
 $AW kb init
-# -> {"kb_home": "$HOME/.knowledgebase", "initialized": true}
+# -> {"kb_home": "/home/you/.knowledgebase", "initialized": true}
 
 echo "Body text goes here." | $AW kb put agent-workbench "My first note" \
   --type note
-# -> {"path": "$HOME/.knowledgebase/agent-workbench/notes/my-first-note.md", ...}
+# -> {"path": "/home/you/.knowledgebase/agent-workbench/notes/my-first-note.md", ...}
 
 $AW kb query "first note" --project agent-workbench
 # -> {"results": [{"path": "...my-first-note.md", "project": "agent-workbench",
 #     "type": "note", "title": "My first note", ...}]}
 
+$AW bd init
+# -> {"hub_root": "/home/you/.beads-hub", "initialized": true}
+
 $AW bd status
-# -> {"hub_root": "...", "initialized": true, "repos": [...]}
+# -> {"hub_root": "/home/you/.beads-hub", "initialized": true, "repos": []}
 
 $AW artifact status
 # -> {"endpoint": "http://127.0.0.1:9099", "health": {"status": "ok"},
