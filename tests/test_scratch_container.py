@@ -47,7 +47,6 @@ _KB_CONTAINERFILE = _SCRIPTS_DIR / "kb-container" / "Containerfile"
 # one-line marker to it, builds, then restores the ORIGINAL content before
 # this module ever returns control to pytest, success or failure.
 _KB_MARKER_FILE = _SCRIPTS_DIR / "kb-svc.py"
-_REFERENCE_TAG = "localhost/kb-svc:container-tier-reference"
 _BUILD_TIMEOUT_SEC = 180.0
 
 # Runs inside the scratch container's OWN process (spawned by
@@ -282,18 +281,18 @@ def test_default_build_rejects_a_stale_prebuilt_tag(
     Builds a "stale" image from a one-line, harmless, marker-mutated copy
     of kb-svc.py -- written and reverted here, in this function, before
     it ever returns control, success or failure -- and tags it `:scratch`
-    as if it were a leftover from a previous run. Compares the ACTUAL
-    bring-up's image id against a `--no-cache`-forced reference build of
-    the real, current source (tagged separately, never `:scratch` itself,
-    so it can never be confused with the stale tag under test).
+    as if it were a leftover from a previous run. Records that stale
+    image's own id, then asserts the default build-on bring-up's running
+    container is a DIFFERENT id -- proof enough that the stale tag did
+    not survive, with no second build to compare against and no
+    assumption that a same-content rebuild is id-stable.
 
-    Id equality, not a `.Created` timestamp, is the signal: verified
-    empirically against this repo's own kb-container build that a
-    same-content rebuild (no `--no-cache`) reuses the EXACT previous
-    image, `.Created` included, so a ".Created must be >= now" check
-    would misfire on every ordinary cache hit -- podman-compose's own
-    `build` is exactly such a cache-hit rebuild whenever the source is
-    unchanged, which is the normal case for every OTHER scratch run.
+    An earlier version of this test compared ids against a `--no-cache`
+    "reference" build of current source instead, and was flaky: two
+    `--no-cache` builds of identical source produce DIFFERENT image ids
+    for this repo's kb-container, because the Containerfile's `pip
+    install lxml readability-lxml` is unpinned and non-deterministic at
+    the layer level.
     """
     _require_container_runtime()
 
@@ -311,25 +310,15 @@ def test_default_build_rejects_a_stale_prebuilt_tag(
     finally:
         _KB_MARKER_FILE.write_text(original, encoding="utf-8")
 
-    try:
-        _podman(
-            [
-                "podman", "build", "--no-cache", "-t", _REFERENCE_TAG,
-                "-f", str(_KB_CONTAINERFILE), str(_SCRIPTS_DIR),
-            ],
-            timeout=_BUILD_TIMEOUT_SEC,
-        )
-        reference_id = _podman(
-            ["podman", "image", "inspect", _REFERENCE_TAG, "--format", "{{.Id}}"]
-        )
+    stale_id = _podman(
+        [
+            "podman", "image", "inspect", "localhost/kb-svc:scratch",
+            "--format", "{{.Id}}",
+        ]
+    )
 
-        result = _run_kb_scratch_probe(tmp_path_factory, build=True)
-        assert result.ground_truth_id == reference_id, (
-            "a stale :scratch tag survived the default build-on path -- "
-            f"running {result.ground_truth_id}, expected the freshly "
-            f"rebuilt {reference_id}"
-        )
-    finally:
-        subprocess.run(
-            ["podman", "rmi", "-f", _REFERENCE_TAG], capture_output=True,
-        )
+    result = _run_kb_scratch_probe(tmp_path_factory, build=True)
+    assert result.ground_truth_id != stale_id, (
+        "a stale :scratch tag survived the default build-on path -- "
+        f"still running the stale image {stale_id}"
+    )
