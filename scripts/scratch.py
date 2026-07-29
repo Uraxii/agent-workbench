@@ -223,10 +223,15 @@ def _build(
     )
 
 
-def _print_image_identity(project: str, spec: ServiceSpec) -> None:
+def _print_image_identity(
+    project: str, spec: ServiceSpec,
+) -> tuple[str, str] | None:
     """Print the image the CREATED CONTAINER is running, to stderr -- the
     tripwire that makes a wrong scratch image diagnosable from the
-    transcript instead of silently passing.
+    transcript instead of silently passing. Returns (image_id, created),
+    or None if the inspection itself failed, so a caller (the container-
+    backed test tier) can assert on the real identity instead of only
+    the swallowed stderr line.
 
     Deliberately inspects the container, not `_scratch_image(spec)`. The
     `:scratch` tag is global to this host while builds are per-worktree,
@@ -266,12 +271,14 @@ def _print_image_identity(project: str, spec: ServiceSpec) -> None:
             f"created {created}",
             file=sys.stderr,
         )
+        return image_id, created
     except (subprocess.CalledProcessError, IndexError, ValueError) as exc:
         print(
             f"scratch: warning: could not inspect the running container for "
             f"{spec.compose_name}: {exc}",
             file=sys.stderr,
         )
+        return None
 
 
 def _bring_up(
