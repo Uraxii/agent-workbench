@@ -347,7 +347,7 @@ reused unchanged where possible.
 
 Blocking prerequisite: **a local daemon must be running and a model pulled**
 (the pull needs one-time egress; steady-state has none). Ollama is already
-installed at `/home/nicole/.local/bin/ollama` but the daemon was **not running**
+installed at `~/.local/bin/ollama` on the author's machine but the daemon was **not running**
 when first probed. Why first on technical merit: zero tenant policy dependency, zero data
 egress from a work machine, zero cost, and the OpenAI-compatible route means
 `kb_embed.py` needs only `KB_LLM_BASE_URL=http://127.0.0.1:11434/v1` and

@@ -129,14 +129,19 @@ def test_install_copy_recursively_copies_and_excludes_pycache(
 
 
 def test_install_copy_refuses_unstamped_real_dir(source: Path, tmp_path: Path) -> None:
-    """--copy raises rather than merging over a real dir it did not
-    install, and leaves that dir untouched."""
+    """--copy refuses rather than merging over a real dir it did not
+    install, and leaves that dir untouched.
+
+    The refusal is signalled by a non-zero return, not an exception, so the
+    CLI reports it as a clean exit code rather than a traceback. See
+    test_cmd_install_copy_propagates_refusal_as_exit_1 for the end-to-end
+    path.
+    """
     target = tmp_path / "real-dir"
     target.mkdir()
     (target / "unrelated.txt").write_text("keep me\n", encoding="utf-8")
 
-    with pytest.raises(RuntimeError, match="refusing to copy over real dir"):
-        install._install_copy(target, source)
+    assert install._install_copy(target, source) == 1
 
     assert target.is_dir()
     assert not target.is_symlink()
