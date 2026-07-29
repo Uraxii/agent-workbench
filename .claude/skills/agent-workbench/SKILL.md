@@ -162,6 +162,7 @@ layer: the CLI never starts, stops, or builds a container.
 podman-compose -f docker-compose.yml up -d               # kb-svc + bd-svc + artifact-svc + bdui
 podman-compose --profile n8n -f docker-compose.yml up -d # adds n8n
 docker compose -f docker-compose.yml up -d               # same file, docker host
+docker-compose -f docker-compose.yml up -d               # standalone binary, docker host
 ```
 
 The compose file carries the hardening (read-only rootfs, `cap-drop=ALL`,

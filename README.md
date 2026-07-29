@@ -19,10 +19,9 @@ beyond the prerequisites below.
 | Need | Why | Get it |
 | --- | --- | --- |
 | A container runtime: `podman` or `docker` | The services only ever run as containers | `sudo dnf install podman` / `sudo apt install podman`, or https://docs.docker.com/engine/install/ |
-| A compose implementation: `podman-compose`, `docker compose`, or `docker-compose` | Brings the stack up | `sudo dnf install podman-compose`, or the docker compose CLI plugin |
+| A compose implementation: `podman-compose` (any version), or `docker compose` / `docker-compose` >= 2.24 | Brings the stack up. The docker-flavoured floor exists because `docker-compose.yml` uses the compose-spec 2.24+ long `env_file` form so a missing optional kb.env does not block startup; older compose fails the whole file on that syntax | `sudo dnf install podman-compose`, or the docker compose CLI plugin |
 | `git` | Cloning this repo | your package manager |
 | Python 3.9 or newer | Runs the CLI. It is stdlib-only, so there is no venv and nothing to `pip install` | your package manager |
-| `bd`, the beads board CLI | The `bd`/`init-workspace` verbs shell out to it | https://github.com/steveyegge/beads |
 
 `tailscale` is optional and only needed if you want the mesh-networked access
 path. Local-only use does not need it.
@@ -30,23 +29,19 @@ path. Local-only use does not need it.
 ### 2. Clone
 
 ```bash
-git clone <this-repo> ~/Projects/agent-workbench
-cd ~/Projects/agent-workbench
+git clone <this-repo>
+cd agent-workbench
 ```
 
-### 3. Create the kb service config
-
-`docker-compose.yml` declares `~/.knowledgebase/kb.env` as an `env_file`, so
-compose refuses to start without it. Copy the tracked example and edit it:
+The stack runs fully offline with no other config. To turn on LLM enrichment,
+copy the tracked example into place first (gitignored, never committed):
 
 ```bash
 mkdir -p ~/.knowledgebase
 cp scripts/kb-container/kb.env.example ~/.knowledgebase/kb.env
 ```
 
-The real `kb.env` is gitignored and never committed.
-
-### 4. Check the prerequisites
+### 3. Check the prerequisites
 
 ```bash
 python3 .claude/skills/agent-workbench/agent-workbench doctor
@@ -56,10 +51,10 @@ It prints one line per prerequisite with a fix hint, and exits non-zero if a
 required one is missing. `doctor --json` emits the same report as one JSON
 object for scripts and agents.
 
-### 5. Bring the stack up
+### 4. Bring the stack up
 
 ```bash
-podman-compose up -d    # or: docker compose up -d
+podman-compose up -d    # or: docker compose up -d    # or: docker-compose up -d
 ```
 
 That starts `kb-svc` (127.0.0.1:9100), `bd-svc` (127.0.0.1:9101),
@@ -67,21 +62,26 @@ That starts `kb-svc` (127.0.0.1:9100), `bd-svc` (127.0.0.1:9101),
 opt-in: add `--profile n8n` and create `~/.local/share/n8n/n8n.env` with an
 `N8N_ENCRYPTION_KEY` first.
 
-### 6. Install the skill
+### 5. Install the skill
 
 ```bash
-python3 .claude/skills/agent-workbench/agent-workbench install --link
+python3 .claude/skills/agent-workbench/agent-workbench install --copy
 ```
 
-This symlinks `~/.claude/skills/agent-workbench` at this checkout. Use
-`--copy` instead if you want a snapshot rather than a live link -- re-running
-`--copy` always produces exactly this repo's current tree (any file the
-source no longer has is removed, not left behind), and it refuses to
-overwrite a real dir at the target that it did not itself install (move it
-aside yourself first). `--uninstall` reverses either install (it refuses to
-remove anything that is not its own symlink or its own stamped copy).
+This copies a pinned snapshot to `~/.claude/skills/agent-workbench`.
+Re-running `--copy` always reproduces exactly this repo's current tree: any
+file the source no longer has is removed rather than left behind. It refuses
+to overwrite a real directory at the target that it did not itself install,
+so move such a directory aside yourself first. `--uninstall` reverses either
+install, and refuses to remove anything that is not its own symlink or its
+own stamped copy.
 
-### 7. Verify
+Use `--link` instead only if you are hacking on this repo and want the
+install to symlink and track this checkout's current branch live. `doctor`
+reports a linked install as a warning, because it silently changes with the
+branch.
+
+### 6. Verify
 
 ```bash
 $HOME/.claude/skills/agent-workbench/agent-workbench doctor
@@ -134,11 +134,3 @@ Live runtime data stays where it already lives. This split does **not** move or 
 - `scripts/bd-svc.py` the board service
 - `.claude/skills/agent-workbench/` CLI used for board, hub, kb, and workspace flows
 - `apps/artifact-review/` Django + React artifact review service
-
-## Quick checks
-
-```bash
-cd ~/Projects/agent-workbench
-rg -n 'Projects/agent-workbench|agent-workbench' scripts .claude docker-compose.yml
-python3 .claude/skills/agent-workbench/agent-workbench --help
-```

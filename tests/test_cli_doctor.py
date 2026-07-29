@@ -210,6 +210,114 @@ def test_compose_check_distinguishes_docker_present_but_compose_failing(
     assert result.fix_hint != ""
 
 
+def _fake_run_version(stdout: bytes):
+    """A `subprocess.run` stand-in reporting success with `stdout` for any
+    command."""
+    def fake_run(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr=b"")
+    return fake_run
+
+
+def test_compose_check_docker_compose_v1_binary_alone_does_not_satisfy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A real `docker-compose` v1 binary (reports 1.29.2) alone on PATH must
+    NOT satisfy the compose check: it is below MIN_DOCKER_COMPOSE and would
+    parse docker-compose.yml's long `env_file` form wrong, killing the whole
+    model on `up`."""
+    monkeypatch.setattr(doctor.shutil, "which", _which_only("docker-compose"))
+    monkeypatch.setattr(doctor.subprocess, "run", _fake_run_version(b"1.29.2"))
+
+    result = doctor.check_compose()
+
+    assert result.ok is False
+    assert result.required is True
+    assert "too old" in result.detail
+    assert "docker-compose 1.29" in result.detail
+    assert "2.24" in result.detail
+
+
+def test_compose_check_docker_compose_below_floor_names_floor_and_found(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`docker compose` reporting 2.20.3 (a real distro-packaged plugin
+    below the floor) -> not ok, message names both the floor and the
+    version actually found."""
+    monkeypatch.setattr(doctor.shutil, "which", _which_only("docker"))
+    monkeypatch.setattr(doctor.subprocess, "run", _fake_run_version(b"2.20.3"))
+
+    result = doctor.check_compose()
+
+    assert result.ok is False
+    assert result.required is True
+    assert "2.20" in result.detail
+    assert "2.24" in result.detail
+
+
+def test_compose_check_standalone_docker_compose_v2_satisfies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A `docker-compose` binary that is actually a v2 shim (reports
+    2.24.0, no `docker compose` plugin present) -> ok. This is the
+    standalone-v2 install the name-based exclusion used to reject."""
+    monkeypatch.setattr(doctor.shutil, "which", _which_only("docker-compose"))
+    monkeypatch.setattr(doctor.subprocess, "run", _fake_run_version(b"2.24.0"))
+
+    result = doctor.check_compose()
+
+    assert result.ok is True
+    assert "docker-compose" in result.detail
+
+
+def test_compose_check_unparseable_version_output_is_accepted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A docker compose candidate that runs (exit 0) but prints something
+    the parser cannot read -> accepted, not silently dropped: under-
+    detecting a working host is worse than the false MISSING this floor
+    exists to fix."""
+    monkeypatch.setattr(doctor.shutil, "which", _which_only("docker"))
+    monkeypatch.setattr(doctor.subprocess, "run", _fake_run_version(b"not a version"))
+
+    result = doctor.check_compose()
+
+    assert result.ok is True
+    assert "docker compose" in result.detail
+
+
+def test_compose_check_contaminated_stdout_uses_last_token_not_first(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Multi-line stdout with an earlier unrelated `major.minor` token
+    (e.g. a stray warning line) must not make the parser latch onto that
+    earlier, lower tuple and falsely report "too old"."""
+    monkeypatch.setattr(doctor.shutil, "which", _which_only("docker"))
+    monkeypatch.setattr(
+        doctor.subprocess, "run",
+        _fake_run_version(b"WARNING: 1.0 something\nv2.29.7"),
+    )
+
+    result = doctor.check_compose()
+
+    assert result.ok is True
+    assert "too old" not in result.detail
+
+
+def test_compose_check_podman_compose_not_rejected_for_its_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """podman-compose has no defensible floor -- the only version this repo
+    has ever exercised is 1.6.0 -- so even a very low-looking version
+    string must still satisfy the check as long as it runs."""
+    monkeypatch.setattr(doctor.shutil, "which", _which_only("podman-compose"))
+    monkeypatch.setattr(doctor.subprocess, "run", _fake_run_version(b"podman-compose version 0.1"))
+
+    result = doctor.check_compose()
+
+    assert result.ok is True
+    assert "podman-compose" in result.detail
+
+
 def test_compose_check_ok_when_docker_compose_version_succeeds(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -311,16 +419,18 @@ def test_container_runtime_missing_reports_fix_hint(
     assert "podman" in result.fix_hint
 
 
-def test_kb_env_check_fails_when_file_absent(
+def test_kb_env_check_absent_is_optional_not_required(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
-    """Missing ~/.knowledgebase/kb.env is a required failure with a cp hint."""
+    """Missing ~/.knowledgebase/kb.env is optional (LLM enrichment only,
+    the stack runs offline without it), reported with a cp hint but never
+    required."""
     _kb_env_absent(monkeypatch, tmp_path)
 
     result = doctor.check_kb_env()
 
     assert result.name == "kb.env"
-    assert result.required is True
+    assert result.required is False
     assert result.ok is False
     assert doctor.KB_ENV_EXAMPLE in result.fix_hint
 
@@ -335,6 +445,27 @@ def test_kb_env_check_passes_when_file_present(
 
     assert result.ok is True
     assert result.fix_hint == ""
+
+
+def test_kb_env_missing_does_not_fail_cmd_doctor_exit_code(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """kb.env missing, everything else present -> doctor still exits 0.
+
+    Pins the fresh-install behaviour: docker-compose.yml's kb-svc env_file
+    is `required: false`, so a missing kb.env must never gate the exit
+    code.
+    """
+    monkeypatch.setattr(
+        doctor.shutil, "which",
+        _which_only("docker", "podman-compose", "git", "tailscale"),
+    )
+    monkeypatch.setattr(doctor.subprocess, "run", _fake_run_ok)
+    _kb_env_absent(monkeypatch, tmp_path)
+
+    exit_code = doctor.cmd_doctor(argparse.Namespace(json=False))
+
+    assert exit_code == 0
 
 
 def test_python_check_passes_on_the_running_interpreter() -> None:

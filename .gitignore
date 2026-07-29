@@ -11,3 +11,6 @@ spikes/frontend-directions/.render-unified/
 
 # Host-specific compose overrides (tailnet hostnames, local paths). Never tracked.
 .env
+
+# Derived FTS5 index; the real one lives under $KB_HOME/index/kb.db.
+/kb.db

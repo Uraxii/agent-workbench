@@ -128,6 +128,37 @@ def test_install_copy_recursively_copies_and_excludes_pycache(
     assert not (target / "__pycache__").exists()
 
 
+def test_install_copy_refuses_unstamped_real_dir(source: Path, tmp_path: Path) -> None:
+    """--copy raises rather than merging over a real dir it did not
+    install, and leaves that dir untouched."""
+    target = tmp_path / "real-dir"
+    target.mkdir()
+    (target / "unrelated.txt").write_text("keep me\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="refusing to copy over real dir"):
+        install._install_copy(target, source)
+
+    assert target.is_dir()
+    assert not target.is_symlink()
+    assert (target / "unrelated.txt").is_file()
+    assert not (target / "SKILL.md").exists()
+
+
+def test_install_copy_reinstalls_over_own_stamped_dir(
+    source: Path, target: Path,
+) -> None:
+    """Re-running --copy over a dir it previously stamped is fine
+    (idempotent reinstall)."""
+    install._install_copy(target, source)
+    assert install.read_marker(target) is not None
+
+    (source / "SKILL.md").write_text("updated\n", encoding="utf-8")
+    install._install_copy(target, source)
+
+    assert (target / "SKILL.md").read_text(encoding="utf-8") == "updated\n"
+    assert install.read_marker(target) is not None
+
+
 def test_install_copy_replaces_existing_symlink(source: Path, target: Path) -> None:
     """--copy over a pre-existing symlink target unlinks it first, then copies."""
     other_source = target.parent / "other-source"
@@ -361,6 +392,47 @@ def test_git_head_returns_none_on_garbage(tmp_path: Path) -> None:
     dangling.mkdir()
     (dangling / ".git").write_text("gitdir: /nonexistent/x\n", encoding="utf-8")
     assert paths.git_head(dangling) is None
+
+
+# -- paths._compute_root --------------------------------------------------
+
+def _fake_paths_module_file(tree_root: Path) -> Path:
+    """A synthetic ``cli/paths.py`` path five levels under `tree_root`,
+    mirroring this repo's real ``<repo>/.claude/skills/agent-workbench/
+    cli/paths.py`` depth, so `parents[4]` lands back on `tree_root`."""
+    return (
+        tree_root / ".claude" / "skills" / "agent-workbench" / "cli"
+        / "paths.py"
+    )
+
+
+def test_compute_root_rejects_scripts_dir_without_docker_compose(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A tree with `scripts/` but no `docker-compose.yml` is NOT accepted
+    as the repo root (e.g. a user's own `~/scripts` under a --copy
+    install's `$HOME` candidate)."""
+    candidate = tmp_path / "not-the-repo"
+    (candidate / "scripts").mkdir(parents=True)
+    monkeypatch.setattr(
+        paths, "__file__", str(_fake_paths_module_file(candidate)),
+    )
+
+    assert paths._compute_root() is None
+
+
+def test_compute_root_accepts_scripts_and_docker_compose(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A tree with both `scripts/` and `docker-compose.yml` is accepted."""
+    candidate = tmp_path / "the-repo"
+    (candidate / "scripts").mkdir(parents=True)
+    (candidate / "docker-compose.yml").write_text("x\n", encoding="utf-8")
+    monkeypatch.setattr(
+        paths, "__file__", str(_fake_paths_module_file(candidate)),
+    )
+
+    assert paths._compute_root() == candidate
 
 
 # -- install marker -------------------------------------------------------
