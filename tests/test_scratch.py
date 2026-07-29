@@ -76,6 +76,10 @@ def _stub_compose(
     The image-identity path is modelled as the three real calls it makes:
     `ps -q` for the container id, `container inspect` for the image the
     container actually runs, `image inspect` for that image's timestamp.
+    A fourth, `image inspect <tag> --format {{.Id}}`, models
+    `_just_built_image_id`'s post-build lookup -- same id as the
+    container's own image, so a `build=True` run's freshness check
+    (`_assert_container_runs_the_build`) sees a match.
     """
     calls: list[tuple[list[str], dict[str, object]]] = []
 
@@ -89,6 +93,8 @@ def _stub_compose(
             return SimpleNamespace(
                 returncode=0, stdout="deadbeef localhost/kb-svc:scratch\n",
             )
+        if "inspect" in cmd and "{{.Id}}" in cmd:
+            return SimpleNamespace(returncode=0, stdout="deadbeef\n")
         if "inspect" in cmd:
             return SimpleNamespace(returncode=0, stdout="2026-01-01T00:00:00Z\n")
         return SimpleNamespace(returncode=0, stdout="")
