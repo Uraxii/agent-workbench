@@ -316,15 +316,16 @@ def _finish_ingest(
 
     Keeping this on one path is the invariant: no caller can write a NEW
     note into the vault through this function without its children, its
-    index rows and its vectors being produced in the same request. That
-    is not every vault write, though: ``kb decision record`` flips a
-    PRIOR note's status to ``revised`` in place, outside this
-    function, so that note's vector goes stale (not deleted, not wrong,
-    just stale) until the next ``/embed`` or ``/reindex`` pass picks
-    it up. Embedding is scoped to ``[note_path] + children`` rather than
-    the whole vault -- that is the fix: ingest is now O(1) in vault size
-    no matter how many stale rows exist elsewhere, which is also what
-    makes the vector migration safe.
+    index rows and its vectors being produced in the same request.
+    Embedding is scoped to ``[note_path] + children`` rather than the
+    whole vault: ingest is O(1) in vault size no matter how many stale
+    rows exist elsewhere, which is also what makes the vector migration
+    safe. ``kb decision record`` also flips a PRIOR note's status to
+    ``revised`` in place, outside this function; the whole-vault
+    ``_rebuild_index`` call below already reads that new status off
+    disk, so the index row is fresh for free, and ``record_decision``
+    separately feeds the prior path through ``_embed_notes`` so its
+    vector does not go stale either.
 
     DELIBERATE ASYMMETRY (also see ``backfill_embeddings``): an embedding failure
     here still returns normally with ``embed_error`` set, never raises,
@@ -424,10 +425,27 @@ def record_decision(
     ``_finish_ingest`` as put and clip rather than around it. The
     atomizer's own type rule then reports a decision as already atomic,
     which is the answer, not an exemption.
+
+    Recording also flips a PRIOR note to ``revised`` in place (see
+    ``kb_decision.record``); ``_finish_ingest``'s whole-vault reindex
+    already picks up that new status, so only its vector is still stale
+    afterward. This refreshes that vector too, in the same request,
+    through the same scoped ``_embed_notes`` ingest uses -- reported as
+    ``revised_embedded`` (0 when there is no prior note, embeddings are
+    off, or the topic is new; see ``embeddings_enabled``). Same
+    asymmetry as ``_finish_ingest``: a failure here sets
+    ``revised_embed_error`` and never raises.
     """
     result = kb_decision.record(config.kb_home, payload)
     finished = _finish_ingest(config, Path(result["path"]))
-    return {**finished, "revises": result["revises"]}
+    revises = result["revises"]
+    response = {**finished, "revises": revises}
+    if revises:
+        revised_counts = _embed_notes(config, [Path(revises)])
+        response["revised_embedded"] = revised_counts.embedded
+        if revised_counts.error:
+            response["revised_embed_error"] = revised_counts.error
+    return response
 
 
 def audit_decisions(

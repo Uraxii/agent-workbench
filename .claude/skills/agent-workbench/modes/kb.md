@@ -191,6 +191,14 @@ $AW kb decision record --project gvn --topic base-body-slices \
 #     "children": [], "method": "already-atomic", "indexed": 2374,
 #     "embedded": 1, "revises": ""}
 
+# revising an existing topic also refreshes the PRIOR note's index row
+# and vector in the same request:
+# -> {"path": "$HOME/.knowledgebase/gvn/decisions/base-body-slices__2026-07-22-2.md",
+#     "children": [], "method": "already-atomic", "indexed": 2375,
+#     "embedded": 1,
+#     "revises": "$HOME/.knowledgebase/gvn/decisions/base-body-slices__2026-07-22.md",
+#     "revised_embedded": 1}
+
 $AW kb decision audit base-body-slices --project gvn
 # -> [{"date": "2026-07-22", "status": "revised",
 #     "title": "Base body is six mesh-deformed slices, not per-feature cuts",
@@ -212,6 +220,15 @@ never a separate database.
 setting its `status` to `revised`. The target must be a note on the same
 topic or the service rejects it. Decision records are always free (already-atomic
 type making no model call).
+
+Whenever a prior note gets revised (auto-detected or via `--revises`),
+that note's index row and vector are refreshed in the same request, not
+left stale for the next `/embed` or `/reindex` pass. `revised_embedded`
+reports how many prior notes were re-embedded (0 or 1; also 0 when the
+topic is new, so there is no prior note, or when embeddings are
+disabled). Same asymmetry as every other ingest route: a backend
+failure here sets `revised_embed_error` and still returns 201, never
+loses the write.
 
 `audit` is read-only and scans every project's `decisions/` dir unless
 `--project` narrows it (topic keys are unique by convention, so a reader

@@ -463,6 +463,43 @@ def test_decision_is_recorded_through_the_same_ingest_finish(
     assert Path(str(body["path"])).read_text(encoding="utf-8").startswith("---\n")
 
 
+def test_decision_record_refreshes_the_prior_note_index_and_vector(
+    tmp_path: Path,
+) -> None:
+    """Revising a topic must not leave the PRIOR note's index row or
+    vector stale until the next /embed or /reindex pass: both refresh
+    in the same request that records the new decision."""
+    config = _config(tmp_path, embed_model="fake-embed", llm_api_key="fake-key")
+    with patch.object(kb_embed, "embed_texts", side_effect=_fake_embed_texts):
+        first = kb_serve.record_decision(config, {
+            "project": "proj1", "topic": "widget-shape", "title": "Round",
+            "text": "Widgets ship round.",
+        })
+        second = kb_serve.record_decision(config, {
+            "project": "proj1", "topic": "widget-shape", "title": "Square",
+            "text": "Widgets ship square now.",
+        })
+
+    prior_path = Path(str(first["path"]))
+    assert second["revises"] == str(prior_path)
+
+    db_path = kb_serve.index_db_path(tmp_path)
+    connection = sqlite3.connect(db_path)
+    status = connection.execute(
+        "SELECT status FROM kb WHERE path = ?", (str(prior_path),),
+    ).fetchone()[0]
+    stored_hash = connection.execute(
+        "SELECT content_hash FROM kb_vector WHERE path = ?", (str(prior_path),),
+    ).fetchone()[0]
+    connection.close()
+
+    assert status == "revised"
+    on_disk_hash = kb_embed.content_fingerprint(
+        prior_path.read_text(encoding="utf-8")
+    )
+    assert stored_hash == on_disk_hash
+
+
 def test_put_missing_required_field_returns_400(live_server: tuple[str, KbServeConfig]) -> None:
     base_url, _ = live_server
     status, body = _post(base_url, "/put", {"title": "No project or content"})
